@@ -54,6 +54,7 @@ struct WaterFrame {
     float sunColour[4], sunDir[4], ambient[4], tint[4], look[4], look2[4], fogColour[4], fogParams[4], sky[4];
     float env[4];
     float ripple[4];                             // x: the disturbance field is bound, y: strength, z: 1 / size, w: cell
+    float fall[4];                               // x: falls' sheen (RVK_WaterSheen), y: their sparkles (RVK_WaterSpark)
 };
 
 constexpr uint32_t kDetailSize = 256;
@@ -1365,6 +1366,8 @@ void Device::DrawWater(const WaterVertex* vertices, uint32_t vertexCount, const 
     wf.look2[1] = P.caustics;
     wf.look2[2] = P.ripples;
     wf.look2[3] = m_textures[0] ? P.gameTexture : 0.0f;
+    wf.fall[0] = P.fallSheen;
+    wf.fall[1] = P.fallSparkle;
     ArgbTo4(m_rs[d3d::RS_FOGCOLOR], wf.fogColour);
     wf.fogColour[3] = m_rs[d3d::RS_FOGENABLE] ? 1.0f : 0.0f;
     wf.fogParams[0] = AsFloatBits(m_rs[d3d::RS_FOGSTART]);

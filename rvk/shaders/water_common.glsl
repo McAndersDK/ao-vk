@@ -32,6 +32,7 @@ layout(set = 0, binding = 0) uniform WaterFrame {
     vec4 env;           // x: 1 = the environment probe's atlas is bound (binding 12); y: its strength
     vec4 ripple;        // x: 1 = the disturbance field is bound (binding 13); y: how visible (RVK_WakeGain);
                         // z: 1 / its world size; w: its cell size
+    vec4 fall;          // x: falls' sheen (RVK_WaterSheen); y: their sparkles (RVK_WaterSpark)
 } W;
 
 layout(set = 0, binding = 7) uniform sampler2D waterMap;       // R: height above W.mapInfo.x, G: water (0 / 1)

@@ -200,6 +200,41 @@ float ValueNoise(vec2 p)
     return mix(mix(Hash21(i), Hash21(i + ivec2(1, 0)), f.x), mix(Hash21(i + ivec2(0, 1)), Hash21(i + ivec2(1, 1)), f.x), f.y);
 }
 
+// GGX highlight of a light from direction L (unit, towards it) on normal N seen along V: D x Fresnel x visibility x
+// N.L - multiply by the light's colour.
+float Ggx(vec3 N, vec3 V, vec3 L, float rough)
+{
+    vec3 H = normalize(L + V);
+    float NdotH = max(dot(N, H), 0.0), NdotL = max(dot(N, L), 0.0), NdotV = max(dot(N, V), 1e-3);
+    float a2 = rough * rough * rough * rough;
+    float dd = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    float D = a2 / (kPi * dd * dd);
+    float Fs = 0.02 + 0.98 * pow(1.0 - max(dot(H, V), 0.0), 5.0);
+    return D * Fs * 0.25 / max(NdotL * NdotV, 0.05) * NdotL;
+}
+
+// The frame's point and spot lights (FL.lights) at a point: each one's direction (towards it) and colour there.
+bool LocalLight(uint i, vec3 posW, out vec3 L, out vec3 colour)
+{
+    Light li = FL.lights[i];
+    uint type = uint(li.position.w + 0.5);
+    L = vec3(0.0, 1.0, 0.0);
+    colour = vec3(0.0);
+    if (type != 1u && type != 2u)
+        return false;
+    vec3 dl = li.position.xyz - posW;
+    float d = length(dl);
+    if (d >= li.direction.w || d < 1e-3)
+        return false;
+    L = dl / d;
+    float att = 1.0 / max(li.atten.x + li.atten.y * d + li.atten.z * d * d, 1e-3);
+    att *= 1.0 - smoothstep(0.75, 1.0, d / li.direction.w);
+    if (type == 2u)
+        att *= smoothstep(li.spot.y, li.spot.x, dot(-L, normalize(li.direction.xyz)));
+    colour = li.diffuse.rgb * att;
+    return att > 1e-4;
+}
+
 float FogFactor(float d)
 {
     uint mode = uint(W.fogParams.w);
@@ -249,12 +284,15 @@ void main()
     // down). The white water is columns fixed on the sheet (where the flow is thicker, as the lip shapes it: they run
     // its whole height), made brighter and darker by lumps of water sliding down them - so no streak starts or ends.
     float streak = 0.0, glass = 0.0, tau = 0.0;
+    vec3 fallSide = vec3(0.0), fallDown = vec3(0.0);
     if (fall) {
         vec3 fd = vec3(0.0, -1.0, 0.0);
         fd -= N * dot(fd, N);                    // down the slope of the sheet
         float fl = length(fd);
         fd = fl > 0.05 ? fd / fl : vec3(0.0, -1.0, 0.0);
         vec3 side = normalize(cross(N, fd));
+        fallSide = side;
+        fallDown = fd;
         tau = FallTau(vFlow.x);
         float c = vFlow.y;
         vec2 uvA = vec2(c * 0.45, (tau - t) * 0.9);
@@ -262,7 +300,7 @@ void main()
         vec4 da = texture(detail, uvA), db = texture(detail, uvB);
         vec2 sa = da.rg * 2.0 - 1.0, sb = db.rg * 2.0 - 1.0;
         glass = 1.0 - smoothstep(0.5, 5.0, vFlow.x);
-        float bend = mix(1.0, 0.35, glass);
+        float bend = mix(1.0, 0.35, glass) * (0.75 + 0.25 * W.fall.x);   // (more sheen: a livelier surface)
         N = normalize(N + (side * (sa.x * 0.7 + sb.x * 0.5) + fd * (sa.y * 0.3 + sb.y * 0.2)) * bend);
         // Columns at three widths (the finest the threads of water within them), lumps sliding down them, and bright
         // clumps of white water rushing down among them.
@@ -359,7 +397,7 @@ void main()
     // A fall: a broken, rushing surface (facets turned every way) averages a higher reflectance than a still one, and
     // its clear water is seen as a sheen of what it reflects; the white less (foam is rough).
     if (fall)
-        F = max(F + 0.06, mix(0.45, 0.2, style) * W.look.y * (0.4 + 0.6 * glass)) * (1.0 - 0.7 * white);
+        F = max(F + 0.06, mix(0.45, 0.2, style) * W.look.y * W.fall.x * (0.4 + 0.6 * glass)) * (1.0 - 0.7 * white);
     vec3 reflected;
     float ssrHit = 0.0;
     if (under) {
@@ -393,6 +431,41 @@ void main()
         float Fs = 0.02 + 0.98 * pow(1.0 - max(dot(H, V), 0.0), 5.0);
         float vis = 0.25 / max(NdotL * NdotV, 0.05) * NdotL;
         colour += sun * (D * Fs * vis * shadow * W.look.y * (1.0 - 0.6 * white));
+    }
+
+    // A fall's sparkles: the rushing water is a mass of little facets turned every way, and where one turns a light
+    // into the eye it flashes. Cells sliding down with the water, each holding one facet (a tilt, and a dot somewhere in
+    // the cell), lit by the sun and by every point and spot light near; faded out where the cells shrink to a pixel or
+    // so (they would only flicker). The lamps also give the sheet a broad wet highlight (by night the water's only
+    // shine).
+    if (fall && !under) {
+        vec3 spark = vec3(0.0), sheen = vec3(0.0);
+        vec2 cellUv = vec2(vFlow.y * 5.0, (tau - t) * 16.0);
+        vec2 fw = fwidth(cellUv);
+        float resolve = (1.0 - smoothstep(0.35, 0.9, max(fw.x, fw.y))) * W.fall.y;
+        vec3 Nf = Ns;
+        float spot = 0.0;
+        if (resolve > 0.0) {
+            vec2 fl = floor(cellUv), fc = cellUv - fl;
+            ivec2 ci = ivec2(fl);
+            vec2 centre = vec2(0.25 + 0.5 * Hash21(ci), 0.25 + 0.5 * Hash21(ci + ivec2(7, 13)));
+            spot = 1.0 - smoothstep(0.08, 0.22, length((fc - centre) * vec2(1.0, 0.6)));
+            // (Tilted up more than down: the sun is mostly overhead, the sheet upright.)
+            Nf = normalize(Ns + fallSide * ((Hash21(ci + ivec2(19, 3)) - 0.5) * 1.6) +
+                           fallDown * ((Hash21(ci + ivec2(5, 29)) - 0.5) * 2.4 - 0.4));
+            if (dot(sun, vec3(1.0)) > 0.0)
+                spark += sun * (shadow * pow(max(dot(Nf, normalize(L + V)), 0.0), 100.0));
+        }
+        uint count = min(FL.info.x, 64u);
+        for (uint i = 0u; i < count; ++i) {
+            vec3 Ll, lc;
+            if (!LocalLight(i, vPos, Ll, lc))
+                continue;
+            sheen += lc * Ggx(Ns, V, Ll, 0.3);
+            if (resolve > 0.0)
+                spark += lc * pow(max(dot(Nf, normalize(Ll + V)), 0.0), 100.0);
+        }
+        colour += (spark * (spot * resolve * 20.0) + sheen * W.fall.x) * (1.0 - 0.5 * white);
     }
 
     // Foam: on the shore (shallow water, broken up by the noise, moving with the waves) and on sharp crests.

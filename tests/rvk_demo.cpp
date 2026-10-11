@@ -1397,6 +1397,8 @@ std::string g_waterMesh;          // --water-mesh FILE: the water mesh from a du
 float g_waterMeshAt[3] = {2040.0f, 29.5f, 2340.0f};
 float g_waterEye[3] = {0, 0, 0};  // --water-eye X Y Z (the dump's coordinates): the camera there, looking at
 bool g_waterEyeSet = false;       // --water-mesh-at
+bool g_waterLamp = false;         // --water-lamp: a warm point light by the camera, as a character's lamp (with
+                                  // --light-override, so the frame's lights carry it)
 
 template <typename D>
 void RunWaterScene(D& dev, int frames, const std::string& shot)
@@ -1607,6 +1609,17 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
         sun.direction = {0.35f, -0.55f, 0.75f};             // the sun ahead of the camera, low: a glint on the water
         dev.SetLight(0, sun);
         dev.LightEnable(0, true);
+        if (g_waterLamp) {
+            Light lamp{};
+            lamp.type = LIGHT_POINT;
+            lamp.diffuse = {1.0f, 0.8f, 0.5f, 1};
+            lamp.position = {eye.x + 0.6f, eye.y + 0.4f, eye.z + 1.0f};
+            lamp.range = 40.0f;
+            lamp.attenuation0 = 0.3f;
+            lamp.attenuation1 = 0.05f;
+            dev.SetLight(1, lamp);
+            dev.LightEnable(1, true);
+        }
         dev.SetTextureStageState(0, TSS_COLORARG1, TA_TEXTURE);
         dev.SetTextureStageState(0, TSS_COLORARG2, TA_DIFFUSE);
         dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG1);
@@ -2792,6 +2805,7 @@ int main(int argc, char** argv)
         else if (a == "--water-coast") { g_waterScene = 2; hdr = true; }
         else if (a == "--water-wall") g_waterWall = true;
         else if (a == "--water-mesh" && i + 1 < argc) g_waterMesh = argv[++i];
+        else if (a == "--water-lamp") g_waterLamp = true;
         else if (a == "--water-mesh-at" && i + 3 < argc) { for (float& x : g_waterMeshAt) x = float(std::atof(argv[++i])); }
         else if (a == "--water-eye" && i + 3 < argc) { for (float& x : g_waterEye) x = float(std::atof(argv[++i])); g_waterEyeSet = true; }
         else if (a == "--water-shelf") g_waterShelf = true;

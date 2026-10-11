@@ -496,6 +496,8 @@ public:
         float swimSpeed = 3.6f;                  // the waves' speed, m/s (RVK_WakeSpeed)
         float swimGain = 2.0f;                   // how strongly it shows in the surface (RVK_WakeGain)
         float swimSplash = 1.0f;                 // the splash of a character jumping in (RVK_WakeSplash)
+        float fallSheen = 1.0f;                  // how much a fall's clear water reflects (RVK_WaterSheen)
+        float fallSparkle = 1.0f;                // a fall's sparkles of sunlight and lamplight (RVK_WaterSpark)
         uint32_t quality = 2;                    // 1 low, 2 medium, 3 high: grid density, reflection steps
     };
     void SetWaterParams(const WaterParams& params) { m_waterParams = params; UpdateWaterReady(); }
