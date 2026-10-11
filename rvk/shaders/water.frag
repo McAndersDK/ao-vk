@@ -16,6 +16,7 @@ layout(set = 0, binding = 9) uniform sampler2D sceneCopy;              // the HD
 layout(set = 0, binding = 10) uniform sampler2D detail;                // RG: ripple slope, B: noise, A: cells
 layout(set = 0, binding = 11) uniform sampler2D gameTexture;           // the game's water texture
 layout(set = 0, binding = 12) uniform sampler2D envAtlas;              // the environment probe (env_common.glsl)
+layout(set = 0, binding = 2, std430) readonly buffer Feet { FootSegment feet[]; };   // the grid: the falls' feet
 #include "env_common.glsl"
 
 layout(location = 0) in vec3 vPos;
@@ -27,7 +28,7 @@ layout(location = 5) in float vFold;
 layout(location = 6) in float vSpacing;
 layout(location = 7) in float vAlpha;       // mesh mode: the game's vertex alpha (its shore fade)
 layout(location = 8) in vec3 vFlowN;        // mesh mode: a fall's smooth normal
-layout(location = 9) in vec3 vFlow;         // mesh mode: a fall's along (down from its top), across, fall (1)
+layout(location = 9) in vec4 vFlow;         // mesh mode: a fall's along (down from its top), across, fall (1), edge
 
 layout(location = 0) out vec4 outScene;
 layout(location = 1) out vec4 outGlow;
@@ -37,21 +38,34 @@ layout(location = 4) out vec4 outAlbedo;
 
 const vec3 kLuma = vec3(0.3, 0.59, 0.11);
 
-// Sun visibility (1 lit): the first cascade that covers the point, one filtered tap.
+// Sun visibility (1 lit): the first cascade that covers the point, one filtered tap - blended over to the next one
+// near its border (a hard switch drew a line across a fall, where the finer cascade saw the cliff behind it).
 float SunShadow(vec3 posW)
 {
     if (FL.shadowParams.x <= 0.5)
         return 1.0;
     int count = int(FL.shadowParams.z);
+    float lit = 1.0, weight = 1.0;
+    bool found = false;
     for (int c = 0; c < count; ++c) {
         vec4 sc = FL.shadowViewProj[c] * vec4(posW, 1.0);
         vec3 ndc = sc.xyz / sc.w;
-        if (max(abs(ndc.x), abs(ndc.y)) >= 1.0 || ndc.z <= 0.0 || ndc.z >= 1.0)
+        float r = max(abs(ndc.x), abs(ndc.y));
+        if (r >= 1.0 || ndc.z <= 0.0 || ndc.z >= 1.0)
             continue;
-        float lit = texture(shadowMap, vec4(ndc.xy * 0.5 + 0.5, float(c), ndc.z));
-        return 1.0 - (1.0 - lit) * FL.shadowParams.y;
+        float l = texture(shadowMap, vec4(ndc.xy * 0.5 + 0.5, float(c), ndc.z));
+        if (!found) {
+            found = true;
+            lit = l;
+            weight = smoothstep(0.8, 1.0, r);    // how much of the next cascade
+            if (weight <= 0.0)
+                break;
+        } else {
+            lit = mix(lit, l, weight);
+            break;
+        }
     }
-    return 1.0;
+    return 1.0 - (1.0 - lit) * FL.shadowParams.y;
 }
 
 // The ripples' slope (dh/dx, dh/dz) at a world point: two layers of the detail texture drifting across each other.
@@ -165,29 +179,41 @@ vec4 Reflect(vec3 posW, vec3 dirW, float noise)
     return vec4(0.0);
 }
 
-// Value noise (hashed lattice): the fall's streaks, which need more contrast than the detail texture has.
-float Hash21(vec2 p)
+// Value noise (hashed lattice): the fall's streaks, which need more contrast than the detail texture has. The lattice
+// is hashed in integers (pcg2d): a float hash (fract of big products) came out differently for the same corner from
+// the cells either side of it, so the pattern jumped at their edges - blocks.
+float Hash21(ivec2 i)
 {
-    p = fract(p * vec2(123.34, 456.21));
-    p += dot(p, p + 45.32);
-    return fract(p.x * p.y);
+    uvec2 v = uvec2(i) * 1664525u + 1013904223u;
+    v.x += v.y * 1664525u;
+    v.y += v.x * 1664525u;
+    v ^= v >> 16u;
+    v.x += v.y * 1664525u;
+    v.y += v.x * 1664525u;
+    v ^= v >> 16u;
+    return float(v.x >> 8u) * (1.0 / 16777216.0);
 }
 float ValueNoise(vec2 p)
 {
-    vec2 i = floor(p), f = fract(p);
+    vec2 fl = floor(p), f = p - fl;
+    ivec2 i = ivec2(fl);
     f = f * f * (3.0 - 2.0 * f);
-    return mix(mix(Hash21(i), Hash21(i + vec2(1.0, 0.0)), f.x), mix(Hash21(i + vec2(0.0, 1.0)), Hash21(i + vec2(1.0, 1.0)), f.x), f.y);
+    return mix(mix(Hash21(i), Hash21(i + ivec2(1, 0)), f.x), mix(Hash21(i + ivec2(0, 1)), Hash21(i + ivec2(1, 1)), f.x), f.y);
 }
 
-float FogFactor(float d)
+// GGX highlight of a light from direction L (unit, towards it) on normal N seen along V: D x Fresnel x visibility x
+// N.L - multiply by the light's colour.
+float Ggx(vec3 N, vec3 V, vec3 L, float rough)
 {
-    uint mode = uint(W.fogParams.w);
-    if (W.fogColour.w < 0.5 || mode == 0u) return 1.0;
-    if (mode == 3u) return clamp((W.fogParams.y - d) / max(W.fogParams.y - W.fogParams.x, 1e-6), 0.0, 1.0);
-    if (mode == 1u) return clamp(exp(-W.fogParams.z * d), 0.0, 1.0);
-    float x = W.fogParams.z * d;
-    return clamp(exp(-x * x), 0.0, 1.0);
+    vec3 H = normalize(L + V);
+    float NdotH = max(dot(N, H), 0.0), NdotL = max(dot(N, L), 0.0), NdotV = max(dot(N, V), 1e-3);
+    float a2 = rough * rough * rough * rough;
+    float dd = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    float D = a2 / (kPi * dd * dd);
+    float Fs = 0.02 + 0.98 * pow(1.0 - max(dot(H, V), 0.0), 5.0);
+    return D * Fs * 0.25 / max(NdotL * NdotV, 0.05) * NdotL;
 }
+
 
 void main()
 {
@@ -227,28 +253,45 @@ void main()
     // sheet is glassy - smooth, clear, a mirror; lower down it breaks up white (glass: 1 at the top, 0 a few units
     // down). The white water is columns fixed on the sheet (where the flow is thicker, as the lip shapes it: they run
     // its whole height), made brighter and darker by lumps of water sliding down them - so no streak starts or ends.
-    float streak = 0.0, glass = 0.0;
+    float streak = 0.0, glass = 0.0, tau = 0.0;
+    vec3 fallSide = vec3(0.0), fallDown = vec3(0.0);
     if (fall) {
         vec3 fd = vec3(0.0, -1.0, 0.0);
         fd -= N * dot(fd, N);                    // down the slope of the sheet
         float fl = length(fd);
         fd = fl > 0.05 ? fd / fl : vec3(0.0, -1.0, 0.0);
         vec3 side = normalize(cross(N, fd));
-        const float v0 = 3.0, g = 9.8;           // units / s (a unit is about a metre), units / s^2
-        float tau = (sqrt(v0 * v0 + 2.0 * g * max(vFlow.x, 0.0)) - v0) / g;
+        fallSide = side;
+        fallDown = fd;
+        tau = FallTau(vFlow.x);
         float c = vFlow.y;
+        // Strands: falling water is a bundle of rounded jets, not a flat sheet. Across each the surface turns as on a
+        // cylinder, so even seen head-on every strand has edges at a grazing angle - bright lines of sky and sun along
+        // it, the glossy look the sheet has seen edge-on from under the lip. Wide strands and narrow ones on them,
+        // irregular widths; calmed where a strand narrows to a pixel or two (it would only flicker).
+        float wA = c * 0.55 + ValueNoise(vec2(c * 0.3, vFlow.x * 0.02)) * 2.0;
+        float wB = c * 2.1 + ValueNoise(vec2(c * 1.1 + 3.0, vFlow.x * 0.05)) * 1.5;
+        float sA = asin(clamp(fract(wA) * 2.0 - 1.0, -0.97, 0.97)) * (1.0 - smoothstep(0.25, 0.6, fwidth(wA)));
+        float sB = asin(clamp(fract(wB) * 2.0 - 1.0, -0.97, 0.97)) * (1.0 - smoothstep(0.25, 0.6, fwidth(wB)));
+        float tilt = (sA * 0.75 + sB * 0.3) * (1.0 - 0.6 * smoothstep(0.0, 2.0, -vFlow.x + 2.0));
+        N = normalize(N * cos(tilt) + side * sin(tilt));
         vec2 uvA = vec2(c * 0.45, (tau - t) * 0.9);
         vec2 uvB = vec2(c * 1.15 + 0.3, (tau - t * 1.2) * 1.7 + 0.5);
         vec4 da = texture(detail, uvA), db = texture(detail, uvB);
         vec2 sa = da.rg * 2.0 - 1.0, sb = db.rg * 2.0 - 1.0;
         glass = 1.0 - smoothstep(0.5, 5.0, vFlow.x);
-        float bend = mix(1.0, 0.35, glass);
+        float bend = mix(1.0, 0.35, glass) * (0.75 + 0.25 * W.fall.x);   // (more sheen: a livelier surface)
         N = normalize(N + (side * (sa.x * 0.7 + sb.x * 0.5) + fd * (sa.y * 0.3 + sb.y * 0.2)) * bend);
-        float columns = ValueNoise(vec2(c * 0.9, vFlow.x * 0.03)) * 0.65 +
-                        ValueNoise(vec2(c * 2.3 + 7.0, vFlow.x * 0.05 + 3.0)) * 0.35;
+        // Columns at three widths (the finest the threads of water within them), lumps sliding down them, and bright
+        // clumps of white water rushing down among them.
+        float columns = ValueNoise(vec2(c * 0.9, vFlow.x * 0.03)) * 0.2 +
+                        ValueNoise(vec2(c * 2.3 + 7.0, vFlow.x * 0.05 + 3.0)) * 0.25 +
+                        ValueNoise(vec2(c * 6.1 + 2.0, vFlow.x * 0.12 + 9.0)) * 0.3 +
+                        ValueNoise(vec2(c * 13.0 + 4.0, vFlow.x * 0.25 + 1.0)) * 0.25;
         float lumps = ValueNoise(vec2(c * 1.3 + 11.0, (tau - t) * 1.2)) * 0.6 +
                       ValueNoise(vec2(c * 2.9 + 3.0, (tau - t * 1.15) * 2.4)) * 0.4;
-        streak = clamp(columns + (lumps - 0.5) * 0.35, 0.0, 1.0);
+        float clumps = ValueNoise(vec2(c * 3.4 + 17.0, (tau - t * 1.05) * 3.2)) * ValueNoise(vec2(c * 8.3 + 5.0, (tau - t * 1.1) * 5.5));
+        streak = clamp(columns + (lumps - 0.5) * 0.5 + clumps * clumps * 1.6 * smoothstep(1.0, 6.0, vFlow.x), 0.0, 1.0);
     }
     N = normalize(N + vec3(-slope.x, 0.0, -slope.y));
     bool under = !mesh && eye.y < vRest.y;
@@ -257,7 +300,8 @@ void main()
 
     // The light on the water: the terrain's ambient plus the sun.
     vec3 L = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
-    float shadow = SunShadow(vPos + vec3(0.0, 0.05, 0.0));
+    // (A fall lies on its cliff: looked up a little out from the sheet, or the cliff shadows it.)
+    float shadow = SunShadow(vPos + (fall ? N * 0.6 : vec3(0.0)) + vec3(0.0, 0.05, 0.0));
     vec3 sun = FL.sunColor.rgb;
     vec3 ambient = W.ambient.rgb;
     vec3 light = ambient + sun * (max(L.y, 0.0) * shadow);
@@ -320,7 +364,8 @@ void main()
     float white = 0.0;
     if (fall) {
         vec3 fallLight = ambient + sun * (max(dot(N, L), 0.0) * shadow);
-        white = (0.2 + 0.6 * smoothstep(0.25, 0.85, streak)) * (1.0 - 0.85 * glass);
+        // (Whiter the further it has fallen - more air in it - the streaks only a variation on that.)
+        white = clamp(mix(0.15, 0.6, smoothstep(1.0, 14.0, vFlow.x)) + (streak - 0.5) * 0.6, 0.0, 1.0) * (1.0 - 0.85 * glass);
         water = mix(water, vec3(0.85, 0.88, 0.9) * (fallLight * 0.8 + 0.2), white);
     }
 
@@ -334,7 +379,7 @@ void main()
     // A fall: a broken, rushing surface (facets turned every way) averages a higher reflectance than a still one, and
     // its clear water is seen as a sheen of what it reflects; the white less (foam is rough).
     if (fall)
-        F = max(F + 0.06, mix(0.45, 0.2, style) * W.look.y * (0.4 + 0.6 * glass)) * (1.0 - 0.7 * white);
+        F = max(F + 0.06, mix(0.45, 0.2, style) * W.look.y * W.fall.x * (0.5 + 0.5 * glass)) * (1.0 - 0.4 * white);
     vec3 reflected;
     float ssrHit = 0.0;
     if (under) {
@@ -359,7 +404,7 @@ void main()
     // The sun's glint: GGX with a roughness that grows with distance (a far ripple field is a blur of glints).
     if (!under && dot(sun, vec3(1.0)) > 0.0) {
         float rough = mix(0.06, 0.22, smoothstep(10.0, 300.0, dist)) + 0.1 * (1.0 - W.look2.z)
-                     + (fall ? 0.12 : 0.0);  // (a fall's rushing surface: a broad sheen, not a pin-point)
+                     + (fall ? 0.03 : 0.0);  // (a fall: a little broader - its surface rushes - but sharp)
         vec3 H = normalize(L + V);
         float NdotH = max(dot(Ns, H), 0.0), NdotL = max(dot(Ns, L), 0.0);
         float a2 = rough * rough * rough * rough;
@@ -367,7 +412,42 @@ void main()
         float D = a2 / (kPi * dd * dd);
         float Fs = 0.02 + 0.98 * pow(1.0 - max(dot(H, V), 0.0), 5.0);
         float vis = 0.25 / max(NdotL * NdotV, 0.05) * NdotL;
-        colour += sun * (D * Fs * vis * shadow * W.look.y * (1.0 - 0.6 * white));
+        colour += sun * (D * Fs * vis * shadow * W.look.y * (1.0 - 0.3 * white));
+    }
+
+    // A fall's sparkles: the rushing water is a mass of little facets turned every way, and where one turns a light
+    // into the eye it flashes. Cells sliding down with the water, each holding one facet (a tilt, and a dot somewhere in
+    // the cell), lit by the sun and by every point and spot light near; faded out where the cells shrink to a pixel or
+    // so (they would only flicker). The lamps also give the sheet a broad wet highlight (by night the water's only
+    // shine).
+    if (fall && !under) {
+        vec3 spark = vec3(0.0), sheen = vec3(0.0);
+        vec2 cellUv = vec2(vFlow.y * 5.0, (tau - t) * 16.0);
+        vec2 fw = fwidth(cellUv);
+        float resolve = (1.0 - smoothstep(0.35, 0.9, max(fw.x, fw.y))) * W.fall.y;
+        vec3 Nf = Ns;
+        float spot = 0.0;
+        if (resolve > 0.0) {
+            vec2 fl = floor(cellUv), fc = cellUv - fl;
+            ivec2 ci = ivec2(fl);
+            vec2 centre = vec2(0.25 + 0.5 * Hash21(ci), 0.25 + 0.5 * Hash21(ci + ivec2(7, 13)));
+            spot = 1.0 - smoothstep(0.08, 0.22, length((fc - centre) * vec2(1.0, 0.6)));
+            // (Tilted up more than down: the sun is mostly overhead, the sheet upright.)
+            Nf = normalize(Ns + fallSide * ((Hash21(ci + ivec2(19, 3)) - 0.5) * 1.6) +
+                           fallDown * ((Hash21(ci + ivec2(5, 29)) - 0.5) * 2.4 - 0.4));
+            if (dot(sun, vec3(1.0)) > 0.0)
+                spark += sun * (shadow * pow(max(dot(Nf, normalize(L + V)), 0.0), 100.0));
+        }
+        uint count = min(FL.info.x, 64u);
+        for (uint i = 0u; i < count; ++i) {
+            vec3 Ll, lc;
+            if (!LocalLight(i, vPos, Ll, lc))
+                continue;
+            sheen += lc * Ggx(Ns, V, Ll, 0.3);
+            if (resolve > 0.0)
+                spark += lc * pow(max(dot(Nf, normalize(Ll + V)), 0.0), 100.0);
+        }
+        colour += (spark * (spot * resolve * 20.0) + sheen * W.fall.x) * (1.0 - 0.5 * white);
     }
 
     // Foam: on the shore (shallow water, broken up by the noise, moving with the waves) and on sharp crests.
@@ -384,6 +464,29 @@ void main()
         colour = mix(colour, vec3(0.85, 0.88, 0.9) * foamLight, foam);
     }
 
+    // Where a fall lands: the pool churned white along its foot, the foam broken up and drifting out from it.
+    if (!mesh && W.fall.z > 0.5 && W.fall2.y > 0.0) {
+        float best = 1e9, along = 0.0;
+        for (int i = 0; i < int(W.fall.z); ++i) {
+            FootSegment fs = feet[i];
+            vec2 a = fs.a.xz, ab = vec2(fs.a.w, fs.b.y) - a;
+            float k = clamp(dot(vPos.xz - a, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
+            float d = length(vPos.xz - a - ab * k);
+            if (d < best) { best = d; along = dot(vPos.xz, ab) * inversesqrt(max(dot(ab, ab), 1e-6)); }
+        }
+        float churn = exp(-best / 5.0) * W.fall2.y;
+        if (churn > 0.01) {
+            vec2 q = vec2(along * 0.3, best * 0.3 - t * 0.5);
+            float pattern = texture(detail, q).b * 0.6 + texture(detail, q * 2.3 + vec2(0.37, -t * 0.35)).a * 0.4;
+            float amount = clamp(churn * 1.5, 0.0, 1.0);
+            float fw = smoothstep(1.0 - amount, 1.0 - amount + 0.25, pattern) * amount;
+            fw = max(fw, (1.0 - smoothstep(0.5, 2.5, best)) * 0.85 * min(W.fall2.y, 1.0));   // (boiling right at it)
+            fw *= 1.0 - smoothstep(80.0, 300.0, dist);
+            vec3 foamLight = ambient + sun * (max(dot(N, L), 0.0) * shadow);
+            colour = mix(colour, vec3(0.88, 0.9, 0.92) * foamLight, fw);
+        }
+    }
+
     // Where the surface meets the shore: fade over to what is behind, so the water has no hard line along the land.
     float edge = dR >= 1.0 ? 1.0 : smoothstep(0.0, 0.12, path);
     colour = mix(behindRaw, colour, edge);
@@ -391,6 +494,11 @@ void main()
     // surface steps down to the shore, are see-through at their far edge (drawn opaque, they stood as blue walls).
     if (mesh && !fall)                           // (a fall: the game gives it no alpha at all - no fade to follow)
         colour = mix(behindRaw, colour, clamp(vAlpha / max(W.tint.a, 0.05), 0.0, 1.0));
+    // A fall's sheet thins out at its sides, raggedly, the ragged edge flowing down with the water.
+    if (fall) {
+        float rag = ValueNoise(vec2(vFlow.y * 0.7, (tau - t) * 1.4)) * 0.6 + ValueNoise(vec2(vFlow.y * 1.9 + 5.0, (tau - t) * 3.0)) * 0.4;
+        colour = mix(behindRaw, colour, smoothstep(rag * 0.7, rag * 0.7 + 0.3, vFlow.w));
+    }
 
     // The game's fog, by the view distance.
     float fog = FogFactor(dist);
@@ -410,7 +518,14 @@ void main()
     // Local lights' share 0, reflectivity 0 (the water reflects by itself; the screen-space pass would add it twice),
     // the direct sunlight's share for the contact shadows.
     outLocal = vec4(0.0, 0.0, 0.2 * shadow, 1.0);
-    vec2 now = vClip.xy / vClip.w, before = vPrevClip.xy / max(vPrevClip.w, 1e-6);
-    outMotion = vec4(vPrevClip.w > 1e-6 ? (now - before) * 0.5 * W.viewport.xy * vec2(1.0, -1.0) : vec2(0.0), 0.0, 1.0);
+    // (A fall's motion: where its water was last frame - up the sheet by the water's speed there - not where the sheet
+    // was: the temporal filter then follows the pattern down instead of smearing it into a blur.)
+    vec4 prevClip = vPrevClip;
+    if (fall) {
+        float dt = clamp(t - W.time.y, 0.0, 0.1);
+        prevClip = W.prevViewProj * vec4(vPos - fallDown * (FallSpeed(vFlow.x) * dt), 1.0);
+    }
+    vec2 now = vClip.xy / vClip.w, before = prevClip.xy / max(prevClip.w, 1e-6);
+    outMotion = vec4(prevClip.w > 1e-6 ? (now - before) * 0.5 * W.viewport.xy * vec2(1.0, -1.0) : vec2(0.0), 0.0, 1.0);
     outAlbedo = vec4(clamp(mix(deep / max(dot(light, kLuma), 0.05), vec3(0.85), foam), 0.0, 1.0), 1.0);
 }

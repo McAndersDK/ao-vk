@@ -496,6 +496,11 @@ public:
         float swimSpeed = 3.6f;                  // the waves' speed, m/s (RVK_WakeSpeed)
         float swimGain = 2.0f;                   // how strongly it shows in the surface (RVK_WakeGain)
         float swimSplash = 1.0f;                 // the splash of a character jumping in (RVK_WakeSplash)
+        float fallSheen = 1.0f;                  // how much a fall's clear water reflects (RVK_WaterSheen)
+        float fallSparkle = 1.0f;                // a fall's sparkles of sunlight and lamplight (RVK_WaterSpark)
+        float fallSpray = 1.0f;                  // the spray and mist at a fall's foot (RVK_WaterSpray)
+        float fallChurn = 1.0f;                  // the pool churned and foaming where a fall lands (RVK_WaterChurn)
+        float fallSpeed = 1.75f;                 // how fast a fall's water falls, x a natural fall's (RVK_WaterSpeed)
         uint32_t quality = 2;                    // 1 low, 2 medium, 3 high: grid density, reflection steps
     };
     void SetWaterParams(const WaterParams& params) { m_waterParams = params; UpdateWaterReady(); }
@@ -1368,6 +1373,20 @@ private:
     struct WaterGrid { uint32_t segments = 0; VkBuffer buffer = VK_NULL_HANDLE; VmaAllocation_T* allocation = nullptr; };
     std::vector<WaterGrid> m_waterGrids;
     std::vector<uint32_t> m_waterSteep;
+    // Falls' sheets (water.cpp BuildFallSheet), made the first time a fall is seen; the last few kept.
+    struct WaterFall {
+        uint64_t key = 0;                        // its triangles' hash
+        std::vector<float> vertices;             // 12 floats each (water.cpp MeshVertexOut)
+        std::vector<uint32_t> indices;
+        std::vector<float> foot;                 // where it meets the pool, every few units across it: x, y, z, and
+                                                 // the way out from the cliff (x, z)
+        uint64_t lastFrame = 0;
+    };
+    std::vector<WaterFall> m_waterFalls;
+    // The feet of the falls drawn last (water.cpp FootSegment, 8 floats each): the spray, the churn in the disturbance
+    // field and the foam on the pool start there.
+    std::vector<float> m_waterFoot;
+    VkPipeline m_waterSprayPipeline = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_waterSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_waterLayout = VK_NULL_HANDLE;
     VkPipeline m_waterPipeline = VK_NULL_HANDLE;

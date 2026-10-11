@@ -5,8 +5,9 @@
 #include "water_common.glsl"
 
 // (rvk/water.cpp MeshVertexOut.) n, along, across, fall: a fall's flow - its smooth normal, the distance down from its
-// top and along its width (unbroken over the sheet), and 1 on a fall (0: a shore step, or a flat triangle).
-struct MeshVertex { float x, y, z; uint colour; float nx, ny, nz, along; float across, fall, pad0, pad1; };
+// top and along its width (unbroken over the sheet), and 1 on a fall (0: a shore step, or a flat triangle); edge: on
+// a fall's sheet, 0 at its sides to 1 inside.
+struct MeshVertex { float x, y, z; uint colour; float nx, ny, nz, along; float across, fall, edge, pad; };
 layout(set = 0, binding = 2, std430) readonly buffer Mesh { MeshVertex meshVertices[]; };
 
 layout(location = 0) out vec3 vPos;         // world position (displaced)
@@ -18,7 +19,7 @@ layout(location = 5) out float vFold;       // the waves' compression (foam on t
 layout(location = 6) out float vSpacing;    // the grid's spacing here (world)
 layout(location = 7) out float vAlpha;      // mesh mode: the game's vertex alpha (its shore fade); grid: 1
 layout(location = 8) out vec3 vFlowN;       // mesh mode: a fall's smooth normal (MeshVertex)
-layout(location = 9) out vec3 vFlow;        // mesh mode: a fall's along, across, fall (MeshVertex)
+layout(location = 9) out vec4 vFlow;        // mesh mode: a fall's along, across, fall, edge (MeshVertex)
 
 // How much the waves calm down where the water is shallow - judged from the scene's depth (behind the water, at the
 // rest point) where it is on the screen; elsewhere not at all.
@@ -49,13 +50,24 @@ void main()
         p = vec3(m.x, m.y, m.z);
         vAlpha = float(m.colour >> 24u) / 255.0;
         vFlowN = vec3(m.nx, m.ny, m.nz);
-        vFlow = vec3(m.along, m.across, m.fall);
+        vFlow = vec4(m.along, m.across, m.fall, m.edge);
         prevP = p;
+        // A fall's sheet ripples: bulges running down it with the water (in and out along its normal, more as it
+        // breaks up lower down; none at the very lip, where it meets the pool above).
+        if (m.fall > 0.5) {
+            float tau = FallTau(m.along), amp = 0.12 * smoothstep(0.0, 3.0, m.along);
+            vec3 n = vec3(m.nx, m.ny, m.nz);
+            for (int k = 0; k < 2; ++k) {
+                float tk = k == 0 ? W.time.x : W.time.y;
+                float b = sin(m.across * 1.7 + (tau - tk) * 9.0) * 0.5 + sin(m.across * 0.63 - (tau - tk) * 5.3 + 1.3) * 0.5;
+                if (k == 0) p += n * (amp * b); else prevP += n * (amp * b);
+            }
+        }
         vRest = p;
     } else {
         vAlpha = 1.0;
         vFlowN = vec3(0.0, 1.0, 0.0);
-        vFlow = vec3(0.0);
+        vFlow = vec4(0.0);
         uint segments = uint(W.grid.x);
         uint ring = uint(gl_VertexIndex) / segments, seg = uint(gl_VertexIndex) % segments;
         float r = ring == 0u ? 0.0 : W.grid.z * pow(W.grid.w, float(ring - 1u));

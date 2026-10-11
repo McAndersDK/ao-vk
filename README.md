@@ -355,6 +355,9 @@ Some useful ones:
 | `RVK_WakeSplash` | 1 | the big ripple of a character jumping into the water (0 = none) |
 | `RVK_WaterRefl` / `RVK_WaterRefr` / `RVK_WaterClear` | 1 / 1 / 1 | reflections, refraction, how far one sees into it |
 | `RVK_WaterFoam` / `RVK_WaterCaust` / `RVK_WaterTex` | 0 / 1 / 0.5 | shore and crest foam, caustics, the game's water texture on it |
+| `RVK_WaterSheen` / `RVK_WaterSpark` | 1 / 1 | waterfalls: how much their clear water reflects (up to 2), their sparkles of sunlight and lamplight (0 = none) |
+| `RVK_WaterSpray` / `RVK_WaterChurn` | 1 / 1 | waterfalls: the spray and mist at their foot, the pool churned and foaming where they land (0 = none) |
+| `RVK_WaterSpeed` | 1.75 | waterfalls: how fast the water falls (1 = as fast as real water would for the game's units in metres) |
 
 ### Hotkeys (Ctrl+Shift + key)
 

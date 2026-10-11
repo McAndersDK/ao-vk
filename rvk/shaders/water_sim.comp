@@ -7,11 +7,13 @@
 //
 // The grid is toroidal and world-aligned: texel (i, j) holds the cells whose world index is i, j modulo N, so as the camera
 // moves the data stays where it is and only the edge, a band the water.frag fades out, is wiped for the cells that
-// come in. State: R h, G v.
+// come in. State: R h, G v. Where a fall lands (its foot segments) the water is churned: pushed at random, cell by
+// cell, step by step - the wave equation spreads that out as the choppy rings round a fall's foot.
 layout(local_size_x = 8, local_size_y = 8) in;
 
 const int N = 256;
 const int kMaxBodies = 32;
+const int kMaxFeet = 32;                    // (rvk/water.cpp kFootMax)
 
 layout(set = 0, binding = 0, rgba16f) uniform readonly image2D prevState;
 layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D nextState;
@@ -20,7 +22,20 @@ layout(set = 0, binding = 3) uniform Bodies {
     vec4 pos[kMaxBodies];   // x, z: where; y: its feet's height; w: its speed (m/s)
     vec4 dir[kMaxBodies];   // xy: its direction of motion (unit); z: its phase (idle stirring)
     vec4 extra[kMaxBodies]; // x: how fast it falls (m/s); y: its feet's height last frame
+    vec4 feet[kMaxFeet * 2];// the falls' feet: x0 y0 z0 x1, y1 z1 and the way out (water_common.glsl FootSegment)
+    vec4 footInfo;          // x: how many; y: the churn's strength
 } B;
+
+uint Hash(uvec3 v)
+{
+    uint x = v.x * 73856093u ^ v.y * 19349663u ^ v.z * 83492791u;
+    x ^= x >> 16u;
+    x *= 0x7FEB352Du;
+    x ^= x >> 15u;
+    x *= 0x846CA68Bu;
+    x ^= x >> 16u;
+    return x;
+}
 
 layout(push_constant) uniform Params {
     vec4 a;                 // xy: the camera's world x, z; z: the cell's size; w: the step (s)
@@ -85,6 +100,24 @@ void main()
         float push = P.d.y * move * dip * g;
         float stir = P.d.z * (1.0 - min(move, 1.0)) * sin(P.c.z * 5.5 + B.dir[i].z) * g;
         v += (push + stir) * inWater * dt;
+    }
+
+    // The falls' feet: random pushes within a couple of units of each (out to the side the water falls out to).
+    int feet = int(B.footInfo.x);
+    if (feet > 0) {
+        float g = 0.0;
+        for (int i = 0; i < feet; ++i) {
+            vec4 fa = B.feet[i * 2], fb = B.feet[i * 2 + 1];
+            vec2 a = fa.xz, ab = vec2(fa.w, fb.y) - a;
+            float k = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
+            vec2 d = p - a - ab * k;
+            float r2 = dot(d, d) + 0.5 * max(-dot(d, fb.zw), 0.0) * max(-dot(d, fb.zw), 0.0);
+            g = max(g, exp(-r2 / (2.0 * 0.9 * 0.9)));
+        }
+        if (g > 0.01) {
+            float n = float(Hash(uvec3(uvec2(w), uint(P.c.z * 60.0))) >> 8u) * (1.0 / 16777216.0) - 0.5;
+            v += B.footInfo.y * n * g * dt * 60.0;
+        }
     }
 
     v *= exp(-P.c.w * dt);
