@@ -1049,6 +1049,16 @@ void ThreadedDevice::EndParticleEmitter()
     Enqueue([this](const uint8_t*) { m_device.EndParticleEmitter(); });
 }
 
+void ThreadedDevice::SetWeatherParams(const Device::WeatherParams& params)
+{
+    Enqueue([this, params](const uint8_t*) { m_device.SetWeatherParams(params); });
+}
+
+void ThreadedDevice::SetWeather(const Device::WeatherState& state)
+{
+    Enqueue([this, state](const uint8_t*) { m_device.SetWeather(state); });
+}
+
 void ThreadedDevice::SetWaterParams(const Device::WaterParams& params)
 {
     Enqueue([this, params](const uint8_t*) { m_device.SetWaterParams(params); });

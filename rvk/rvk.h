@@ -508,6 +508,25 @@ public:
     // The water can be drawn (on, HDR on, resources made): the proxy replaces the game's water only then. Any thread.
     bool WaterReady() const { return m_waterReady.load(std::memory_order_relaxed); }
 
+    // Weather (rain.cpp): the game's weather visuals, drawn by rvk instead. The proxy hands over what the game's
+    // weather asks for each frame it is on (VisualRain_t::process: how hard, the wind, its colour); without a hand-off
+    // for a moment it is over. Rain falls in a box round the camera, drawn after the scene.
+    struct WeatherParams {
+        bool enable = false;                     // RVK_WeatherOn (the proxy hides the game's rain only then)
+        float force = 0.0f;                      // RVK_RainForce: rain this hard regardless of the game's (0 = the game's)
+        float amount = 1.0f;                     // RVK_RainAmount: how many drops, x
+    };
+    struct WeatherState {
+        float precipitation = 0.0f;              // how hard (the game's VisualRain_t::process value, as given)
+        float wind[3] = {0, 0, 0};               // the game's wind (world)
+        uint32_t colour = 0;                     // the game's weather colour (VisualRain_t::SetColor): 0x00RRGGBB
+        float fallSpeed = 0.0f;                  // its drops' fall (VisualRain_t +0x24; rain ~9.8, snow slower)
+        float windScale = 0.0f;                  // how much the wind moves them (+0x38)
+        float opacity = 0.0f;                    // their opacity factor (+0x5bc)
+    };
+    void SetWeatherParams(const WeatherParams& params) { m_weatherParams = params; }
+    void SetWeather(const WeatherState& state);
+
     void SetTexture(uint32_t stage, Texture* texture);
     // The game's visual issuing the next draws (rnative::scene): its kind (VisualKind) and class name - for exact
     // decisions where the draw alone needs heuristics. 0 / "": not known.
@@ -1439,6 +1458,21 @@ private:
     void StepWaterSim(VkCommandBuffer cmd, const WaterMap* map);
     bool CreateWaterResources(std::string* error);
     void DestroyWaterResources();
+    // Weather (rain.cpp).
+    WeatherParams m_weatherParams;
+    WeatherState m_weatherGame;                  // the game's, as last handed over
+    double m_weatherGameTime = -1e9;             // when (m_frameClock)
+    float m_rain = 0.0f;                         // how hard it rains now, 0..1 (eased towards the target)
+    float m_rainWind[3] = {0, 0, 0};
+    double m_rainClock = 0.0;                    // the rain's own time (s), for the drops' fall
+    double m_rainLastClock = -1.0;
+    uint32_t m_rainLogFrame = 0;
+    VkDescriptorSetLayout m_rainSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout m_rainLayout = VK_NULL_HANDLE;
+    VkPipeline m_rainPipeline = VK_NULL_HANDLE;
+    bool CreateRainResources(std::string* error);
+    void DestroyRainResources();
+    void RenderRain(VkCommandBuffer cmd);
     void UpdateWaterReady();
     const WaterGrid* WaterGridFor(uint32_t segments);
     WaterMap* WaterMapFor(const WaterVertex* v, uint32_t count, const uint16_t* idx, uint32_t icount,

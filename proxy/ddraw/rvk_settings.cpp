@@ -128,6 +128,10 @@ Setting g_settings[] = {
     {"RVK_WaterChurn", "Waterfalls: churn and foam where they land",               "Experimental",     Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WaterOn"},
     {"RVK_WaterSpeed", "Waterfalls: how fast the water falls",                    "Experimental",     Float, 0.25f, 4, 0.05f, 1.75f, nullptr, 0, "RVK_WaterOn"},
 
+    {"RVK_WeatherOn",  "New weather (rain; needs HDR)", "Experimental",    Bool,  0, 1, 1, 0, nullptr, 0},
+    {"RVK_RainForce",  "Rain: force it this hard (0 = the game's weather)",       "Experimental",     Float, 0, 1, 0.05f, 0, nullptr, 0, "RVK_WeatherOn"},
+    {"RVK_RainAmount", "Rain: how many drops",                                     "Experimental",     Float, 0, 4, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
+
     {"RVK_SunShadow",  "Sun shadows",                                              "Shadows",          Bool,  0, 1, 1, 1, "RANDYVK_SHADOWS", 0},
     {"RVK_SunRes",     "Resolution (4096 / 8192)",  "Shadows",          Choice, 1024, 8192, 1, 2048, nullptr, 0, "RVK_SunShadow", "1024 2048 4096 8192"},
     {"RVK_SunStrength","Strength",                                                 "Shadows",          Float, 0, 1, 0.05f, 0.6f, "RANDYVK_SHADOW_STRENGTH", 0, "RVK_SunShadow"},
@@ -443,6 +447,13 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
         w.fallChurn = V("RVK_WaterChurn");
         w.fallSpeed = V("RVK_WaterSpeed");
         d->SetWaterParams(w);
+    }
+    else if (std::strncmp(n, "RVK_Weather", 11) == 0 || std::strncmp(n, "RVK_Rain", 8) == 0) {
+        rvk::Device::WeatherParams w;
+        w.enable = V("RVK_WeatherOn") != 0.0f;
+        w.force = V("RVK_RainForce");
+        w.amount = V("RVK_RainAmount");
+        d->SetWeatherParams(w);
     }
     else if (std::strncmp(n, "RVK_Vol", 7) == 0) d->SetVolume(V("RVK_Volume"), V("RVK_VolHaze"), V("RVK_VolShafts"));
     else if (is("RVK_MBlur") || is("RVK_MBlurNear")) d->SetMotionBlur(V("RVK_MBlur"), V("RVK_MBlurNear"));

@@ -21,6 +21,8 @@ void CountBackendDraw();                          // heartbeat statistics
 unsigned ComIndex(const char* name);              // counter index of "Interface::Method"
 void RvkLog(const char* fmt, ...);
 void ParticleFrame();                             // each presented frame (rvk_particles.cpp)
+void WeatherFrame();                              // each presented frame (rvk_weather.cpp)
+void* PatchImport(HMODULE module, const char* dll, const char* function, void* hook);   // (com_trace.cpp) the old target
 bool RvkBackend();                                // RANDYVK_DDRAW=rvk installed (com_trace.cpp)
 void CallLogFrame(uint64_t presented);            // each present (rvk_device.cpp: RANDYVK_CALLLOG)
 void SetInterfaceRate(float hz);                  // RVK_UiRate: interface redraws a second (0 = every frame)

@@ -205,6 +205,7 @@ Device::~Device()
     DestroyGrassResources();
     DestroyLeafResources();
     DestroyWaterResources();
+    DestroyRainResources();
     DestroyStaticGeometry();
     SavePipelineCache("at exit");
     if (m_pipelineCache) vkDestroyPipelineCache(m_device, m_pipelineCache, nullptr);
@@ -1029,6 +1030,13 @@ bool Device::CreatePipelines(std::string* error)
             DestroyWaterResources();
         }
         UpdateWaterReady();
+    }
+    {
+        std::string rainError;                   // not fatal: no rain then (the game's stays)
+        if (!CreateRainResources(&rainError)) {
+            Log("rain: unavailable (%s)", rainError.c_str());
+            DestroyRainResources();
+        }
     }
     char gpuSkin[8] = "";
     if (GetEnvironmentVariableA("RANDYVK_GPU_SKIN", gpuSkin, sizeof(gpuSkin)) && gpuSkin[0] == '0')

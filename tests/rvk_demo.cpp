@@ -1397,6 +1397,7 @@ std::string g_waterMesh;          // --water-mesh FILE: the water mesh from a du
 float g_waterMeshAt[3] = {2040.0f, 29.5f, 2340.0f};
 float g_waterEye[3] = {0, 0, 0};  // --water-eye X Y Z (the dump's coordinates): the camera there, looking at
 bool g_waterEyeSet = false;       // --water-mesh-at
+float g_rainForce = 0.0f;         // --rain F: rain this hard (0..1; RVK_RainForce), the new weather on
 bool g_waterLamp = false;         // --water-lamp: a warm point light by the camera, as a character's lamp (with
                                   // --light-override, so the frame's lights carry it)
 
@@ -2806,6 +2807,7 @@ int main(int argc, char** argv)
         else if (a == "--water-wall") g_waterWall = true;
         else if (a == "--water-mesh" && i + 1 < argc) g_waterMesh = argv[++i];
         else if (a == "--water-lamp") g_waterLamp = true;
+        else if (a == "--rain" && i + 1 < argc) { g_rainForce = float(std::atof(argv[++i])); hdr = true; }
         else if (a == "--water-mesh-at" && i + 3 < argc) { for (float& x : g_waterMeshAt) x = float(std::atof(argv[++i])); }
         else if (a == "--water-eye" && i + 3 < argc) { for (float& x : g_waterEye) x = float(std::atof(argv[++i])); g_waterEyeSet = true; }
         else if (a == "--water-shelf") g_waterShelf = true;
@@ -2954,6 +2956,12 @@ int main(int argc, char** argv)
     dev.SetShadows(shadows);
     dev.SetLightHeadroom(headroom);
     dev.SetHdr(hdr);
+    if (g_rainForce > 0.0f) {
+        Device::WeatherParams weather;
+        weather.enable = true;
+        weather.force = g_rainForce;
+        dev.SetWeatherParams(weather);
+    }
     dev.SetTonemap(knee, 1.0f);
     dev.SetBloom(bloom, 1.0f);
     dev.SetEffectGlow(effectGlow);

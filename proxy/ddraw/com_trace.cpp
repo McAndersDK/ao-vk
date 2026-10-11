@@ -254,6 +254,8 @@ HRESULT WINAPI HookDirectDrawEnumerateExA(LPDDENUMCALLBACKEXA cb, LPVOID ctx, DW
     return g_realEnumerateExA(cb, ctx, flags);
 }
 
+}  // namespace
+
 // Points module's import of dll!function at hook; returns the previous target (or nullptr).
 void* PatchImport(HMODULE module, const char* dll, const char* function, void* hook)
 {
@@ -281,8 +283,6 @@ void* PatchImport(HMODULE module, const char* dll, const char* function, void* h
     }
     return nullptr;
 }
-
-}  // namespace
 
 unsigned ComMethodCount() { return kComMethodCount + 2; }
 

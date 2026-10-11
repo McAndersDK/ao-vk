@@ -358,6 +358,8 @@ Some useful ones:
 | `RVK_WaterSheen` / `RVK_WaterSpark` | 1 / 1 | waterfalls: how much their clear water reflects (up to 2), their sparkles of sunlight and lamplight (0 = none) |
 | `RVK_WaterSpray` / `RVK_WaterChurn` | 1 / 1 | waterfalls: the spray and mist at their foot, the pool churned and foaming where they land (0 = none) |
 | `RVK_WaterSpeed` | 1.75 | waterfalls: how fast the water falls (1 = as fast as real water would for the game's units in metres) |
+| `RVK_WeatherOn` | 0 | the new weather: rvk draws the game's rain instead of it (needs HDR). Experimental: off by default |
+| `RVK_RainForce` / `RVK_RainAmount` | 0 / 1 | rain this hard whatever the game's weather (0 = the game's; for trying it), how many drops |
 
 ### Hotkeys (Ctrl+Shift + key)
 
