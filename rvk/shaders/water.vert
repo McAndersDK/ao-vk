@@ -4,7 +4,9 @@
 // (W.time.z = 1): the game's own triangles (its steep ones: falls), from the vertex buffer as they are.
 #include "water_common.glsl"
 
-struct MeshVertex { float x, y, z; uint colour; };
+// (rvk/water.cpp MeshVertexOut.) n, along, across, fall: a fall's flow - its smooth normal, the distance down from its
+// top and along its width (unbroken over the sheet), and 1 on a fall (0: a shore step, or a flat triangle).
+struct MeshVertex { float x, y, z; uint colour; float nx, ny, nz, along; float across, fall, pad0, pad1; };
 layout(set = 0, binding = 2, std430) readonly buffer Mesh { MeshVertex meshVertices[]; };
 
 layout(location = 0) out vec3 vPos;         // world position (displaced)
@@ -15,6 +17,8 @@ layout(location = 4) out vec3 vRest;        // where the surface is at rest (xz 
 layout(location = 5) out float vFold;       // the waves' compression (foam on the crests)
 layout(location = 6) out float vSpacing;    // the grid's spacing here (world)
 layout(location = 7) out float vAlpha;      // mesh mode: the game's vertex alpha (its shore fade); grid: 1
+layout(location = 8) out vec3 vFlowN;       // mesh mode: a fall's smooth normal (MeshVertex)
+layout(location = 9) out vec3 vFlow;        // mesh mode: a fall's along, across, fall (MeshVertex)
 
 // How much the waves calm down where the water is shallow - judged from the scene's depth (behind the water, at the
 // rest point) where it is on the screen; elsewhere not at all.
@@ -44,10 +48,14 @@ void main()
         MeshVertex m = meshVertices[gl_VertexIndex];
         p = vec3(m.x, m.y, m.z);
         vAlpha = float(m.colour >> 24u) / 255.0;
+        vFlowN = vec3(m.nx, m.ny, m.nz);
+        vFlow = vec3(m.along, m.across, m.fall);
         prevP = p;
         vRest = p;
     } else {
         vAlpha = 1.0;
+        vFlowN = vec3(0.0, 1.0, 0.0);
+        vFlow = vec3(0.0);
         uint segments = uint(W.grid.x);
         uint ring = uint(gl_VertexIndex) / segments, seg = uint(gl_VertexIndex) % segments;
         float r = ring == 0u ? 0.0 : W.grid.z * pow(W.grid.w, float(ring - 1u));

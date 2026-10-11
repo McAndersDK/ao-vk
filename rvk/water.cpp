@@ -538,6 +538,10 @@ Device::WaterMap* Device::WaterMapFor(const WaterVertex* v, uint32_t count, cons
     std::vector<int32_t> body(size_t(w) * h, -1);        // a wet texel's body (-1 = dry)
     std::vector<float> bodyLevel;                        // each body's level, relative to m.base (the mean height)
     std::vector<int32_t> stack;
+    // (A body whose heights run over a wide span is a slope - a river, a cascade of pools - not one sheet: it keeps its
+    // texels' own heights. One level for all of it put a pond up a mountain under the ground.)
+    constexpr float kFlatSpan = 4.0f;
+    std::vector<uint8_t> bodyKeep;                       // 1: not flattened
     for (uint32_t z = 0; z < h; ++z)
         for (uint32_t x = 0; x < w; ++x) {
             const size_t start = size_t(z) * w + x;
@@ -593,17 +597,19 @@ Device::WaterMap* Device::WaterMapFor(const WaterVertex* v, uint32_t count, cons
                 if (count)
                     level = float(sum / double(count));
             }
-            bodyLevel.push_back(level);
+            bodyKeep.push_back(mx - mn > kFlatSpan ? 1 : 0);
+            bodyLevel.push_back(mx - mn > kFlatSpan ? mn : level);
         }
     // The shader adds the map's base to the stored height: put the lowest level in the base and store each texel at
-    // its body's level (constant across the body), so every body reads as one flat sheet at its own height.
+    // its body's level (constant across the body), so every body reads as one flat sheet at its own height (a slope:
+    // at its texels' own heights).
     float minLevel = 0.0f;
     if (!bodyLevel.empty())
         minLevel = *std::min_element(bodyLevel.begin(), bodyLevel.end());
     for (size_t i = 0; i < heights.size(); ++i) {
         if (!pixels[i * 4 + 1])
             continue;
-        pixels[i * 4 + 0] = ToHalf(bodyLevel[size_t(body[i])] - minLevel);
+        pixels[i * 4 + 0] = ToHalf((bodyKeep[size_t(body[i])] ? heights[i] : bodyLevel[size_t(body[i])]) - minLevel);
     }
     m.base += minLevel;
     m.texture = CreateImage(w, h, Format::RGBA16F, 1, false);
@@ -985,6 +991,156 @@ bool Device::CopySceneForWater(VkCommandBuffer cmd, const WaterMap* map)
     return true;
 }
 
+namespace {
+
+// A vertex of the mesh as mesh mode reads it (water.vert MeshVertex, std430: 48 bytes): the game's position and
+// colour, then for the steep triangles' vertices the fall's flow - a smooth normal over the whole sheet (the game's
+// small triangles each lean their own way) and coordinates that run on unbroken across it (along: down from the
+// fall's top; across: along its width, from its middle), so the streaks can slide down it with no seams.
+struct MeshVertexOut {
+    float pos[3];
+    uint32_t colour;
+    float normal[3];
+    float along;
+    float across;
+    float fall;                                  // 1: a fall (no vertex alpha, a tall sheet); 0: a shore step
+    float pad[2];
+};
+static_assert(sizeof(MeshVertexOut) == 48, "water.vert MeshVertex");
+
+// Each connected group of steep triangles (vertices welded by position: the game may split them along edges) is one
+// fall: its face normals, turned to one side of the sheet and weighted by area, averaged at each vertex; its width
+// the principal axis of its vertices across the ground (a curved fall is measured along a straight line: fine for
+// the bends the game's falls have).
+void BuildFallVertices(const Device::WaterVertex* v, uint32_t count, const std::vector<uint32_t>& steep,
+                       MeshVertexOut* out)
+{
+    for (uint32_t i = 0; i < count; ++i) {
+        std::memcpy(out[i].pos, v[i].pos, 12);
+        out[i].colour = v[i].colour;
+        out[i].normal[0] = out[i].normal[2] = 0.0f;
+        out[i].normal[1] = 1.0f;
+        out[i].along = out[i].across = out[i].fall = 0.0f;
+        out[i].pad[0] = out[i].pad[1] = 0.0f;
+    }
+    if (steep.empty())
+        return;
+    // Weld: one id per position (to 1/64 unit).
+    std::vector<uint32_t> weld(count, ~0u);
+    std::vector<uint32_t> parent;                // union-find over the welded ids
+    {
+        std::vector<std::pair<uint64_t, uint32_t>> keys;
+        keys.reserve(steep.size());
+        for (uint32_t i : steep) {
+            const auto q = [&](int k) { return uint64_t(int64_t(std::lround(v[i].pos[k] * 64.0f)) & 0x1FFFFF); };
+            keys.emplace_back(q(0) | q(1) << 21 | q(2) << 42, i);
+        }
+        std::sort(keys.begin(), keys.end());
+        for (size_t k = 0; k < keys.size(); ++k) {
+            if (k == 0 || keys[k].first != keys[k - 1].first)
+                parent.push_back(uint32_t(parent.size()));
+            weld[keys[k].second] = uint32_t(parent.size() - 1);
+        }
+    }
+    const auto find = [&](uint32_t a) {
+        while (parent[a] != a) a = parent[a] = parent[parent[a]];
+        return a;
+    };
+    for (size_t t = 0; t + 2 < steep.size(); t += 3) {
+        const uint32_t a = find(weld[steep[t]]), b = find(weld[steep[t + 1]]), c = find(weld[steep[t + 2]]);
+        parent[b] = a;
+        parent[find(c)] = a;
+    }
+    // Per fall: its triangles' face normals (area-weighted) and the sums for its axes.
+    struct Fall {
+        double nxx = 0, nxz = 0, nzz = 0;        // the faces' horizontal normals' (unsigned) spread: which way it faces
+        double sx = 0, sz = 0, sxx = 0, sxz = 0, szz = 0, n = 0;   // its vertices across the ground
+        float top = -1e30f, bottom = 1e30f;
+        uint32_t maxAlpha = 0;
+        float face[2] = {1, 0}, axis[2] = {0, 1}, mid[2] = {0, 0};
+    };
+    std::vector<int32_t> fallOf(parent.size(), -1);
+    std::vector<Fall> falls;
+    const auto fallFor = [&](uint32_t i) -> Fall& {
+        const uint32_t r = find(weld[i]);
+        if (fallOf[r] < 0) { fallOf[r] = int32_t(falls.size()); falls.emplace_back(); }
+        return falls[size_t(fallOf[r])];
+    };
+    std::vector<float> faceN(steep.size());      // each triangle's face normal x area (x, y, z per triangle)
+    for (size_t t = 0; t + 2 < steep.size(); t += 3) {
+        const float* p0 = v[steep[t]].pos;
+        const float* p1 = v[steep[t + 1]].pos;
+        const float* p2 = v[steep[t + 2]].pos;
+        const float e1[3] = {p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]};
+        const float e2[3] = {p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]};
+        float* n = &faceN[t];
+        n[0] = e1[1] * e2[2] - e1[2] * e2[1];
+        n[1] = e1[2] * e2[0] - e1[0] * e2[2];
+        n[2] = e1[0] * e2[1] - e1[1] * e2[0];
+        Fall& f = fallFor(steep[t]);
+        f.nxx += double(n[0]) * n[0];
+        f.nxz += double(n[0]) * n[2];
+        f.nzz += double(n[2]) * n[2];
+    }
+    std::vector<uint8_t> seen(count, 0);
+    for (uint32_t i : steep) {
+        Fall& f = fallFor(i);
+        f.top = std::max(f.top, v[i].pos[1]);
+        f.bottom = std::min(f.bottom, v[i].pos[1]);
+        f.maxAlpha = std::max(f.maxAlpha, v[i].colour >> 24);
+        if (seen[i]) continue;
+        seen[i] = 1;
+        const double x = v[i].pos[0], z = v[i].pos[2];
+        f.sx += x; f.sz += z; f.n += 1;
+        f.sxx += x * x; f.sxz += x * z; f.szz += z * z;
+    }
+    // The principal axis of a symmetric 2x2 [a b; b c].
+    const auto principal = [](double a, double b, double c, float out2[2]) {
+        const double angle = 0.5 * std::atan2(2.0 * b, a - c);
+        out2[0] = float(std::cos(angle));
+        out2[1] = float(std::sin(angle));
+    };
+    for (Fall& f : falls) {
+        principal(f.nxx, f.nxz, f.nzz, f.face);
+        f.mid[0] = float(f.sx / f.n);
+        f.mid[1] = float(f.sz / f.n);
+        const double cxx = f.sxx / f.n - double(f.mid[0]) * f.mid[0], cxz = f.sxz / f.n - double(f.mid[0]) * f.mid[1],
+                     czz = f.szz / f.n - double(f.mid[1]) * f.mid[1];
+        principal(cxx, cxz, czz, f.axis);
+        if (f.axis[0] < 0.0f || (f.axis[0] == 0.0f && f.axis[1] < 0.0f)) { f.axis[0] = -f.axis[0]; f.axis[1] = -f.axis[1]; }
+    }
+    // The vertices' normals: the faces turned to the fall's facing side, summed.
+    std::vector<float> sum(size_t(count) * 3, 0.0f);
+    for (size_t t = 0; t + 2 < steep.size(); t += 3) {
+        const Fall& f = fallFor(steep[t]);
+        const float* n = &faceN[t];
+        const float s = n[0] * f.face[0] + n[2] * f.face[1] < 0.0f ? -1.0f : 1.0f;
+        for (int k = 0; k < 3; ++k)
+            for (int j = 0; j < 3; ++j)
+                sum[size_t(steep[t + k]) * 3 + j] += s * n[j];
+    }
+    // (Welded copies share their sums.)
+    std::vector<float> weldSum(parent.size() * 3, 0.0f);
+    for (uint32_t i : steep)
+        if (seen[i] == 1) {
+            seen[i] = 2;
+            for (int j = 0; j < 3; ++j) weldSum[size_t(weld[i]) * 3 + j] += sum[size_t(i) * 3 + j];
+        }
+    for (uint32_t i : steep) {
+        const Fall& f = fallFor(i);
+        const float* s = &weldSum[size_t(weld[i]) * 3];
+        const float l = std::sqrt(s[0] * s[0] + s[1] * s[1] + s[2] * s[2]);
+        MeshVertexOut& o = out[i];
+        if (l > 1e-12f)
+            for (int j = 0; j < 3; ++j) o.normal[j] = s[j] / l;
+        o.along = f.top - v[i].pos[1];
+        o.across = (v[i].pos[0] - f.mid[0]) * f.axis[0] + (v[i].pos[2] - f.mid[1]) * f.axis[1];
+        o.fall = f.maxAlpha == 0 && f.top - f.bottom > 3.0f ? 1.0f : 0.0f;
+    }
+}
+
+}  // namespace
+
 void Device::DrawWater(const WaterVertex* vertices, uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount)
 {
     if (!m_inFrame || !vertexCount || indexCount < 3 || !m_waterParams.enable || !m_waterPipeline || !m_waterDetail ||
@@ -1080,14 +1236,14 @@ void Device::DrawWater(const WaterVertex* vertices, uint32_t vertexCount, const 
     wf.ripple[2] = 1.0f / (m_waterSimCell * float(kSimN));
     wf.ripple[3] = m_waterSimCell;
 
-    EnsureRingSpace(2 * (sizeof(WaterFrame) + 256) + sizeof(FrameLights) + VkDeviceSize(vertexCount) * 16 + steep.size() * 4 + 1024);
+    EnsureRingSpace(2 * (sizeof(WaterFrame) + 256) + sizeof(FrameLights) + VkDeviceSize(vertexCount) * sizeof(MeshVertexOut) + steep.size() * 4 + 1024);
     if (m_frameLightsDirty || m_frameLightsGeneration != m_ringGeneration)
         WriteFrameLights();
-    // The mesh's vertices (mesh mode; bound in both modes - the grid doesn't read them).
+    // The mesh's vertices, with the falls' flow (mesh mode; bound in both modes - the grid doesn't read them).
     void* meshCpu = nullptr;
-    const VkDeviceSize meshBytes = std::max<VkDeviceSize>(VkDeviceSize(vertexCount) * 16, 16);
+    const VkDeviceSize meshBytes = std::max<VkDeviceSize>(VkDeviceSize(vertexCount) * sizeof(MeshVertexOut), 16);
     const VkDeviceSize meshOffset = Allocate(meshBytes, 256, &meshCpu);
-    std::memcpy(meshCpu, vertices, size_t(vertexCount) * 16);
+    BuildFallVertices(vertices, vertexCount, steep, static_cast<MeshVertexOut*>(meshCpu));
 
     const float sw = float(m_scene->m_width), sh = float(m_scene->m_height);
     VkViewport viewport{0.5f, sh + 0.5f, sw, -sh, 0.0f, 1.0f};   // the scene draws into a flipped viewport

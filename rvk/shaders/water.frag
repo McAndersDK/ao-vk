@@ -26,6 +26,8 @@ layout(location = 4) in vec3 vRest;
 layout(location = 5) in float vFold;
 layout(location = 6) in float vSpacing;
 layout(location = 7) in float vAlpha;       // mesh mode: the game's vertex alpha (its shore fade)
+layout(location = 8) in vec3 vFlowN;        // mesh mode: a fall's smooth normal
+layout(location = 9) in vec3 vFlow;         // mesh mode: a fall's along (down from its top), across, fall (1)
 
 layout(location = 0) out vec4 outScene;
 layout(location = 1) out vec4 outGlow;
@@ -163,6 +165,20 @@ vec4 Reflect(vec3 posW, vec3 dirW, float noise)
     return vec4(0.0);
 }
 
+// Value noise (hashed lattice): the fall's streaks, which need more contrast than the detail texture has.
+float Hash21(vec2 p)
+{
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+float ValueNoise(vec2 p)
+{
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(Hash21(i), Hash21(i + vec2(1.0, 0.0)), f.x), mix(Hash21(i + vec2(0.0, 1.0)), Hash21(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+
 float FogFactor(float d)
 {
     uint mode = uint(W.fogParams.w);
@@ -194,7 +210,9 @@ void main()
     vec3 V = toEye / max(dist, 1e-4);
 
     // The normal: the waves', plus ripples (fading out with distance, where they would only shimmer).
-    vec3 N = mesh ? normalize(cross(dFdx(vPos), dFdy(vPos))) : normalize(vNormal);
+    // (A fall: the sheet's smooth normal - its triangles' own lean every way. A shore step: the triangle's.)
+    bool fall = mesh && vFlow.z > 0.5;
+    vec3 N = fall ? normalize(vFlowN) : mesh ? normalize(cross(dFdx(vPos), dFdy(vPos))) : normalize(vNormal);
     if (dot(N, V) < 0.0 && mesh) N = -N;
     float rippleFade = 1.0 - smoothstep(25.0, 220.0, dist);
     vec2 slope = mesh ? vec2(0.0) : Ripples(vPos.xz, t) * (W.look2.z * 0.22 * rippleFade);
@@ -202,6 +220,36 @@ void main()
     vec3 disturb = vec3(0.0);
     if (!mesh && W.ripple.x > 0.5)
         slope += Disturbance(vPos.xz, disturb) * (3.0 * W.ripple.y * rippleFade);
+    // A fall: the water runs down the sheet, in the fall's own coordinates (vFlow: unbroken over its triangles). It
+    // falls as water does - from a start speed, gathering speed - so the pattern is laid out by the time the water
+    // takes to come down this far (tau): sliding that by the clock moves it down, faster and stretched longer lower
+    // down. Two layers of the detail texture bend the normal (moving glints and reflections). Just over the lip the
+    // sheet is glassy - smooth, clear, a mirror; lower down it breaks up white (glass: 1 at the top, 0 a few units
+    // down). The white water is columns fixed on the sheet (where the flow is thicker, as the lip shapes it: they run
+    // its whole height), made brighter and darker by lumps of water sliding down them - so no streak starts or ends.
+    float streak = 0.0, glass = 0.0;
+    if (fall) {
+        vec3 fd = vec3(0.0, -1.0, 0.0);
+        fd -= N * dot(fd, N);                    // down the slope of the sheet
+        float fl = length(fd);
+        fd = fl > 0.05 ? fd / fl : vec3(0.0, -1.0, 0.0);
+        vec3 side = normalize(cross(N, fd));
+        const float v0 = 3.0, g = 9.8;           // units / s (a unit is about a metre), units / s^2
+        float tau = (sqrt(v0 * v0 + 2.0 * g * max(vFlow.x, 0.0)) - v0) / g;
+        float c = vFlow.y;
+        vec2 uvA = vec2(c * 0.45, (tau - t) * 0.9);
+        vec2 uvB = vec2(c * 1.15 + 0.3, (tau - t * 1.2) * 1.7 + 0.5);
+        vec4 da = texture(detail, uvA), db = texture(detail, uvB);
+        vec2 sa = da.rg * 2.0 - 1.0, sb = db.rg * 2.0 - 1.0;
+        glass = 1.0 - smoothstep(0.5, 5.0, vFlow.x);
+        float bend = mix(1.0, 0.35, glass);
+        N = normalize(N + (side * (sa.x * 0.7 + sb.x * 0.5) + fd * (sa.y * 0.3 + sb.y * 0.2)) * bend);
+        float columns = ValueNoise(vec2(c * 0.9, vFlow.x * 0.03)) * 0.65 +
+                        ValueNoise(vec2(c * 2.3 + 7.0, vFlow.x * 0.05 + 3.0)) * 0.35;
+        float lumps = ValueNoise(vec2(c * 1.3 + 11.0, (tau - t) * 1.2)) * 0.6 +
+                      ValueNoise(vec2(c * 2.9 + 3.0, (tau - t * 1.15) * 2.4)) * 0.4;
+        streak = clamp(columns + (lumps - 0.5) * 0.35, 0.0, 1.0);
+    }
     N = normalize(N + vec3(-slope.x, 0.0, -slope.y));
     bool under = !mesh && eye.y < vRest.y;
     vec3 Ns = under ? -N : N;
@@ -232,8 +280,10 @@ void main()
     // A steep triangle (a fall, or the side of a pool where the game's water steps down) is a sheet, not a body of
     // water: what is behind it is not under it. As thick as the game's alpha is meant for (two units: as opaque as the
     // game drew it), or the gap behind it if less; refraction then none.
+    // A fall is thicker, churning water (whatever is behind it - the cliff - must not show through it): about five
+    // units' worth where it is glassy over the lip, three times that once it breaks up.
     if (mesh) {
-        path = min(path, 2.0);
+        path = fall ? mix(16.0, 5.0, glass) : min(path, 2.0);
         uvR = uv;
     }
     vec3 bottom = eye - V * (dist * zR / zWater);                 // what the ray reaches
@@ -265,6 +315,14 @@ void main()
     vec3 deep = mix(deepAo, deepReal, style) * light;
     vec3 transmit = exp(-absorb * min(path, 400.0));
     vec3 water = behind * transmit + deep * (1.0 - transmit);
+    // A fall's white water (aerated: whiter than a pond, in streaks) is the sheet's own colour; what it reflects and
+    // the sun's glint go over it below - less on the white (foam is rough), more on the clear water between.
+    float white = 0.0;
+    if (fall) {
+        vec3 fallLight = ambient + sun * (max(dot(N, L), 0.0) * shadow);
+        white = (0.2 + 0.6 * smoothstep(0.25, 0.85, streak)) * (1.0 - 0.85 * glass);
+        water = mix(water, vec3(0.85, 0.88, 0.9) * (fallLight * 0.8 + 0.2), white);
+    }
 
     // Reflection: Fresnel (water's 2% head-on) towards the mirrored scene or the sky; the enhanced AO look a little
     // less mirror-like.
@@ -273,7 +331,12 @@ void main()
     float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))) + FL.taa.z);
     float F = 0.02 + 0.98 * pow(1.0 - NdotV, 5.0);
     F *= W.look.y * mix(0.75, 1.0, style);
+    // A fall: a broken, rushing surface (facets turned every way) averages a higher reflectance than a still one, and
+    // its clear water is seen as a sheen of what it reflects; the white less (foam is rough).
+    if (fall)
+        F = max(F + 0.06, mix(0.45, 0.2, style) * W.look.y * (0.4 + 0.6 * glass)) * (1.0 - 0.7 * white);
     vec3 reflected;
+    float ssrHit = 0.0;
     if (under) {
         // From below: beyond the critical angle the surface mirrors the water itself.
         float sinT = length(cross(V, Ns)) * 1.33;
@@ -289,12 +352,14 @@ void main()
         }
         // The sky's reflection is shadowed where the sun is (a crude stand-in for the terrain around blocking it).
         reflected = mix(sky, ssr.rgb, ssr.w);
+        ssrHit = ssr.w;
     }
     vec3 colour = mix(water, reflected, clamp(F, 0.0, 1.0));
 
     // The sun's glint: GGX with a roughness that grows with distance (a far ripple field is a blur of glints).
     if (!under && dot(sun, vec3(1.0)) > 0.0) {
-        float rough = mix(0.06, 0.22, smoothstep(10.0, 300.0, dist)) + 0.1 * (1.0 - W.look2.z);
+        float rough = mix(0.06, 0.22, smoothstep(10.0, 300.0, dist)) + 0.1 * (1.0 - W.look2.z)
+                     + (fall ? 0.12 : 0.0);  // (a fall's rushing surface: a broad sheen, not a pin-point)
         vec3 H = normalize(L + V);
         float NdotH = max(dot(Ns, H), 0.0), NdotL = max(dot(Ns, L), 0.0);
         float a2 = rough * rough * rough * rough;
@@ -302,7 +367,7 @@ void main()
         float D = a2 / (kPi * dd * dd);
         float Fs = 0.02 + 0.98 * pow(1.0 - max(dot(H, V), 0.0), 5.0);
         float vis = 0.25 / max(NdotL * NdotV, 0.05) * NdotL;
-        colour += sun * (D * Fs * vis * shadow * W.look.y);
+        colour += sun * (D * Fs * vis * shadow * W.look.y * (1.0 - 0.6 * white));
     }
 
     // Foam: on the shore (shallow water, broken up by the noise, moving with the waves) and on sharp crests.
@@ -324,7 +389,7 @@ void main()
     colour = mix(behindRaw, colour, edge);
     // A steep sheet (mesh mode) fades out as the game's vertex alpha does: the sides of a body of water, where its
     // surface steps down to the shore, are see-through at their far edge (drawn opaque, they stood as blue walls).
-    if (mesh)
+    if (mesh && !fall)                           // (a fall: the game gives it no alpha at all - no fade to follow)
         colour = mix(behindRaw, colour, clamp(vAlpha / max(W.tint.a, 0.05), 0.0, 1.0));
 
     // The game's fog, by the view distance.
@@ -333,11 +398,13 @@ void main()
 
     outScene = vec4(colour, 1.0);
     // RANDYVK_WATER_DEBUG: 1 the depths (r: water view depth / 100, g: the scene behind / 100, b: path / 10), 2 the
-    // normal, 3 the map (r: coverage, g: height + 0.5).
+    // normal, 3 the map (r: coverage, g: height + 0.5), 5 the disturbance, 6 a fall's reflection (what it reflects,
+    // with red where the screen-space ray found the scene; the rest of the water as drawn).
     int debugView = int(W.sky.w);
     if (debugView == 1) outScene = vec4(zWater / 100.0, min(zR, 1e3) / 100.0, path / 10.0, 1.0);
     else if (debugView == 2) outScene = vec4(N * 0.5 + 0.5, 1.0);
     else if (debugView == 5) outScene = vec4(max(disturb.x, 0.0) * 6.0, max(-disturb.x, 0.0) * 6.0, 0.0, 1.0);
+    else if (debugView == 6 && fall) outScene = vec4(mix(reflected, vec3(1.0, 0.0, 0.0), 0.3 * ssrHit), 1.0);
     else if (debugView == 3) outScene = vec4(texture(waterMap, MapUv(vRest.xz)).g, texture(waterMap, MapUv(vRest.xz)).r + 0.5, 0.0, 1.0);
     outGlow = vec4(0.0);
     // Local lights' share 0, reflectivity 0 (the water reflects by itself; the screen-space pass would add it twice),
