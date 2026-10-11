@@ -1,9 +1,11 @@
 #version 450
 // The rain's splashes (rvk/rain.cpp RenderRain, after the streaks): R.time.w slots, six vertices each and no buffers.
-// Each slot, every kLife seconds, picks a point of the screen and finds the surface there in the scene's depth (the
-// ground, a roof, the water): a splash if that surface is near (kRange), faces up and is not on an edge, and with a
-// chance growing with the square of its distance - each pixel further away covers that much more ground, so the
-// splashes come out even over the ground, not over the screen. Drawn as a small upright crown there (splash.frag).
+// Each slot, every kLife seconds, picks a place on the ground plan - in a box round the camera anchored to the world,
+// as the drops' (half the slots in a smaller box: denser near) - so it stays where it is while the camera moves. The
+// surface there is found in the scene's depth: down a vertical line through the place, the first point that is
+// behind what the screen shows is where the line meets it (the ground, a roof, the water). A splash if the line
+// really meets it there (not just passes behind something nearer), the surface faces up and is not on an edge. Drawn
+// as a small upright crown there (splash.frag).
 #include "rain_common.glsl"
 
 layout(set = 0, binding = 1) uniform sampler2D sceneDepth;   // the scene's depth (readable for this pass)
@@ -18,7 +20,25 @@ layout(location = 6) out vec4 vClip;
 layout(location = 7) out vec4 vPrevClip;
 
 const float kLife = 0.24;                   // seconds a splash lasts
-const float kRange = 25.0;                  // splashes this near only (further they are under a pixel)
+const float kRange = 22.0;                  // half the box (further they are under a pixel)
+const float kNearRange = 7.0;               // ... the near box's
+
+// The view depth of a world point and the scene's depth at its pixel (false: off the screen or behind the camera).
+bool Probe(vec3 p, out float pointZ, out float sceneZ)
+{
+    vec4 c = R.viewProj * vec4(p, 1.0);
+    pointZ = c.w;
+    sceneZ = 1e5;
+    if (c.w < 0.3)
+        return false;
+    vec2 ndc = c.xy / c.w;
+    if (any(greaterThan(abs(ndc), vec2(0.999))))
+        return false;
+    ivec2 px = ivec2((ndc.x * 0.5 + 0.5) * R.viewport.x, (0.5 - ndc.y * 0.5) * R.viewport.y);
+    float d = texelFetch(sceneDepth, px, 0).r;
+    sceneZ = d >= 1.0 ? 1e5 : RainViewZ(d);
+    return true;
+}
 
 // The world point on the surface at a pixel (and its view depth).
 vec3 SurfaceAt(ivec2 px, out float z)
@@ -52,13 +72,51 @@ void main()
     float phase = R.time.x / kLife + float(seed >> 8u) * (1.0 / 16777216.0);
     float age = fract(phase);
     uint s = RainHash(seed ^ (uint(floor(phase)) * 2654435761u));
-    ivec2 px = ivec2(vec2(RainRand(s), RainRand(s)) * R.viewport.xy);
+    // Its place on the ground plan, anchored to the world (wrapped into the box round the camera).
+    float range = slot % 2u == 0u ? kNearRange : kRange;
+    vec2 lo = R.camera.xz - range;
+    vec2 xz = lo + mod(vec2(RainRand(s), RainRand(s)) * 4096.0 - lo, vec2(2.0 * range));
+    // Down the vertical line through it: in front of the surface, then behind it - the meeting refined between.
+    float y = R.camera.y + 12.0, step_ = 2.0, yFront = y;
+    float pz, sz;
+    bool found = false, front = false;
+    for (int k = 0; k < 48; ++k) {
+        if (!Probe(vec3(xz.x, y, xz.y), pz, sz)) {
+            if (front) {                         // ran off the screen past the last point seen: closer, in smaller steps
+                step_ *= 0.5;
+                if (step_ < 0.03)
+                    break;
+                y = yFront - step_;
+            } else {
+                y -= step_;
+            }
+            continue;
+        }
+        if (pz > sz) {                           // behind what the screen shows
+            if (!front) break;                   // (behind from the first point seen: under a roof, out of sight)
+            float a = yFront, b = y;
+            for (int i = 0; i < 10; ++i) {
+                float m = 0.5 * (a + b);
+                if (Probe(vec3(xz.x, m, xz.y), pz, sz) && pz > sz) b = m; else a = m;
+            }
+            yFront = a;
+            found = true;
+            break;
+        }
+        yFront = y;
+        front = true;
+        y -= step_;
+    }
+    vec3 p = vec3(xz.x, yFront, xz.y);
     float z;
-    vec3 p = SurfaceAt(px, z);
-    if (z > kRange || z < 0.5 || RainRand(s) > (z / kRange) * (z / kRange) * 4.0) {
+    // Really on the surface there: the depth at its pixel is its own (not something nearer in front of it).
+    if (!found || !Probe(p, pz, sz) || abs(sz - pz) > 0.15 + 0.02 * pz || pz > 2.0 * kRange) {
         hide();
         return;
     }
+    vec4 pc = R.viewProj * vec4(p, 1.0);
+    ivec2 px = ivec2((pc.x / pc.w * 0.5 + 0.5) * R.viewport.x, (0.5 - pc.y / pc.w * 0.5) * R.viewport.y);
+    SurfaceAt(px, z);
     // Facing up, not on an edge (neighbours a few pixels away on the same surface).
     float zx, zy;
     vec3 px1 = SurfaceAt(px + ivec2(3, 0), zx), py1 = SurfaceAt(px + ivec2(0, 3), zy);
