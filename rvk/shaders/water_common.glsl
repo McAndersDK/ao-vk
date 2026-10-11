@@ -35,7 +35,7 @@ layout(set = 0, binding = 0) uniform WaterFrame {
     vec4 fall;          // x: falls' sheen (RVK_WaterSheen); y: their sparkles (RVK_WaterSpark); z: how many foot
                         // segments (binding 2 in the grid and the spray)
     vec4 fall2;         // x: the spray (RVK_WaterSpray); y: the churn and foam where they land (RVK_WaterChurn);
-                        // z: how fast they fall (RVK_WaterSpeed)
+                        // z: how fast they fall (RVK_WaterSpeed); w: how hard it rains (rvk rain.cpp, 0..1)
 } W;
 
 // A fall's foot (rvk/water.cpp m_waterFoot): a segment of where it meets the pool - a: x0 y0 z0 x1; b: y1 z1, the way

@@ -63,7 +63,7 @@ struct WaterFrame {
     float fall[4];                               // x: falls' sheen (RVK_WaterSheen), y: their sparkles (RVK_WaterSpark),
                                                  // z: how many foot segments (binding 2 in the grid and spray draws)
     float fall2[4];                              // x: the spray (RVK_WaterSpray), y: the churn (RVK_WaterChurn),
-                                                 // z: how fast the falls fall (RVK_WaterSpeed)
+                                                 // z: how fast the falls fall (RVK_WaterSpeed), w: the rain
 };
 
 // A fall's foot as the grid's foam and the spray read it (binding 2; water_common.glsl FootSegment): a segment of where
@@ -1535,6 +1535,7 @@ void Device::DrawWater(const WaterVertex* vertices, uint32_t vertexCount, const 
     wf.fall2[0] = P.fallSpray;
     wf.fall2[1] = P.fallChurn;
     wf.fall2[2] = P.fallSpeed;
+    wf.fall2[3] = m_rain;                        // (last frame's: the rain is worked out at the scene's end)
     EnsureRingSpace(4 * (sizeof(WaterFrame) + 256) + sizeof(FrameLights) + VkDeviceSize(vertexCount) * sizeof(MeshVertexOut) +
                     shore.size() * 4 + sheetBytes + kFootMax * 32 + 1024);
     if (m_frameLightsDirty || m_frameLightsGeneration != m_ringGeneration)

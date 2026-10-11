@@ -201,6 +201,32 @@ float ValueNoise(vec2 p)
     return mix(mix(Hash21(i), Hash21(i + ivec2(1, 0)), f.x), mix(Hash21(i + ivec2(0, 1)), Hash21(i + ivec2(1, 1)), f.x), f.y);
 }
 
+// Rain on the water: each drop a ring spreading from where it fell and dying away. Cells (two sizes), each with a
+// drop now and then (`amount` of them each round) at its own place and time; the rings' slope for the normal.
+vec2 RainRipples(vec2 p, float t, float amount)
+{
+    vec2 slope = vec2(0.0);
+    for (int layer = 0; layer < 2; ++layer) {
+        float cell = layer == 0 ? 0.55 : 0.33;
+        vec2 q = p / cell + float(layer) * 17.3;
+        ivec2 base = ivec2(floor(q));
+        for (int j = -1; j <= 1; ++j)
+            for (int i = -1; i <= 1; ++i) {
+                ivec2 c = base + ivec2(i, j);
+                float phase = t * (layer == 0 ? 0.9 : 1.3) + Hash21(c + ivec2(5, 57));
+                float round_ = floor(phase), age = phase - round_;
+                if (Hash21(c + ivec2(int(round_) * 13, 3)) > amount)
+                    continue;                    // no drop in this cell this round
+                vec2 d = q - (vec2(c) + 0.2 + 0.6 * vec2(Hash21(c), Hash21(c + ivec2(31, 7))));
+                float r = length(d);
+                float x = r - age * 1.1;         // across the ring (cells)
+                float env = (1.0 - age) * (1.0 - age) * exp(-x * x / (0.14 * 0.14));
+                slope += (r > 1e-4 ? d / r : vec2(0.0)) * (cos(x * 28.0) * env / cell);
+            }
+    }
+    return slope;
+}
+
 // GGX highlight of a light from direction L (unit, towards it) on normal N seen along V: D x Fresnel x visibility x
 // N.L - multiply by the light's colour.
 float Ggx(vec3 N, vec3 V, vec3 L, float rough)
@@ -246,6 +272,8 @@ void main()
     vec3 disturb = vec3(0.0);
     if (!mesh && W.ripple.x > 0.5)
         slope += Disturbance(vPos.xz, disturb) * (3.0 * W.ripple.y * rippleFade);
+    if (!mesh && W.fall2.w > 0.0)                // rain falling on it (rvk rain.cpp)
+        slope += RainRipples(vPos.xz, t, 0.35 + 0.6 * W.fall2.w) * (0.18 * W.fall2.w * (1.0 - smoothstep(15.0, 45.0, dist)));
     // A fall: the water runs down the sheet, in the fall's own coordinates (vFlow: unbroken over its triangles). It
     // falls as water does - from a start speed, gathering speed - so the pattern is laid out by the time the water
     // takes to come down this far (tau): sliding that by the clock moves it down, faster and stretched longer lower

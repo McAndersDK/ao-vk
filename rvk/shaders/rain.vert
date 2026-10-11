@@ -19,28 +19,13 @@ const float kNearShare = 0.4;               // of the drops, in a box of kNearSi
 const float kNearSize = 0.38;               //   near ones make the rain: there it is denser)
 const float kWidth = 0.012;                 // a drop's width (units)
 
-uint Hash(uint x)
-{
-    x ^= x >> 16u;
-    x *= 0x7FEB352Du;
-    x ^= x >> 15u;
-    x *= 0x846CA68Bu;
-    x ^= x >> 16u;
-    return x;
-}
-float Rand(inout uint s)
-{
-    s = Hash(s);
-    return float(s >> 8u) * (1.0 / 16777216.0);
-}
-
 void main()
 {
     uint vi = uint(gl_VertexIndex), drop = vi / 6u, corner = vi % 6u;
-    uint s = Hash(drop * 7919u + 3u);
-    vec3 seed = vec3(Rand(s), Rand(s), Rand(s));
-    float speed = 0.85 + 0.3 * Rand(s);
-    vec3 v = R.fall.xyz * speed + vec3(Rand(s) - 0.5, 0.0, Rand(s) - 0.5) * 0.6;
+    uint s = RainHash(drop * 7919u + 3u);
+    vec3 seed = vec3(RainRand(s), RainRand(s), RainRand(s));
+    float speed = 0.85 + 0.3 * RainRand(s);
+    vec3 v = R.fall.xyz * speed + vec3(RainRand(s) - 0.5, 0.0, RainRand(s) - 0.5) * 0.6;
     bool nearBox = float(drop) < kNearShare * R.time.w;
     vec3 size = vec3(2.0 * R.fall.w * (nearBox ? kNearSize : 1.0));
     vec3 lo = R.camera.xyz - size * 0.5;
@@ -79,24 +64,7 @@ void main()
     vec4 clip = mix(cTail, cHead, c.x);
     clip.xy += vec2(-along.y, along.x) * (c.y * halfWidth) / halfPx * clip.w;
 
-    // Its light: the ambient, a little of the sun, much more looking towards it through the rain; the lamps likewise.
-    vec3 V = normalize(R.camera.xyz - head);
-    vec3 L = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
-    vec3 light = R.ambient.rgb * 1.2 + FL.sunColor.rgb * (0.5 + 1.5 * pow(max(dot(-V, L), 0.0), 8.0));
-    uint count = min(FL.info.x, 64u);
-    for (uint i = 0u; i < count; ++i) {
-        Light li = FL.lights[i];
-        uint type = uint(li.position.w + 0.5);
-        if (type != 1u && type != 2u)
-            continue;
-        vec3 dl = li.position.xyz - head;
-        float d = length(dl);
-        if (d >= li.direction.w || d < 1e-3)
-            continue;
-        float att = 1.0 / max(li.atten.x + li.atten.y * d + li.atten.z * d * d, 1e-3);
-        att *= 1.0 - smoothstep(0.75, 1.0, d / li.direction.w);
-        light += li.diffuse.rgb * (att * (0.6 + 3.0 * pow(max(dot(-V, dl / d), 0.0), 6.0)));
-    }
+    vec3 light = RainLight(head);
     float fog = RainFog(dist);
     vLight = mix(R.fogColour.rgb, R.colour.rgb * light, fog);
     vAlpha = alpha * mix(0.3, 1.0, fog);

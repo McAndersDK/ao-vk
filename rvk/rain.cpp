@@ -27,6 +27,12 @@ const uint32_t kRainVertSpirv[] = {
 const uint32_t kRainFragSpirv[] = {
 #include "rain.frag.inc"
 };
+const uint32_t kSplashVertSpirv[] = {
+#include "splash.vert.inc"
+};
+const uint32_t kSplashFragSpirv[] = {
+#include "splash.frag.inc"
+};
 
 // The per-draw block (rain.vert / rain.frag RainFrame, std140).
 struct RainFrame {
@@ -39,12 +45,14 @@ struct RainFrame {
     float fogColour[4];                          // rgb; w: 1 = fog on
     float fogParams[4];                          // start, end, density, table mode
     float viewport[4];                           // width, height, 1 / width, 1 / height
+    float proj[4];                               // D3D projection m[2][2], m[3][2], m[0][0], m[1][1]
 };
 
 constexpr uint32_t kRainMaxDrops = 24000;       // at full rain, RVK_RainAmount 1
 constexpr float kRainBox = 16.0f;               // half size of the box round the camera (units)
 constexpr float kRainSpeed = 9.0f;              // a raindrop's fall (units / s; about a metre)
 constexpr float kGameRainMax = 0.45f;           // the game's rain weather: process(intensity^3 x this)
+constexpr uint32_t kSplashMax = 2500;           // splash slots at full rain (splash.vert: most find no surface)
 
 void ArgbTo4(uint32_t c, float out[4])
 {
@@ -72,18 +80,20 @@ void Device::SetWeather(const WeatherState& state)
 bool Device::CreateRainResources(std::string* error)
 {
     DestroyRainResources();
-    // One pushed set: 0 the block, 4 the frame lights.
-    VkDescriptorSetLayoutBinding b[2] = {};
+    // One pushed set: 0 the block, 4 the frame lights, 1 the scene's depth (the splashes).
+    VkDescriptorSetLayoutBinding b[3] = {};
     b[0].binding = 0;
     b[1].binding = 4;
+    b[2].binding = 1;
     for (auto& x : b) {
         x.descriptorCount = 1;
         x.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         x.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     }
+    b[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     VkDescriptorSetLayoutCreateInfo sl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     sl.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-    sl.bindingCount = 2;
+    sl.bindingCount = 3;
     sl.pBindings = b;
     if (!Check(vkCreateDescriptorSetLayout(m_device, &sl, nullptr, &m_rainSetLayout), "vkCreateDescriptorSetLayout", error))
         return false;
@@ -98,8 +108,11 @@ bool Device::CreateRainResources(std::string* error)
         ci.pCode = code;
         return Check(vkCreateShaderModule(m_device, &ci, nullptr, out), "vkCreateShaderModule", error);
     };
+    // depth: tested against the scene's depth (the streaks); without, the pass has no depth attachment at all (the
+    // splashes read the depth instead).
+    auto make = [&](const uint32_t* vs, size_t vsSize, const uint32_t* fs, size_t fsSize, bool depth, VkPipeline* out) {
     VkShaderModule vert = VK_NULL_HANDLE, frag = VK_NULL_HANDLE;
-    bool ok = module(kRainVertSpirv, sizeof(kRainVertSpirv), &vert) && module(kRainFragSpirv, sizeof(kRainFragSpirv), &frag);
+    bool ok = module(vs, vsSize, &vert) && module(fs, fsSize, &frag);
     if (ok) {
         VkPipelineShaderStageCreateInfo stages[2] = {
             {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vert, "main", nullptr},
@@ -119,7 +132,7 @@ bool Device::CreateRainResources(std::string* error)
         VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
         ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
         VkPipelineDepthStencilStateCreateInfo dss{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-        dss.depthTestEnable = VK_TRUE;
+        dss.depthTestEnable = depth ? VK_TRUE : VK_FALSE;
         dss.depthWriteEnable = VK_FALSE;
         dss.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
         // Premultiplied over every target alike (no independent blending): the shader gives the scene's colour its
@@ -141,7 +154,7 @@ bool Device::CreateRainResources(std::string* error)
         VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
         rendering.colorAttachmentCount = 5;
         rendering.pColorAttachmentFormats = colorFormats;
-        rendering.depthAttachmentFormat = kDepthFormat;
+        rendering.depthAttachmentFormat = depth ? kDepthFormat : VK_FORMAT_UNDEFINED;
         VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
         ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
@@ -157,17 +170,22 @@ bool Device::CreateRainResources(std::string* error)
         ci.pColorBlendState = &cb;
         ci.pDynamicState = &ds;
         ci.layout = m_rainLayout;
-        ok = Check(vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &ci, nullptr, &m_rainPipeline),
+        ok = Check(vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &ci, nullptr, out),
                    "vkCreateGraphicsPipelines (rain)", error);
     }
     if (vert) vkDestroyShaderModule(m_device, vert, nullptr);
     if (frag) vkDestroyShaderModule(m_device, frag, nullptr);
     return ok;
+    };
+    return make(kRainVertSpirv, sizeof(kRainVertSpirv), kRainFragSpirv, sizeof(kRainFragSpirv), true, &m_rainPipeline) &&
+           make(kSplashVertSpirv, sizeof(kSplashVertSpirv), kSplashFragSpirv, sizeof(kSplashFragSpirv), false,
+                &m_splashPipeline);
 }
 
 void Device::DestroyRainResources()
 {
     if (m_rainPipeline) { vkDestroyPipeline(m_device, m_rainPipeline, nullptr); m_rainPipeline = VK_NULL_HANDLE; }
+    if (m_splashPipeline) { vkDestroyPipeline(m_device, m_splashPipeline, nullptr); m_splashPipeline = VK_NULL_HANDLE; }
     if (m_rainLayout) { vkDestroyPipelineLayout(m_device, m_rainLayout, nullptr); m_rainLayout = VK_NULL_HANDLE; }
     if (m_rainSetLayout) { vkDestroyDescriptorSetLayout(m_device, m_rainSetLayout, nullptr); m_rainSetLayout = VK_NULL_HANDLE; }
 }
@@ -254,13 +272,27 @@ void Device::RenderRain(VkCommandBuffer cmd)
     rf.viewport[1] = float(m_scene->m_height);
     rf.viewport[2] = 1.0f / rf.viewport[0];
     rf.viewport[3] = 1.0f / rf.viewport[1];
+    rf.proj[0] = m_proj.m[2][2];
+    rf.proj[1] = m_proj.m[3][2];
+    rf.proj[2] = m_proj.m[0][0];
+    rf.proj[3] = m_proj.m[1][1];
 
-    EnsureRingSpace(sizeof(RainFrame) + sizeof(FrameLights) + 1024);
+    EnsureRingSpace(2 * sizeof(RainFrame) + sizeof(FrameLights) + 1024);
     if (m_frameLightsDirty || m_frameLightsGeneration != m_ringGeneration)
         WriteFrameLights();
     void* cpu = nullptr;
     const VkDeviceSize offset = Allocate(sizeof(RainFrame), 256, &cpu);
     std::memcpy(cpu, &rf, sizeof(rf));
+    const uint32_t splashes = m_splashPipeline && m_depthView
+                                  ? uint32_t(float(kSplashMax) * m_rain * std::clamp(P.splashes, 0.0f, 3.0f)) : 0u;
+    VkDeviceSize splashOffset = 0;
+    if (splashes) {
+        RainFrame sf = rf;
+        sf.time[3] = float(splashes);
+        void* scpu = nullptr;
+        splashOffset = Allocate(sizeof(RainFrame), 256, &scpu);
+        std::memcpy(scpu, &sf, sizeof(sf));
+    }
     Frame& f = m_frames[m_frameIndex];
 
     BeginRenderingOn(m_scene);
@@ -286,6 +318,48 @@ void Device::RenderRain(VkCommandBuffer cmd)
     vkCmdDraw(cmd, drops * 6, 1, 0, 0);
     EndRendering();
     ProfileMark("rain");
+
+    // The splashes: the scene's depth readable (vertex and fragment shaders), the targets without it.
+    if (!splashes)
+        return;
+    ImageBarrier(cmd, m_depth, VK_IMAGE_ASPECT_DEPTH_BIT, m_depthLayout, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                 VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                 VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                 VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    m_depthLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    Texture* targets[5] = {m_scene, m_glow, m_localFraction, m_motionVectors, m_albedo};
+    VkRenderingAttachmentInfo colors[5] = {};
+    for (int i = 0; i < 5; ++i) {
+        Transition(cmd, targets[i], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        colors[i].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        colors[i].imageView = targets[i]->m_view;
+        colors[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        colors[i].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        colors[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    }
+    VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    ri.renderArea = {{0, 0}, {m_scene->m_width, m_scene->m_height}};
+    ri.layerCount = 1;
+    ri.colorAttachmentCount = 5;
+    ri.pColorAttachments = colors;
+    vkCmdBeginRendering(cmd, &ri);
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_splashPipeline);
+    VkDescriptorBufferInfo splashInfo{f.ring, splashOffset, sizeof(RainFrame)};
+    VkDescriptorImageInfo depthInfo{m_pointSampler, m_depthView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet splashWrites[3] = {writes[0], writes[1], {}};
+    splashWrites[0].pBufferInfo = &splashInfo;
+    splashWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    splashWrites[2].dstBinding = 1;
+    splashWrites[2].descriptorCount = 1;
+    splashWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    splashWrites[2].pImageInfo = &depthInfo;
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rainLayout, 0, 3, splashWrites);
+    vkCmdDraw(cmd, splashes * 6, 1, 0, 0);
+    vkCmdEndRendering(cmd);
+    ProfileMark("rain splashes");
 }
 
 }  // namespace rvk

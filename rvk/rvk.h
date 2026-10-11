@@ -515,6 +515,7 @@ public:
         bool enable = false;                     // RVK_WeatherOn (the proxy hides the game's rain only then)
         float force = 0.0f;                      // RVK_RainForce: rain this hard regardless of the game's (0 = the game's)
         float amount = 1.0f;                     // RVK_RainAmount: how many drops, x
+        float splashes = 1.0f;                   // RVK_RainSplash: how many splashes, x (0 = none)
     };
     struct WeatherState {
         float precipitation = 0.0f;              // how hard (the game's VisualRain_t::process value, as given)
@@ -1470,6 +1471,7 @@ private:
     VkDescriptorSetLayout m_rainSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_rainLayout = VK_NULL_HANDLE;
     VkPipeline m_rainPipeline = VK_NULL_HANDLE;
+    VkPipeline m_splashPipeline = VK_NULL_HANDLE;
     bool CreateRainResources(std::string* error);
     void DestroyRainResources();
     void RenderRain(VkCommandBuffer cmd);

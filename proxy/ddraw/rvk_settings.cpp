@@ -131,6 +131,7 @@ Setting g_settings[] = {
     {"RVK_WeatherOn",  "New weather (rain; needs HDR)", "Experimental",    Bool,  0, 1, 1, 0, nullptr, 0},
     {"RVK_RainForce",  "Rain: force it this hard (0 = the game's weather)",       "Experimental",     Float, 0, 1, 0.05f, 0, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_RainAmount", "Rain: how many drops",                                     "Experimental",     Float, 0, 4, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
+    {"RVK_RainSplash", "Rain: splashes where it lands (0 = none)",                "Experimental",     Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
 
     {"RVK_SunShadow",  "Sun shadows",                                              "Shadows",          Bool,  0, 1, 1, 1, "RANDYVK_SHADOWS", 0},
     {"RVK_SunRes",     "Resolution (4096 / 8192)",  "Shadows",          Choice, 1024, 8192, 1, 2048, nullptr, 0, "RVK_SunShadow", "1024 2048 4096 8192"},
@@ -453,6 +454,7 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
         w.enable = V("RVK_WeatherOn") != 0.0f;
         w.force = V("RVK_RainForce");
         w.amount = V("RVK_RainAmount");
+        w.splashes = V("RVK_RainSplash");
         d->SetWeatherParams(w);
     }
     else if (std::strncmp(n, "RVK_Vol", 7) == 0) d->SetVolume(V("RVK_Volume"), V("RVK_VolHaze"), V("RVK_VolShafts"));

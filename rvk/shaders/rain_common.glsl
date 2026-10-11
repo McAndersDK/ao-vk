@@ -13,7 +13,50 @@ layout(set = 0, binding = 0) uniform RainFrame {
     vec4 fogColour;     // rgb; w: 1 = fog on
     vec4 fogParams;     // start, end, density, table mode (D3DFOG_*: 1 exp, 2 exp2, 3 linear; 0 = none)
     vec4 viewport;      // width, height, 1 / width, 1 / height
+    vec4 proj;          // D3D projection m[2][2], m[3][2], m[0][0], m[1][1] (the splashes: depth -> view)
 } R;
+
+// The linear view depth of a depth buffer value.
+float RainViewZ(float d) { return R.proj.y / (min(d, 0.9999999) - R.proj.x); }
+
+// The light on a drop: the ambient, a little of the sun, much more looking towards it through the rain; the lamps
+// near likewise.
+vec3 RainLight(vec3 p)
+{
+    vec3 V = normalize(R.camera.xyz - p);
+    vec3 L = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
+    vec3 light = R.ambient.rgb * 1.2 + FL.sunColor.rgb * (0.5 + 1.5 * pow(max(dot(-V, L), 0.0), 8.0));
+    uint count = min(FL.info.x, 64u);
+    for (uint i = 0u; i < count; ++i) {
+        Light li = FL.lights[i];
+        uint type = uint(li.position.w + 0.5);
+        if (type != 1u && type != 2u)
+            continue;
+        vec3 dl = li.position.xyz - p;
+        float d = length(dl);
+        if (d >= li.direction.w || d < 1e-3)
+            continue;
+        float att = 1.0 / max(li.atten.x + li.atten.y * d + li.atten.z * d * d, 1e-3);
+        att *= 1.0 - smoothstep(0.75, 1.0, d / li.direction.w);
+        light += li.diffuse.rgb * (att * (0.6 + 3.0 * pow(max(dot(-V, dl / d), 0.0), 6.0)));
+    }
+    return light;
+}
+
+uint RainHash(uint x)
+{
+    x ^= x >> 16u;
+    x *= 0x7FEB352Du;
+    x ^= x >> 15u;
+    x *= 0x846CA68Bu;
+    x ^= x >> 16u;
+    return x;
+}
+float RainRand(inout uint s)
+{
+    s = RainHash(s);
+    return float(s >> 8u) * (1.0 / 16777216.0);
+}
 
 // The game's fog at a view distance (1 = none).
 float RainFog(float d)
