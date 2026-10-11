@@ -34,7 +34,8 @@ layout(set = 0, binding = 0) uniform WaterFrame {
                         // z: 1 / its world size; w: its cell size
     vec4 fall;          // x: falls' sheen (RVK_WaterSheen); y: their sparkles (RVK_WaterSpark); z: how many foot
                         // segments (binding 2 in the grid and the spray)
-    vec4 fall2;         // x: the spray (RVK_WaterSpray); y: the churn and foam where they land (RVK_WaterChurn)
+    vec4 fall2;         // x: the spray (RVK_WaterSpray); y: the churn and foam where they land (RVK_WaterChurn);
+                        // z: how fast they fall (RVK_WaterSpeed)
 } W;
 
 // A fall's foot (rvk/water.cpp m_waterFoot): a segment of where it meets the pool - a: x0 y0 z0 x1; b: y1 z1, the way
@@ -83,11 +84,17 @@ bool LocalLight(uint i, vec3 posW, out vec3 L, out vec3 colour)
 
 
 // A fall: the time the water takes to come down `along` units from the lip - leaving it at a start speed, gathering
-// speed as water does. A pattern laid out by it and slid by the clock moves down, faster and stretched longer lower.
+// speed as water does, all of it W.fall2.z times as fast (RVK_WaterSpeed: the game's units are loose metres). A
+// pattern laid out by it and slid by the clock moves down, faster and stretched longer lower.
+const float kFallV0 = 3.0, kFallG = 9.8;        // units / s, units / s^2 (at RVK_WaterSpeed 1)
 float FallTau(float along)
 {
-    const float v0 = 3.0, g = 9.8;             // units / s (a unit is about a metre), units / s^2
-    return (sqrt(v0 * v0 + 2.0 * g * max(along, 0.0)) - v0) / g;
+    return (sqrt(kFallV0 * kFallV0 + 2.0 * kFallG * max(along, 0.0)) - kFallV0) / (kFallG * max(W.fall2.z, 0.05));
+}
+// ... and how fast it is going there (units / s).
+float FallSpeed(float along)
+{
+    return sqrt(kFallV0 * kFallV0 + 2.0 * kFallG * max(along, 0.0)) * max(W.fall2.z, 0.05);
 }
 
 // The linear view depth of a depth buffer value.

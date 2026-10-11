@@ -523,7 +523,7 @@ void main()
     vec4 prevClip = vPrevClip;
     if (fall) {
         float dt = clamp(t - W.time.y, 0.0, 0.1);
-        prevClip = W.prevViewProj * vec4(vPos - fallDown * ((3.0 + 9.8 * tau) * dt), 1.0);
+        prevClip = W.prevViewProj * vec4(vPos - fallDown * (FallSpeed(vFlow.x) * dt), 1.0);
     }
     vec2 now = vClip.xy / vClip.w, before = prevClip.xy / max(prevClip.w, 1e-6);
     outMotion = vec4(prevClip.w > 1e-6 ? (now - before) * 0.5 * W.viewport.xy * vec2(1.0, -1.0) : vec2(0.0), 0.0, 1.0);

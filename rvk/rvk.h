@@ -500,6 +500,7 @@ public:
         float fallSparkle = 1.0f;                // a fall's sparkles of sunlight and lamplight (RVK_WaterSpark)
         float fallSpray = 1.0f;                  // the spray and mist at a fall's foot (RVK_WaterSpray)
         float fallChurn = 1.0f;                  // the pool churned and foaming where a fall lands (RVK_WaterChurn)
+        float fallSpeed = 1.75f;                 // how fast a fall's water falls, x a natural fall's (RVK_WaterSpeed)
         uint32_t quality = 2;                    // 1 low, 2 medium, 3 high: grid density, reflection steps
     };
     void SetWaterParams(const WaterParams& params) { m_waterParams = params; UpdateWaterReady(); }
