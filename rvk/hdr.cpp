@@ -233,7 +233,7 @@ bool Device::CreateHdrResources(std::string* error)
         gi.pColorBlendState = &cb;
         gi.pDynamicState = &ds;
         gi.layout = layout;
-        bool ok = Check(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &gi, nullptr, out), "post pipeline", error);
+        bool ok = Check(vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &gi, nullptr, out), "post pipeline", error);
         vkDestroyShaderModule(m_device, frag, nullptr);
         return ok;
     };

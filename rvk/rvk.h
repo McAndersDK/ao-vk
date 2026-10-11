@@ -37,6 +37,9 @@ class Device;
 // Diagnostics. Default: stderr, flushed per line. SetLogSink redirects (e.g. into the game's log file).
 void Log(const char* fmt, ...);
 void SetLogSink(void (*sink)(const char* line));
+// Where the pipeline cache is kept between runs (compiled pipelines load from it instead of being built again at every
+// start). Empty or never set: RANDYVK_PIPELINE_CACHE, else no cache file ("off" also disables it).
+void SetPipelineCachePath(const char* path);
 
 // Texture formats (the D3DX 7 / DirectDraw pixel formats the client can create).
 enum class Format : uint32_t {
@@ -640,6 +643,12 @@ private:
     bool CreateSwapchain(std::string* error);
     void DestroySwapchain();
     bool CreatePipelines(std::string* error);
+    // The pipeline cache: loaded from its file when the device starts, saved after the pipelines are made, once the
+    // game has run a while (the pipelines made on demand), and when the device goes.
+    VkPipelineCache m_pipelineCache = VK_NULL_HANDLE;
+    size_t m_pipelineCacheSaved = 0;             // the size of what the file holds (loaded or last saved)
+    void CreatePipelineCache();
+    void SavePipelineCache(const char* why);
     bool CreateFrames(std::string* error);
     Texture* CreateImage(uint32_t width, uint32_t height, Format format, uint32_t levels, bool renderTarget);
     friend class ThreadedDevice;

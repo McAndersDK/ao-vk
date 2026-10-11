@@ -827,7 +827,7 @@ bool Device::CreateGrassResources(std::string* error)
         ci.pColorBlendState = &cb;
         ci.pDynamicState = &ds;
         ci.layout = m_grassLayout;
-        ok = Check(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &ci, nullptr, &m_grassPipeline),
+        ok = Check(vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &ci, nullptr, &m_grassPipeline),
                    "vkCreateGraphicsPipelines", error);
     }
     if (vert) vkDestroyShaderModule(m_device, vert, nullptr);
@@ -889,7 +889,7 @@ bool Device::CreateGrassResources(std::string* error)
         ci.pColorBlendState = &cb;
         ci.pDynamicState = &ds;
         ci.layout = m_grassShadowLayout;
-        ok = Check(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &ci, nullptr, &m_grassShadowPipeline),
+        ok = Check(vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &ci, nullptr, &m_grassShadowPipeline),
                    "vkCreateGraphicsPipelines", error);
     }
     if (shadowVert) vkDestroyShaderModule(m_device, shadowVert, nullptr);

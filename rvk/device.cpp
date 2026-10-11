@@ -2,6 +2,7 @@
 #include "internal.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -205,6 +206,8 @@ Device::~Device()
     DestroyLeafResources();
     DestroyWaterResources();
     DestroyStaticGeometry();
+    SavePipelineCache("at exit");
+    if (m_pipelineCache) vkDestroyPipelineCache(m_device, m_pipelineCache, nullptr);
     if (m_pipelineLayout) vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
     if (m_setLayout) vkDestroyDescriptorSetLayout(m_device, m_setLayout, nullptr);
     if (m_bindlessPool) vkDestroyDescriptorPool(m_device, m_bindlessPool, nullptr);
@@ -228,14 +231,129 @@ bool Device::Init(HWND window, uint32_t width, uint32_t height, std::string* err
     m_width = width;
     m_height = height;
     m_viewport = {0, 0, width, height, 0.0f, 1.0f};
-    if (!CreateInstance(error) || !PickDevice(error) || !CreateLogicalDevice(error) || !CreateFrames(error) || !CreateProfiler(error) ||
-        !CreateMainTargets(error) || (window && !CreateSwapchain(error)) || !CreatePipelines(error))
+    // Each step timed, so the log says where a slow start goes (one line, below).
+    using Clock = std::chrono::steady_clock;
+    const Clock::time_point begin = Clock::now();
+    Clock::time_point mark = begin;
+    std::string timings;
+    bool ok = true;
+    auto step = [&](const char* name, auto&& run) {
+        if (!ok)
+            return;
+        ok = run();
+        char part[64];
+        std::snprintf(part, sizeof(part), "%s%s %d", timings.empty() ? "" : ", ", name,
+                      int(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - mark).count()));
+        timings += part;
+        mark = Clock::now();
+    };
+    step("instance", [&] { return CreateInstance(error); });
+    step("gpu", [&] { return PickDevice(error); });
+    step("device", [&] { return CreateLogicalDevice(error); });
+    step("cache", [&] { CreatePipelineCache(); return true; });
+    step("frames", [&] { return CreateFrames(error); });
+    step("profiler", [&] { return CreateProfiler(error); });
+    step("targets", [&] { return CreateMainTargets(error); });
+    step("swapchain", [&] { return !window || CreateSwapchain(error); });
+    step("pipelines", [&] { return CreatePipelines(error); });
+    if (ok)
+        SavePipelineCache("after the pipelines were made");
+    Log("startup: %s%s; total %d ms", timings.c_str(), ok ? "" : " (failed)",
+        int(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - begin).count()));
+    if (!ok)
         return false;
     uint32_t black = 0xFF000000;
     m_blackTexture = CreateTexture(1, 1, &black);
     uint32_t flat = 0xFF8080FF;                  // (0.5, 0.5, 1): the unbent normal
     m_flatNormal = CreateTexture(1, 1, &flat);
     return m_blackTexture != nullptr && m_flatNormal != nullptr;
+}
+
+namespace {
+
+std::string g_pipelineCachePath;
+
+// Where the cache lives: what the proxy set, else RANDYVK_PIPELINE_CACHE ("off" = none).
+std::string PipelineCacheFile()
+{
+    if (!g_pipelineCachePath.empty())
+        return g_pipelineCachePath;
+    char path[MAX_PATH] = {};
+    if (GetEnvironmentVariableA("RANDYVK_PIPELINE_CACHE", path, sizeof(path)) == 0)
+        return {};
+    return _stricmp(path, "off") == 0 ? std::string() : std::string(path);
+}
+
+}  // namespace
+
+void SetPipelineCachePath(const char* path) { g_pipelineCachePath = path ? path : ""; }
+
+// The cache is a hint, never a requirement: no file, a file from another GPU or driver (the header says which), or any
+// failure just means the pipelines are built from scratch, as before.
+void Device::CreatePipelineCache()
+{
+    std::vector<uint8_t> data;
+    const std::string file = PipelineCacheFile();
+    if (!file.empty()) {
+        if (FILE* f = std::fopen(file.c_str(), "rb")) {
+            std::fseek(f, 0, SEEK_END);
+            long size = std::ftell(f);
+            std::fseek(f, 0, SEEK_SET);
+            if (size > 32 && size < (256l << 20)) {
+                data.resize(size_t(size));
+                if (std::fread(data.data(), 1, data.size(), f) != data.size())
+                    data.clear();
+            }
+            std::fclose(f);
+        }
+        // The header (Vulkan spec): size, version 1, vendor, device, the driver's cache UUID. Anything else is not ours.
+        uint32_t header[4] = {};
+        if (data.size() >= 32)
+            std::memcpy(header, data.data(), sizeof(header));
+        if (!data.empty() && (header[0] < 32 || header[1] != VK_PIPELINE_CACHE_HEADER_VERSION_ONE ||
+                              header[2] != m_props.vendorID || header[3] != m_props.deviceID ||
+                              std::memcmp(data.data() + 16, m_props.pipelineCacheUUID, VK_UUID_SIZE) != 0)) {
+            Log("pipeline cache %s is from another GPU or driver: starting afresh", file.c_str());
+            data.clear();
+        }
+    }
+    VkPipelineCacheCreateInfo ci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    ci.initialDataSize = data.size();
+    ci.pInitialData = data.empty() ? nullptr : data.data();
+    if (vkCreatePipelineCache(m_device, &ci, nullptr, &m_pipelineCache) != VK_SUCCESS) {
+        m_pipelineCache = VK_NULL_HANDLE;        // (VK_NULL_HANDLE is also what the pipelines were made with before)
+        return;
+    }
+    m_pipelineCacheSaved = data.size();
+    if (!file.empty())
+        Log("pipeline cache: %zu bytes loaded from %s", data.size(), file.c_str());
+}
+
+// Write the cache out if it holds more than the file does. Through a temporary file, so a crash can't leave half of one.
+void Device::SavePipelineCache(const char* why)
+{
+    const std::string file = PipelineCacheFile();
+    if (!m_pipelineCache || file.empty())
+        return;
+    size_t size = 0;
+    if (vkGetPipelineCacheData(m_device, m_pipelineCache, &size, nullptr) != VK_SUCCESS || size == 0 || size == m_pipelineCacheSaved)
+        return;
+    std::vector<uint8_t> data(size);
+    if (vkGetPipelineCacheData(m_device, m_pipelineCache, &size, data.data()) != VK_SUCCESS)
+        return;
+    data.resize(size);
+    const std::string temp = file + ".tmp";
+    FILE* f = std::fopen(temp.c_str(), "wb");
+    if (!f)
+        return;
+    const bool written = std::fwrite(data.data(), 1, data.size(), f) == data.size();
+    std::fclose(f);
+    if (written && MoveFileExA(temp.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        m_pipelineCacheSaved = data.size();
+        Log("pipeline cache: %zu bytes saved (%s)", data.size(), why);
+    } else {
+        DeleteFileA(temp.c_str());
+    }
 }
 
 bool Device::CreateInstance(std::string* error)
@@ -813,7 +931,7 @@ bool Device::CreatePipelines(std::string* error)
         ci.layout = m_pipelineLayout;
         VkPipeline* dst = set ? (nc ? &m_pipelinesHdrNoCut[c] : &m_pipelinesHdr[c])
                               : (nc ? &m_pipelinesNoCut[c] : &m_pipelines[c]);
-        ok = Check(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &ci, nullptr, dst),
+        ok = Check(vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &ci, nullptr, dst),
                    "vkCreateGraphicsPipelines", error);
     }
     // Characters' Phong tessellation: triangles as 3-point patches, through ffp.tesc / ffp.tese (both targets).
@@ -852,7 +970,7 @@ bool Device::CreatePipelines(std::string* error)
             ci.pDynamicState = &ds;
             ci.layout = m_pipelineLayout;
             VkPipeline* dst = nc ? &m_tessPipelinesNoCut[set] : &m_tessPipelines[set];
-            ok = Check(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &ci, nullptr, dst),
+            ok = Check(vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &ci, nullptr, dst),
                        "tessellation pipeline", error);
         }
     }
@@ -882,7 +1000,7 @@ bool Device::CreatePipelines(std::string* error)
             ci.pDynamicState = &ds;
             ci.layout = m_pipelineLayout;
             std::string leafError;
-            if (!Check(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &ci, nullptr, &m_leafPipelines[set]),
+            if (!Check(vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &ci, nullptr, &m_leafPipelines[set]),
                        "leaf pipeline", &leafError))
                 m_leafPipelines[set] = VK_NULL_HANDLE;
         }
@@ -1458,6 +1576,8 @@ void Device::BeginFrame()
     UpdateLeaves();
     m_tessCharsPrev.swap(m_tessChars);           // characters drawn last frame (their rigid parts: TessellateDraw)
     m_tessChars.clear();
+    if (m_frameNumber == 1200)
+        SavePipelineCache("after the first frames");   // (the pipelines made on demand since the start)
     CollectWaterBodies();                        // the water's ripples follow the characters of the last frame
     m_windTimePrev = m_windTime;
     m_frameClock = SwayClock();

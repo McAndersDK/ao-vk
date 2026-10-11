@@ -308,7 +308,7 @@ bool Device::CreateWaterResources(std::string* error)
         ci.pColorBlendState = &cb;
         ci.pDynamicState = &ds;
         ci.layout = m_waterLayout;
-        ok = Check(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &ci, nullptr, &m_waterPipeline),
+        ok = Check(vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &ci, nullptr, &m_waterPipeline),
                    "vkCreateGraphicsPipelines", error);
     }
     if (vert) vkDestroyShaderModule(m_device, vert, nullptr);
@@ -745,7 +745,7 @@ bool Device::CreateWaterSim(std::string* error)
     VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
     ci.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, module, "main", nullptr};
     ci.layout = m_waterSimLayout;
-    bool ok = Check(vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &ci, nullptr, &m_waterSimPipeline),
+    bool ok = Check(vkCreateComputePipelines(m_device, m_pipelineCache, 1, &ci, nullptr, &m_waterSimPipeline),
                     "water sim pipeline", error);
     vkDestroyShaderModule(m_device, module, nullptr);
     if (!ok)

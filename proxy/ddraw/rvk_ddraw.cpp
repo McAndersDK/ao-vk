@@ -80,6 +80,12 @@ bool RvkState::EnsureDevice(uint32_t width, uint32_t height)
         return device->Resize(width, height);
     }
     rvk::SetLogSink([](const char* line) { RvkLog("rvk: %s", line); });
+    {   // the pipeline cache next to randy-vk.ini (the client folder)
+        std::string cache = rvk_settings::IniPath();
+        size_t slash = cache.find_last_of("\\/");
+        cache = (slash == std::string::npos ? std::string() : cache.substr(0, slash + 1)) + "randy-vk.cache";
+        rvk::SetPipelineCachePath(cache.c_str());
+    }
     device = new rvk::ThreadedDevice;
     ++deviceSerial;
     std::string error;

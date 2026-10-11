@@ -385,6 +385,7 @@ feature costs exactly where you are.
 | --- | --- |
 | `RANDYVK_DDRAW` | `rvk` (default): render with ao-vk. `off`: the game's stock renderer, ao-vk passing everything through. `trace`: the stock renderer, counting its Direct3D calls |
 | `RANDYVK_THREADED` | `0` runs the Vulkan work on the game's thread (for comparison) |
+| `RANDYVK_PIPELINE_CACHE` | path of the pipeline cache when the proxy sets none (the game keeps it as `randy-vk.cache` in the client folder; delete the file to rebuild it, `off` disables it here) |
 | `RANDYVK_LOG` | log file path (default `randy-vk.log` in the client folder; moved to `randy-vk.old.log` once over 8 MB) |
 
 ## Known limitations
