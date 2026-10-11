@@ -38,6 +38,12 @@ const uint32_t kWaterVertSpirv[] = {
 const uint32_t kWaterFragSpirv[] = {
 #include "water.frag.inc"
 };
+const uint32_t kSprayVertSpirv[] = {
+#include "water_spray.vert.inc"
+};
+const uint32_t kSprayFragSpirv[] = {
+#include "water_spray.frag.inc"
+};
 const uint32_t kWaterSimSpirv[] = {
 #include "water_sim.comp.inc"
 };
@@ -54,8 +60,15 @@ struct WaterFrame {
     float sunColour[4], sunDir[4], ambient[4], tint[4], look[4], look2[4], fogColour[4], fogParams[4], sky[4];
     float env[4];
     float ripple[4];                             // x: the disturbance field is bound, y: strength, z: 1 / size, w: cell
-    float fall[4];                               // x: falls' sheen (RVK_WaterSheen), y: their sparkles (RVK_WaterSpark)
+    float fall[4];                               // x: falls' sheen (RVK_WaterSheen), y: their sparkles (RVK_WaterSpark),
+                                                 // z: how many foot segments (binding 2 in the grid and spray draws)
+    float fall2[4];                              // x: the spray (RVK_WaterSpray), y: the churn (RVK_WaterChurn)
 };
+
+// A fall's foot as the grid's foam and the spray read it (binding 2; water_common.glsl FootSegment): a segment of where
+// it meets the pool, and the way out from the cliff there.
+constexpr size_t kFootMax = 32;
+constexpr uint32_t kSprayPerFoot = 48;          // particles a segment (water_spray.vert: its split into mist and drops)
 
 constexpr uint32_t kDetailSize = 256;
 constexpr uint32_t kMapMax = 1024;              // water map side (texels)
@@ -311,6 +324,29 @@ bool Device::CreateWaterResources(std::string* error)
         ci.layout = m_waterLayout;
         ok = Check(vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &ci, nullptr, &m_waterPipeline),
                    "vkCreateGraphicsPipelines", error);
+        // The falls' spray: the same set, its own shaders; blended over the scene's colour (premultiplied), depth
+        // tested but not written. (All targets blend alike - no independent blending - the shader gives the others
+        // nothing: premultiplied 0 leaves them as they are.) Without it the falls only lose their spray.
+        VkShaderModule sprayVert = VK_NULL_HANDLE, sprayFrag = VK_NULL_HANDLE;
+        std::string sprayError;
+        if (ok && module(kSprayVertSpirv, sizeof(kSprayVertSpirv), &sprayVert) &&
+            module(kSprayFragSpirv, sizeof(kSprayFragSpirv), &sprayFrag)) {
+            stages[0].module = sprayVert;
+            stages[1].module = sprayFrag;
+            dss.depthWriteEnable = VK_FALSE;
+            for (auto& a : att) {
+                a.colorWriteMask = 0xF;
+                a.blendEnable = VK_TRUE;
+                a.srcColorBlendFactor = a.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                a.dstColorBlendFactor = a.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+                a.colorBlendOp = a.alphaBlendOp = VK_BLEND_OP_ADD;
+            }
+            if (!Check(vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &ci, nullptr, &m_waterSprayPipeline),
+                       "vkCreateGraphicsPipelines (spray)", &sprayError))
+                Log("water spray unavailable: %s\n", sprayError.c_str());
+        }
+        if (sprayVert) vkDestroyShaderModule(m_device, sprayVert, nullptr);
+        if (sprayFrag) vkDestroyShaderModule(m_device, sprayFrag, nullptr);
     }
     if (vert) vkDestroyShaderModule(m_device, vert, nullptr);
     if (frag) vkDestroyShaderModule(m_device, frag, nullptr);
@@ -352,6 +388,7 @@ void Device::DestroyWaterResources()
         if (m.texture) DestroyTextureNow(m.texture);
     m_waterMaps.clear();
     m_waterFalls.clear();
+    m_waterFoot.clear();
     if (m_waterDetail) { DestroyTextureNow(m_waterDetail); m_waterDetail = nullptr; }
     if (m_waterSceneCopy) { DestroyTextureNow(m_waterSceneCopy); m_waterSceneCopy = nullptr; }
     if (m_waterDepthCopy) {
@@ -375,6 +412,7 @@ void Device::DestroyWaterResources()
     m_waterSimClear = true;
     if (m_waterRepeatSampler) { vkDestroySampler(m_device, m_waterRepeatSampler, nullptr); m_waterRepeatSampler = VK_NULL_HANDLE; }
     if (m_waterPipeline) { vkDestroyPipeline(m_device, m_waterPipeline, nullptr); m_waterPipeline = VK_NULL_HANDLE; }
+    if (m_waterSprayPipeline) { vkDestroyPipeline(m_device, m_waterSprayPipeline, nullptr); m_waterSprayPipeline = VK_NULL_HANDLE; }
     if (m_waterLayout) { vkDestroyPipelineLayout(m_device, m_waterLayout, nullptr); m_waterLayout = VK_NULL_HANDLE; }
     if (m_waterSetLayout) { vkDestroyDescriptorSetLayout(m_device, m_waterSetLayout, nullptr); m_waterSetLayout = VK_NULL_HANDLE; }
     m_waterDepthW = m_waterDepthH = 0;
@@ -854,7 +892,17 @@ void Device::StepWaterSim(VkCommandBuffer cmd, const WaterMap* map)
     }
 
     // The characters, nearest to the camera first.
-    struct Bodies { float pos[kSimBodies][4]; float dir[kSimBodies][4]; float extra[kSimBodies][4]; } bodies{};
+    struct Bodies {
+        float pos[kSimBodies][4], dir[kSimBodies][4], extra[kSimBodies][4];
+        float feet[kFootMax * 2][4];             // the falls' feet (last frame's: DrawWater finds them after this step)
+        float footInfo[4];
+    } bodies{};
+    const size_t feet = std::min(m_waterFoot.size() / 8, kFootMax);
+    if (P.fallChurn > 0.0f && feet) {
+        std::memcpy(bodies.feet, m_waterFoot.data(), feet * 32);
+        bodies.footInfo[0] = float(feet);
+        bodies.footInfo[1] = 1.5f * P.fallChurn;
+    }
     std::vector<uint32_t> order(m_waterBodies.size());
     for (uint32_t i = 0; i < uint32_t(order.size()); ++i)
         order[i] = i;
@@ -1178,11 +1226,14 @@ uint64_t FallKey(const MeshVertexOut* out, const std::vector<uint32_t>& steep, c
 // top row comes over the lip and the bottom one goes into the pool: no fade there).
 constexpr float kSheetStep = 0.5f, kSheetFade = 3.0f;
 constexpr size_t kSheetMaxNodes = 300000;
+// foot: where the sheet meets the pool, every kFootStep across it (Device::WaterFall::foot).
+constexpr float kFootStep = 4.0f;
 void BuildFallSheet(const MeshVertexOut* out, const std::vector<uint32_t>& steep, const std::vector<uint32_t>& tris,
-                    std::vector<MeshVertexOut>& verts, std::vector<uint32_t>& indices)
+                    std::vector<MeshVertexOut>& verts, std::vector<uint32_t>& indices, std::vector<float>& foot)
 {
     verts.clear();
     indices.clear();
+    foot.clear();
     float cLo = 1e30f, cHi = -1e30f, aHi = 0.0f;
     for (uint32_t t : tris)
         for (int k = 0; k < 3; ++k) {
@@ -1255,6 +1306,36 @@ void BuildFallSheet(const MeshVertexOut* out, const std::vector<uint32_t>& steep
             verts.push_back(m);
             (end == 0 ? first[i] : last[i]) = j + dj;
         }
+    }
+    // The way out from the cliff: the water falls out as well as down, so from the lip over to the foot; an upright
+    // sheet by its normals (facing out, a sheet leaning back looks up a little).
+    float away[2] = {0.0f, 0.0f}, lean[2] = {0.0f, 0.0f};
+    int columns = 0;
+    for (int i = 0; i < nc; ++i) {
+        if (first[i] < 0 || last[i] <= first[i])
+            continue;
+        const MeshVertexOut& a = verts[size_t(node[size_t(first[i]) * nc + i])];
+        const MeshVertexOut& b = verts[size_t(node[size_t(last[i]) * nc + i])];
+        away[0] += b.pos[0] - a.pos[0];
+        away[1] += b.pos[2] - a.pos[2];
+        const float sy = b.normal[1] >= 0.0f ? 1.0f : -1.0f;
+        lean[0] += b.normal[0] * sy;
+        lean[1] += b.normal[2] * sy;
+        ++columns;
+    }
+    if (std::hypot(away[0], away[1]) < 0.5f * float(std::max(columns, 1))) { away[0] = lean[0]; away[1] = lean[1]; }
+    const float al = std::hypot(away[0], away[1]);
+    if (al > 1e-6f) { away[0] /= al; away[1] /= al; } else { away[0] = 1.0f; away[1] = 0.0f; }
+    const int footEvery = std::max(1, int(std::lround(kFootStep / step)));
+    for (int i = 0; i < nc; ++i) {
+        if (last[i] < 0 || (i % footEvery != 0 && i != nc - 1))
+            continue;
+        const MeshVertexOut& b = verts[size_t(node[size_t(last[i]) * nc + i])];
+        float o[2] = {b.normal[0], b.normal[2]};
+        if (o[0] * away[0] + o[1] * away[1] < 0.0f) { o[0] = -o[0]; o[1] = -o[1]; }
+        const float ol = std::hypot(o[0], o[1]);
+        if (ol > 0.2f) { o[0] /= ol; o[1] /= ol; } else { o[0] = away[0]; o[1] = away[1]; }
+        foot.insert(foot.end(), {b.pos[0], b.pos[1], b.pos[2], o[0], o[1]});
     }
     // The distance (in nodes) to the nearest empty one or a side: a chamfer transform, forward then back. (Empty above
     // a column's first node or below its last is over the lip or in the pool: not an edge.)
@@ -1411,11 +1492,11 @@ void Device::DrawWater(const WaterVertex* vertices, uint32_t vertexCount, const 
             std::vector<MeshVertexOut> sv;
             WaterFall w;
             w.key = key;
-            BuildFallSheet(meshOut.data(), steep, tris, sv, w.indices);
+            BuildFallSheet(meshOut.data(), steep, tris, sv, w.indices, w.foot);
             w.vertices.resize(sv.size() * 12);
             std::memcpy(w.vertices.data(), sv.data(), sv.size() * sizeof(MeshVertexOut));
-            WaterLog("water fall %016llx: %zu triangles -> sheet of %zu vertices, %zu triangles", (unsigned long long)key,
-                     tris.size(), sv.size(), w.indices.size() / 3);
+            WaterLog("water fall %016llx: %zu triangles -> sheet of %zu vertices, %zu triangles, %zu foot points",
+                     (unsigned long long)key, tris.size(), sv.size(), w.indices.size() / 3, w.foot.size() / 5);
             m_waterFalls.push_back(std::move(w));
             it = m_waterFalls.end() - 1;
         }
@@ -1425,14 +1506,48 @@ void Device::DrawWater(const WaterVertex* vertices, uint32_t vertexCount, const 
         sheets.push_back(&*it);
         sheetBytes += it->vertices.size() * 4 + it->indices.size() * 4 + 512;
     }
+    // Their feet, as segments (FootSegment) between neighbouring foot points - the nearest kFootMax to the camera.
+    m_waterFoot.clear();
+    for (const WaterFall* w : sheets)
+        for (size_t k = 5; k < w->foot.size(); k += 5) {
+            const float* a = &w->foot[k - 5];
+            const float* b = &w->foot[k];
+            if (std::hypot(b[0] - a[0], b[2] - a[2]) > 3.0f * kFootStep)
+                continue;                        // (a gap in the sheet)
+            float o[2] = {a[3] + b[3], a[4] + b[4]};
+            const float ol = std::max(std::hypot(o[0], o[1]), 1e-6f);
+            m_waterFoot.insert(m_waterFoot.end(), {a[0], a[1], a[2], b[0], b[1], b[2], o[0] / ol, o[1] / ol});
+        }
+    if (m_waterFoot.size() > kFootMax * 8) {
+        std::vector<std::pair<float, size_t>> byDistance;
+        for (size_t k = 0; k < m_waterFoot.size(); k += 8)
+            byDistance.emplace_back(std::hypot((m_waterFoot[k] + m_waterFoot[k + 3]) * 0.5f - eye[0],
+                                            (m_waterFoot[k + 2] + m_waterFoot[k + 5]) * 0.5f - eye[2]), k);
+        std::partial_sort(byDistance.begin(), byDistance.begin() + kFootMax, byDistance.end());
+        std::vector<float> kept;
+        for (size_t k = 0; k < kFootMax; ++k)
+            kept.insert(kept.end(), m_waterFoot.begin() + ptrdiff_t(byDistance[k].second), m_waterFoot.begin() + ptrdiff_t(byDistance[k].second + 8));
+        m_waterFoot.swap(kept);
+    }
+    const uint32_t footCount = uint32_t(m_waterFoot.size() / 8);
+    wf.fall[2] = float(footCount);
+    wf.fall2[0] = P.fallSpray;
+    wf.fall2[1] = P.fallChurn;
     EnsureRingSpace(4 * (sizeof(WaterFrame) + 256) + sizeof(FrameLights) + VkDeviceSize(vertexCount) * sizeof(MeshVertexOut) +
-                    shore.size() * 4 + sheetBytes + 1024);
+                    shore.size() * 4 + sheetBytes + kFootMax * 32 + 1024);
     if (m_frameLightsDirty || m_frameLightsGeneration != m_ringGeneration)
         WriteFrameLights();
     void* meshCpu = nullptr;
     const VkDeviceSize meshBytes = std::max<VkDeviceSize>(VkDeviceSize(vertexCount) * sizeof(MeshVertexOut), 16);
     const VkDeviceSize meshOffset = Allocate(meshBytes, 256, &meshCpu);
     std::memcpy(meshCpu, meshOut.data(), size_t(vertexCount) * sizeof(MeshVertexOut));
+    // The feet (the grid's foam and the spray read them where the mesh mode reads its vertices).
+    void* footCpu = nullptr;
+    const VkDeviceSize footBytes = std::max<VkDeviceSize>(VkDeviceSize(footCount) * 32, 32);
+    const VkDeviceSize footOffset = Allocate(footBytes, 256, &footCpu);
+    std::memset(footCpu, 0, size_t(footBytes));
+    if (footCount)
+        std::memcpy(footCpu, m_waterFoot.data(), size_t(footCount) * 32);
 
     const float sw = float(m_scene->m_width), sh = float(m_scene->m_height);
     VkViewport viewport{0.5f, sh + 0.5f, sw, -sh, 0.0f, 1.0f};   // the scene draws into a flipped viewport
@@ -1441,8 +1556,10 @@ void Device::DrawWater(const WaterVertex* vertices, uint32_t vertexCount, const 
     vkCmdSetScissor(cmd, 0, 1, &scissor);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_waterPipeline);
 
-    // meshMode: vertices from meshAt (meshSize bytes), indices idx (idxCount); otherwise the grid.
-    auto draw = [&](bool meshMode, VkDeviceSize meshAt, VkDeviceSize meshSize, const uint32_t* idx, uint32_t idxCount) {
+    // kind 1, mesh mode: vertices from meshAt (meshSize bytes), indices idx (idxCount); 0: the grid; 2: the spray
+    // (idxCount vertices, no indices).
+    auto draw = [&](int kind, VkDeviceSize meshAt, VkDeviceSize meshSize, const uint32_t* idx, uint32_t idxCount) {
+        const bool meshMode = kind == 1;
         WaterFrame block = wf;
         block.time[2] = meshMode ? 1.0f : 0.0f;
         if (!meshMode && map) {
@@ -1515,7 +1632,9 @@ void Device::DrawWater(const WaterVertex* vertices, uint32_t vertexCount, const 
         writes[9].pImageInfo = &envInfo;
         writes[10].pImageInfo = &simInfo;
         vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_waterLayout, 0, 11, writes);
-        if (meshMode) {
+        if (kind == 2) {
+            vkCmdDraw(cmd, idxCount, 1, 0, 0);
+        } else if (meshMode) {
             void* idxCpu = nullptr;
             const VkDeviceSize idxOffset = Allocate(VkDeviceSize(idxCount) * 4, 16, &idxCpu);
             std::memcpy(idxCpu, idx, size_t(idxCount) * 4);
@@ -1529,15 +1648,20 @@ void Device::DrawWater(const WaterVertex* vertices, uint32_t vertexCount, const 
         }
     };
     if (map && grid)
-        draw(false, meshOffset, meshBytes, nullptr, 0);
+        draw(0, footOffset, footBytes, nullptr, 0);
     if (!shore.empty())
-        draw(true, meshOffset, meshBytes, shore.data(), uint32_t(shore.size()));
+        draw(1, meshOffset, meshBytes, shore.data(), uint32_t(shore.size()));
     for (const WaterFall* w : sheets) {
         void* cpu = nullptr;
         const VkDeviceSize bytes = w->vertices.size() * 4;
         const VkDeviceSize at = Allocate(bytes, 256, &cpu);
         std::memcpy(cpu, w->vertices.data(), size_t(bytes));
-        draw(true, at, bytes, w->indices.data(), uint32_t(w->indices.size()));
+        draw(1, at, bytes, w->indices.data(), uint32_t(w->indices.size()));
+    }
+    // The spray and mist at the falls' feet: soft particles over everything drawn (water_spray.*).
+    if (footCount && P.fallSpray > 0.0f && m_waterSprayPipeline) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_waterSprayPipeline);
+        draw(2, footOffset, footBytes, nullptr, footCount * kSprayPerFoot * 6);
     }
     m_cache = StateCache{};                      // this pipeline is not the scene's
     m_arenaBound = m_bindlessBound = false;      // ... and its pushed set 0 replaced the scene's: rebind those too

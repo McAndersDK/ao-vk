@@ -32,8 +32,14 @@ layout(set = 0, binding = 0) uniform WaterFrame {
     vec4 env;           // x: 1 = the environment probe's atlas is bound (binding 12); y: its strength
     vec4 ripple;        // x: 1 = the disturbance field is bound (binding 13); y: how visible (RVK_WakeGain);
                         // z: 1 / its world size; w: its cell size
-    vec4 fall;          // x: falls' sheen (RVK_WaterSheen); y: their sparkles (RVK_WaterSpark)
+    vec4 fall;          // x: falls' sheen (RVK_WaterSheen); y: their sparkles (RVK_WaterSpark); z: how many foot
+                        // segments (binding 2 in the grid and the spray)
+    vec4 fall2;         // x: the spray (RVK_WaterSpray); y: the churn and foam where they land (RVK_WaterChurn)
 } W;
+
+// A fall's foot (rvk/water.cpp m_waterFoot): a segment of where it meets the pool - a: x0 y0 z0 x1; b: y1 z1, the way
+// out from the cliff there (x, z).
+struct FootSegment { vec4 a, b; };
 
 layout(set = 0, binding = 7) uniform sampler2D waterMap;       // R: height above W.mapInfo.x, G: water (0 / 1)
 layout(set = 0, binding = 8) uniform sampler2D sceneDepth;     // the scene's depth before the water (a copy)
@@ -41,6 +47,40 @@ layout(set = 0, binding = 8) uniform sampler2D sceneDepth;     // the scene's de
 const float kPi = 3.14159265;
 
 vec2 MapUv(vec2 xz) { return (xz - W.map.xy) * W.map.zw; }
+
+// The game's fog at a view distance (1 = none).
+float FogFactor(float d)
+{
+    uint mode = uint(W.fogParams.w);
+    if (W.fogColour.w < 0.5 || mode == 0u) return 1.0;
+    if (mode == 3u) return clamp((W.fogParams.y - d) / max(W.fogParams.y - W.fogParams.x, 1e-6), 0.0, 1.0);
+    if (mode == 1u) return clamp(exp(-W.fogParams.z * d), 0.0, 1.0);
+    float x = W.fogParams.z * d;
+    return clamp(exp(-x * x), 0.0, 1.0);
+}
+
+// The frame's point and spot lights (FL.lights) at a point: each one's direction (towards it) and colour there.
+bool LocalLight(uint i, vec3 posW, out vec3 L, out vec3 colour)
+{
+    Light li = FL.lights[i];
+    uint type = uint(li.position.w + 0.5);
+    L = vec3(0.0, 1.0, 0.0);
+    colour = vec3(0.0);
+    if (type != 1u && type != 2u)
+        return false;
+    vec3 dl = li.position.xyz - posW;
+    float d = length(dl);
+    if (d >= li.direction.w || d < 1e-3)
+        return false;
+    L = dl / d;
+    float att = 1.0 / max(li.atten.x + li.atten.y * d + li.atten.z * d * d, 1e-3);
+    att *= 1.0 - smoothstep(0.75, 1.0, d / li.direction.w);
+    if (type == 2u)
+        att *= smoothstep(li.spot.y, li.spot.x, dot(-L, normalize(li.direction.xyz)));
+    colour = li.diffuse.rgb * att;
+    return att > 1e-4;
+}
+
 
 // A fall: the time the water takes to come down `along` units from the lip - leaving it at a start speed, gathering
 // speed as water does. A pattern laid out by it and slid by the clock moves down, faster and stretched longer lower.

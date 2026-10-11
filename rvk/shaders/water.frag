@@ -16,6 +16,7 @@ layout(set = 0, binding = 9) uniform sampler2D sceneCopy;              // the HD
 layout(set = 0, binding = 10) uniform sampler2D detail;                // RG: ripple slope, B: noise, A: cells
 layout(set = 0, binding = 11) uniform sampler2D gameTexture;           // the game's water texture
 layout(set = 0, binding = 12) uniform sampler2D envAtlas;              // the environment probe (env_common.glsl)
+layout(set = 0, binding = 2, std430) readonly buffer Feet { FootSegment feet[]; };   // the grid: the falls' feet
 #include "env_common.glsl"
 
 layout(location = 0) in vec3 vPos;
@@ -213,37 +214,6 @@ float Ggx(vec3 N, vec3 V, vec3 L, float rough)
     return D * Fs * 0.25 / max(NdotL * NdotV, 0.05) * NdotL;
 }
 
-// The frame's point and spot lights (FL.lights) at a point: each one's direction (towards it) and colour there.
-bool LocalLight(uint i, vec3 posW, out vec3 L, out vec3 colour)
-{
-    Light li = FL.lights[i];
-    uint type = uint(li.position.w + 0.5);
-    L = vec3(0.0, 1.0, 0.0);
-    colour = vec3(0.0);
-    if (type != 1u && type != 2u)
-        return false;
-    vec3 dl = li.position.xyz - posW;
-    float d = length(dl);
-    if (d >= li.direction.w || d < 1e-3)
-        return false;
-    L = dl / d;
-    float att = 1.0 / max(li.atten.x + li.atten.y * d + li.atten.z * d * d, 1e-3);
-    att *= 1.0 - smoothstep(0.75, 1.0, d / li.direction.w);
-    if (type == 2u)
-        att *= smoothstep(li.spot.y, li.spot.x, dot(-L, normalize(li.direction.xyz)));
-    colour = li.diffuse.rgb * att;
-    return att > 1e-4;
-}
-
-float FogFactor(float d)
-{
-    uint mode = uint(W.fogParams.w);
-    if (W.fogColour.w < 0.5 || mode == 0u) return 1.0;
-    if (mode == 3u) return clamp((W.fogParams.y - d) / max(W.fogParams.y - W.fogParams.x, 1e-6), 0.0, 1.0);
-    if (mode == 1u) return clamp(exp(-W.fogParams.z * d), 0.0, 1.0);
-    float x = W.fogParams.z * d;
-    return clamp(exp(-x * x), 0.0, 1.0);
-}
 
 void main()
 {
@@ -295,6 +265,16 @@ void main()
         fallDown = fd;
         tau = FallTau(vFlow.x);
         float c = vFlow.y;
+        // Strands: falling water is a bundle of rounded jets, not a flat sheet. Across each the surface turns as on a
+        // cylinder, so even seen head-on every strand has edges at a grazing angle - bright lines of sky and sun along
+        // it, the glossy look the sheet has seen edge-on from under the lip. Wide strands and narrow ones on them,
+        // irregular widths; calmed where a strand narrows to a pixel or two (it would only flicker).
+        float wA = c * 0.55 + ValueNoise(vec2(c * 0.3, vFlow.x * 0.02)) * 2.0;
+        float wB = c * 2.1 + ValueNoise(vec2(c * 1.1 + 3.0, vFlow.x * 0.05)) * 1.5;
+        float sA = asin(clamp(fract(wA) * 2.0 - 1.0, -0.97, 0.97)) * (1.0 - smoothstep(0.25, 0.6, fwidth(wA)));
+        float sB = asin(clamp(fract(wB) * 2.0 - 1.0, -0.97, 0.97)) * (1.0 - smoothstep(0.25, 0.6, fwidth(wB)));
+        float tilt = (sA * 0.75 + sB * 0.3) * (1.0 - 0.6 * smoothstep(0.0, 2.0, -vFlow.x + 2.0));
+        N = normalize(N * cos(tilt) + side * sin(tilt));
         vec2 uvA = vec2(c * 0.45, (tau - t) * 0.9);
         vec2 uvB = vec2(c * 1.15 + 0.3, (tau - t * 1.2) * 1.7 + 0.5);
         vec4 da = texture(detail, uvA), db = texture(detail, uvB);
@@ -385,7 +365,7 @@ void main()
     if (fall) {
         vec3 fallLight = ambient + sun * (max(dot(N, L), 0.0) * shadow);
         // (Whiter the further it has fallen - more air in it - the streaks only a variation on that.)
-        white = clamp(mix(0.35, 0.8, smoothstep(1.0, 12.0, vFlow.x)) + (streak - 0.5) * 0.6, 0.0, 1.0) * (1.0 - 0.85 * glass);
+        white = clamp(mix(0.15, 0.6, smoothstep(1.0, 14.0, vFlow.x)) + (streak - 0.5) * 0.6, 0.0, 1.0) * (1.0 - 0.85 * glass);
         water = mix(water, vec3(0.85, 0.88, 0.9) * (fallLight * 0.8 + 0.2), white);
     }
 
@@ -482,6 +462,29 @@ void main()
         foam *= 1.0 - smoothstep(60.0, 260.0, dist);
         vec3 foamLight = ambient + sun * (max(dot(N, L), 0.0) * shadow);
         colour = mix(colour, vec3(0.85, 0.88, 0.9) * foamLight, foam);
+    }
+
+    // Where a fall lands: the pool churned white along its foot, the foam broken up and drifting out from it.
+    if (!mesh && W.fall.z > 0.5 && W.fall2.y > 0.0) {
+        float best = 1e9, along = 0.0;
+        for (int i = 0; i < int(W.fall.z); ++i) {
+            FootSegment fs = feet[i];
+            vec2 a = fs.a.xz, ab = vec2(fs.a.w, fs.b.y) - a;
+            float k = clamp(dot(vPos.xz - a, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
+            float d = length(vPos.xz - a - ab * k);
+            if (d < best) { best = d; along = dot(vPos.xz, ab) * inversesqrt(max(dot(ab, ab), 1e-6)); }
+        }
+        float churn = exp(-best / 5.0) * W.fall2.y;
+        if (churn > 0.01) {
+            vec2 q = vec2(along * 0.3, best * 0.3 - t * 0.5);
+            float pattern = texture(detail, q).b * 0.6 + texture(detail, q * 2.3 + vec2(0.37, -t * 0.35)).a * 0.4;
+            float amount = clamp(churn * 1.5, 0.0, 1.0);
+            float fw = smoothstep(1.0 - amount, 1.0 - amount + 0.25, pattern) * amount;
+            fw = max(fw, (1.0 - smoothstep(0.5, 2.5, best)) * 0.85 * min(W.fall2.y, 1.0));   // (boiling right at it)
+            fw *= 1.0 - smoothstep(80.0, 300.0, dist);
+            vec3 foamLight = ambient + sun * (max(dot(N, L), 0.0) * shadow);
+            colour = mix(colour, vec3(0.88, 0.9, 0.92) * foamLight, fw);
+        }
     }
 
     // Where the surface meets the shore: fade over to what is behind, so the water has no hard line along the land.

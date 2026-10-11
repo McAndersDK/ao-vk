@@ -124,6 +124,8 @@ Setting g_settings[] = {
     {"RVK_WaterTex",   "The game's water texture on the surface",                  "Experimental",     Float, 0, 1, 0.05f, 0.5f, nullptr, 0, "RVK_WaterOn"},
     {"RVK_WaterSheen", "Waterfalls: sheen (how much the clear water reflects)",    "Experimental",     Float, 0, 2, 0.1f, 1, nullptr, 0, "RVK_WaterOn"},
     {"RVK_WaterSpark", "Waterfalls: sparkles (sunlight and lamplight)",            "Experimental",     Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WaterOn"},
+    {"RVK_WaterSpray", "Waterfalls: spray and mist at the foot",                   "Experimental",     Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WaterOn"},
+    {"RVK_WaterChurn", "Waterfalls: churn and foam where they land",               "Experimental",     Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WaterOn"},
 
     {"RVK_SunShadow",  "Sun shadows",                                              "Shadows",          Bool,  0, 1, 1, 1, "RANDYVK_SHADOWS", 0},
     {"RVK_SunRes",     "Resolution (4096 / 8192)",  "Shadows",          Choice, 1024, 8192, 1, 2048, nullptr, 0, "RVK_SunShadow", "1024 2048 4096 8192"},
@@ -436,6 +438,8 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
         w.gameTexture = V("RVK_WaterTex");
         w.fallSheen = V("RVK_WaterSheen");
         w.fallSparkle = V("RVK_WaterSpark");
+        w.fallSpray = V("RVK_WaterSpray");
+        w.fallChurn = V("RVK_WaterChurn");
         d->SetWaterParams(w);
     }
     else if (std::strncmp(n, "RVK_Vol", 7) == 0) d->SetVolume(V("RVK_Volume"), V("RVK_VolHaze"), V("RVK_VolShafts"));
