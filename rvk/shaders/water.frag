@@ -27,7 +27,7 @@ layout(location = 5) in float vFold;
 layout(location = 6) in float vSpacing;
 layout(location = 7) in float vAlpha;       // mesh mode: the game's vertex alpha (its shore fade)
 layout(location = 8) in vec3 vFlowN;        // mesh mode: a fall's smooth normal
-layout(location = 9) in vec3 vFlow;         // mesh mode: a fall's along (down from its top), across, fall (1)
+layout(location = 9) in vec4 vFlow;         // mesh mode: a fall's along (down from its top), across, fall (1), edge
 
 layout(location = 0) out vec4 outScene;
 layout(location = 1) out vec4 outGlow;
@@ -37,21 +37,34 @@ layout(location = 4) out vec4 outAlbedo;
 
 const vec3 kLuma = vec3(0.3, 0.59, 0.11);
 
-// Sun visibility (1 lit): the first cascade that covers the point, one filtered tap.
+// Sun visibility (1 lit): the first cascade that covers the point, one filtered tap - blended over to the next one
+// near its border (a hard switch drew a line across a fall, where the finer cascade saw the cliff behind it).
 float SunShadow(vec3 posW)
 {
     if (FL.shadowParams.x <= 0.5)
         return 1.0;
     int count = int(FL.shadowParams.z);
+    float lit = 1.0, weight = 1.0;
+    bool found = false;
     for (int c = 0; c < count; ++c) {
         vec4 sc = FL.shadowViewProj[c] * vec4(posW, 1.0);
         vec3 ndc = sc.xyz / sc.w;
-        if (max(abs(ndc.x), abs(ndc.y)) >= 1.0 || ndc.z <= 0.0 || ndc.z >= 1.0)
+        float r = max(abs(ndc.x), abs(ndc.y));
+        if (r >= 1.0 || ndc.z <= 0.0 || ndc.z >= 1.0)
             continue;
-        float lit = texture(shadowMap, vec4(ndc.xy * 0.5 + 0.5, float(c), ndc.z));
-        return 1.0 - (1.0 - lit) * FL.shadowParams.y;
+        float l = texture(shadowMap, vec4(ndc.xy * 0.5 + 0.5, float(c), ndc.z));
+        if (!found) {
+            found = true;
+            lit = l;
+            weight = smoothstep(0.8, 1.0, r);    // how much of the next cascade
+            if (weight <= 0.0)
+                break;
+        } else {
+            lit = mix(lit, l, weight);
+            break;
+        }
     }
-    return 1.0;
+    return 1.0 - (1.0 - lit) * FL.shadowParams.y;
 }
 
 // The ripples' slope (dh/dx, dh/dz) at a world point: two layers of the detail texture drifting across each other.
@@ -165,18 +178,26 @@ vec4 Reflect(vec3 posW, vec3 dirW, float noise)
     return vec4(0.0);
 }
 
-// Value noise (hashed lattice): the fall's streaks, which need more contrast than the detail texture has.
-float Hash21(vec2 p)
+// Value noise (hashed lattice): the fall's streaks, which need more contrast than the detail texture has. The lattice
+// is hashed in integers (pcg2d): a float hash (fract of big products) came out differently for the same corner from
+// the cells either side of it, so the pattern jumped at their edges - blocks.
+float Hash21(ivec2 i)
 {
-    p = fract(p * vec2(123.34, 456.21));
-    p += dot(p, p + 45.32);
-    return fract(p.x * p.y);
+    uvec2 v = uvec2(i) * 1664525u + 1013904223u;
+    v.x += v.y * 1664525u;
+    v.y += v.x * 1664525u;
+    v ^= v >> 16u;
+    v.x += v.y * 1664525u;
+    v.y += v.x * 1664525u;
+    v ^= v >> 16u;
+    return float(v.x >> 8u) * (1.0 / 16777216.0);
 }
 float ValueNoise(vec2 p)
 {
-    vec2 i = floor(p), f = fract(p);
+    vec2 fl = floor(p), f = p - fl;
+    ivec2 i = ivec2(fl);
     f = f * f * (3.0 - 2.0 * f);
-    return mix(mix(Hash21(i), Hash21(i + vec2(1.0, 0.0)), f.x), mix(Hash21(i + vec2(0.0, 1.0)), Hash21(i + vec2(1.0, 1.0)), f.x), f.y);
+    return mix(mix(Hash21(i), Hash21(i + ivec2(1, 0)), f.x), mix(Hash21(i + ivec2(0, 1)), Hash21(i + ivec2(1, 1)), f.x), f.y);
 }
 
 float FogFactor(float d)
@@ -227,15 +248,14 @@ void main()
     // sheet is glassy - smooth, clear, a mirror; lower down it breaks up white (glass: 1 at the top, 0 a few units
     // down). The white water is columns fixed on the sheet (where the flow is thicker, as the lip shapes it: they run
     // its whole height), made brighter and darker by lumps of water sliding down them - so no streak starts or ends.
-    float streak = 0.0, glass = 0.0;
+    float streak = 0.0, glass = 0.0, tau = 0.0;
     if (fall) {
         vec3 fd = vec3(0.0, -1.0, 0.0);
         fd -= N * dot(fd, N);                    // down the slope of the sheet
         float fl = length(fd);
         fd = fl > 0.05 ? fd / fl : vec3(0.0, -1.0, 0.0);
         vec3 side = normalize(cross(N, fd));
-        const float v0 = 3.0, g = 9.8;           // units / s (a unit is about a metre), units / s^2
-        float tau = (sqrt(v0 * v0 + 2.0 * g * max(vFlow.x, 0.0)) - v0) / g;
+        tau = FallTau(vFlow.x);
         float c = vFlow.y;
         vec2 uvA = vec2(c * 0.45, (tau - t) * 0.9);
         vec2 uvB = vec2(c * 1.15 + 0.3, (tau - t * 1.2) * 1.7 + 0.5);
@@ -244,11 +264,15 @@ void main()
         glass = 1.0 - smoothstep(0.5, 5.0, vFlow.x);
         float bend = mix(1.0, 0.35, glass);
         N = normalize(N + (side * (sa.x * 0.7 + sb.x * 0.5) + fd * (sa.y * 0.3 + sb.y * 0.2)) * bend);
-        float columns = ValueNoise(vec2(c * 0.9, vFlow.x * 0.03)) * 0.65 +
-                        ValueNoise(vec2(c * 2.3 + 7.0, vFlow.x * 0.05 + 3.0)) * 0.35;
+        // Columns at three widths (the finest the threads of water within them), lumps sliding down them, and bright
+        // clumps of white water rushing down among them.
+        float columns = ValueNoise(vec2(c * 0.9, vFlow.x * 0.03)) * 0.45 +
+                        ValueNoise(vec2(c * 2.3 + 7.0, vFlow.x * 0.05 + 3.0)) * 0.3 +
+                        ValueNoise(vec2(c * 6.1 + 2.0, vFlow.x * 0.12 + 9.0)) * 0.25;
         float lumps = ValueNoise(vec2(c * 1.3 + 11.0, (tau - t) * 1.2)) * 0.6 +
                       ValueNoise(vec2(c * 2.9 + 3.0, (tau - t * 1.15) * 2.4)) * 0.4;
-        streak = clamp(columns + (lumps - 0.5) * 0.35, 0.0, 1.0);
+        float clumps = ValueNoise(vec2(c * 3.4 + 17.0, (tau - t * 1.05) * 3.2)) * ValueNoise(vec2(c * 8.3 + 5.0, (tau - t * 1.1) * 5.5));
+        streak = clamp(columns + (lumps - 0.5) * 0.5 + clumps * clumps * 1.6 * smoothstep(1.0, 6.0, vFlow.x), 0.0, 1.0);
     }
     N = normalize(N + vec3(-slope.x, 0.0, -slope.y));
     bool under = !mesh && eye.y < vRest.y;
@@ -257,7 +281,8 @@ void main()
 
     // The light on the water: the terrain's ambient plus the sun.
     vec3 L = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
-    float shadow = SunShadow(vPos + vec3(0.0, 0.05, 0.0));
+    // (A fall lies on its cliff: looked up a little out from the sheet, or the cliff shadows it.)
+    float shadow = SunShadow(vPos + (fall ? N * 0.6 : vec3(0.0)) + vec3(0.0, 0.05, 0.0));
     vec3 sun = FL.sunColor.rgb;
     vec3 ambient = W.ambient.rgb;
     vec3 light = ambient + sun * (max(L.y, 0.0) * shadow);
@@ -320,7 +345,7 @@ void main()
     float white = 0.0;
     if (fall) {
         vec3 fallLight = ambient + sun * (max(dot(N, L), 0.0) * shadow);
-        white = (0.2 + 0.6 * smoothstep(0.25, 0.85, streak)) * (1.0 - 0.85 * glass);
+        white = (0.15 + 0.8 * smoothstep(0.3, 0.9, streak)) * (1.0 - 0.85 * glass);
         water = mix(water, vec3(0.85, 0.88, 0.9) * (fallLight * 0.8 + 0.2), white);
     }
 
@@ -391,6 +416,11 @@ void main()
     // surface steps down to the shore, are see-through at their far edge (drawn opaque, they stood as blue walls).
     if (mesh && !fall)                           // (a fall: the game gives it no alpha at all - no fade to follow)
         colour = mix(behindRaw, colour, clamp(vAlpha / max(W.tint.a, 0.05), 0.0, 1.0));
+    // A fall's sheet thins out at its sides, raggedly, the ragged edge flowing down with the water.
+    if (fall) {
+        float rag = ValueNoise(vec2(vFlow.y * 0.7, (tau - t) * 1.4)) * 0.6 + ValueNoise(vec2(vFlow.y * 1.9 + 5.0, (tau - t) * 3.0)) * 0.4;
+        colour = mix(behindRaw, colour, smoothstep(rag * 0.7, rag * 0.7 + 0.3, vFlow.w));
+    }
 
     // The game's fog, by the view distance.
     float fog = FogFactor(dist);

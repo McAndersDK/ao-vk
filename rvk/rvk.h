@@ -1368,6 +1368,14 @@ private:
     struct WaterGrid { uint32_t segments = 0; VkBuffer buffer = VK_NULL_HANDLE; VmaAllocation_T* allocation = nullptr; };
     std::vector<WaterGrid> m_waterGrids;
     std::vector<uint32_t> m_waterSteep;
+    // Falls' sheets (water.cpp BuildFallSheet), made the first time a fall is seen; the last few kept.
+    struct WaterFall {
+        uint64_t key = 0;                        // its triangles' hash
+        std::vector<float> vertices;             // 12 floats each (water.cpp MeshVertexOut)
+        std::vector<uint32_t> indices;
+        uint64_t lastFrame = 0;
+    };
+    std::vector<WaterFall> m_waterFalls;
     VkDescriptorSetLayout m_waterSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_waterLayout = VK_NULL_HANDLE;
     VkPipeline m_waterPipeline = VK_NULL_HANDLE;

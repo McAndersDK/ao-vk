@@ -41,6 +41,14 @@ const float kPi = 3.14159265;
 
 vec2 MapUv(vec2 xz) { return (xz - W.map.xy) * W.map.zw; }
 
+// A fall: the time the water takes to come down `along` units from the lip - leaving it at a start speed, gathering
+// speed as water does. A pattern laid out by it and slid by the clock moves down, faster and stretched longer lower.
+float FallTau(float along)
+{
+    const float v0 = 3.0, g = 9.8;             // units / s (a unit is about a metre), units / s^2
+    return (sqrt(v0 * v0 + 2.0 * g * max(along, 0.0)) - v0) / g;
+}
+
 // The linear view depth of a depth buffer value.
 float ViewZ(float d) { return W.proj.y / (min(d, 0.9999999) - W.proj.x); }
 

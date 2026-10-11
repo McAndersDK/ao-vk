@@ -1391,6 +1391,12 @@ bool g_waterWalker = false;       // --water-walker: a "character" standing in t
                                   // bobbing along: the surface ripples around it (RVK_WaterSwim)
 bool g_waterJump = false;         // --water-jump: the walker jumps out of the water and lands (RVK_WakeSplash)
 float g_waterSwim = 1.0f;         // --water-swim S: strength of those ripples (RVK_WaterSwim)
+std::string g_waterMesh;          // --water-mesh FILE: the water mesh from a dump of the game's (count, index count, the
+                                  // vertices as Device::WaterVertex, the 16-bit indices), the part within 150 units of
+                                  // --water-mesh-at X Y Z moved to the lake's far side (that point to 0 0 60)
+float g_waterMeshAt[3] = {2040.0f, 29.5f, 2340.0f};
+float g_waterEye[3] = {0, 0, 0};  // --water-eye X Y Z (the dump's coordinates): the camera there, looking at
+bool g_waterEyeSet = false;       // --water-mesh-at
 
 template <typename D>
 void RunWaterScene(D& dev, int frames, const std::string& shot)
@@ -1498,6 +1504,47 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
     } else {
         waterIdx = {0, 1, 2, 0, 2, 3};
     }
+    if (!g_waterMesh.empty()) {
+        water.clear();
+        waterIdx.clear();
+        if (FILE* f = std::fopen(g_waterMesh.c_str(), "rb")) {
+            uint32_t n = 0, ic = 0;
+            std::vector<Device::WaterVertex> v;
+            std::vector<uint16_t> idx;
+            if (std::fread(&n, 4, 1, f) == 1 && std::fread(&ic, 4, 1, f) == 1) {
+                v.resize(n);
+                idx.resize(ic);
+                if (std::fread(v.data(), sizeof(Device::WaterVertex), n, f) != n || std::fread(idx.data(), 2, ic, f) != ic)
+                    v.clear(), idx.clear();
+            }
+            std::fclose(f);
+            const float* c = g_waterMeshAt;
+            std::vector<int32_t> remap(v.size(), -1);
+            for (size_t t = 0; t + 2 < idx.size(); t += 3) {
+                bool close = true;
+                for (int k = 0; k < 3; ++k) {
+                    const float* p = v[idx[t + k]].pos;
+                    close = close && std::hypot(p[0] - c[0], p[2] - c[2]) < 150.0f;
+                }
+                if (!close)
+                    continue;
+                for (int k = 0; k < 3; ++k) {
+                    int32_t& r = remap[idx[t + k]];
+                    if (r < 0) {
+                        r = int32_t(water.size());
+                        Device::WaterVertex w = v[idx[t + k]];
+                        w.pos[0] -= c[0]; w.pos[1] -= c[1]; w.pos[2] += 60.0f - c[2];
+                        water.push_back(w);
+                    }
+                    waterIdx.push_back(uint16_t(r));
+                }
+            }
+            std::printf("water mesh %s: %zu of %u triangles, %zu vertices\n", g_waterMesh.c_str(), waterIdx.size() / 3,
+                        ic / 3, water.size());
+        } else {
+            std::printf("water mesh %s: can't open\n", g_waterMesh.c_str());
+        }
+    }
     if (g_waterWall) {                    // upright, 8 units tall, with the rock behind it 10 units further back
         const uint16_t base = uint16_t(water.size());
         water.insert(water.end(), {{{-30, 0, 60}, tint}, {{30, 0, 60}, tint}, {{30, 8, 60}, tint}, {{-30, 8, 60}, tint}});
@@ -1528,12 +1575,17 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
         const float eyeY = g_waterHeight >= 0.0f ? g_waterHeight : std::max(height(ex, ez), 0.0f) + 1.8f;
         const float pitch = g_waterPitch >= 0.0f ? g_waterPitch : (coast ? 0.1f : 0.16f);
         const float yaw = kPi * 0.5f + g_waterYaw;           // +z
-        const Vector eye{ex, eyeY, ez};
+        Vector eye{ex, eyeY, ez};
+        if (g_waterEyeSet)
+            eye = {g_waterEye[0] - g_waterMeshAt[0], g_waterEye[1] - g_waterMeshAt[1], g_waterEye[2] - g_waterMeshAt[2] + 60.0f};
         if (frame == 0)
             std::printf("water scene: eye %.2f %.2f %.2f, ground there %.2f, at z 60: %.2f, at z 150: %.2f, %zu terrain vertices\n",
                         double(ex), double(eyeY), double(ez), double(height(ex, ez)), double(height(0, 60)),
                         double(height(0, 150)), terrain.size());
-        const Vector at{eye.x + std::cos(yaw) * std::cos(pitch), eye.y - std::sin(pitch), eye.z + std::sin(yaw) * std::cos(pitch)};
+        Vector at{eye.x + std::cos(yaw) * std::cos(pitch), eye.y - std::sin(pitch), eye.z + std::sin(yaw) * std::cos(pitch)};
+        if (g_waterEyeSet)
+            at = {0.0f, 9.0f, 60.0f};                       // (the fall's middle, about)
+
         dev.SetTransform(View, LookAtLH(eye, at, {0, 1, 0}));
         dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(kWidth) / kHeight, 0.3f, 2000.0f));
         dev.SetTransform(World, Identity());
@@ -2739,6 +2791,9 @@ int main(int argc, char** argv)
         else if (a == "--water-lake") { g_waterScene = 1; hdr = true; }
         else if (a == "--water-coast") { g_waterScene = 2; hdr = true; }
         else if (a == "--water-wall") g_waterWall = true;
+        else if (a == "--water-mesh" && i + 1 < argc) g_waterMesh = argv[++i];
+        else if (a == "--water-mesh-at" && i + 3 < argc) { for (float& x : g_waterMeshAt) x = float(std::atof(argv[++i])); }
+        else if (a == "--water-eye" && i + 3 < argc) { for (float& x : g_waterEye) x = float(std::atof(argv[++i])); g_waterEyeSet = true; }
         else if (a == "--water-shelf") g_waterShelf = true;
         else if (a == "--water-pool") g_waterPool = true;
         else if (a == "--water-walker") g_waterWalker = true;
