@@ -304,9 +304,10 @@ void main()
         N = normalize(N + (side * (sa.x * 0.7 + sb.x * 0.5) + fd * (sa.y * 0.3 + sb.y * 0.2)) * bend);
         // Columns at three widths (the finest the threads of water within them), lumps sliding down them, and bright
         // clumps of white water rushing down among them.
-        float columns = ValueNoise(vec2(c * 0.9, vFlow.x * 0.03)) * 0.45 +
-                        ValueNoise(vec2(c * 2.3 + 7.0, vFlow.x * 0.05 + 3.0)) * 0.3 +
-                        ValueNoise(vec2(c * 6.1 + 2.0, vFlow.x * 0.12 + 9.0)) * 0.25;
+        float columns = ValueNoise(vec2(c * 0.9, vFlow.x * 0.03)) * 0.2 +
+                        ValueNoise(vec2(c * 2.3 + 7.0, vFlow.x * 0.05 + 3.0)) * 0.25 +
+                        ValueNoise(vec2(c * 6.1 + 2.0, vFlow.x * 0.12 + 9.0)) * 0.3 +
+                        ValueNoise(vec2(c * 13.0 + 4.0, vFlow.x * 0.25 + 1.0)) * 0.25;
         float lumps = ValueNoise(vec2(c * 1.3 + 11.0, (tau - t) * 1.2)) * 0.6 +
                       ValueNoise(vec2(c * 2.9 + 3.0, (tau - t * 1.15) * 2.4)) * 0.4;
         float clumps = ValueNoise(vec2(c * 3.4 + 17.0, (tau - t * 1.05) * 3.2)) * ValueNoise(vec2(c * 8.3 + 5.0, (tau - t * 1.1) * 5.5));
@@ -383,7 +384,8 @@ void main()
     float white = 0.0;
     if (fall) {
         vec3 fallLight = ambient + sun * (max(dot(N, L), 0.0) * shadow);
-        white = (0.15 + 0.8 * smoothstep(0.3, 0.9, streak)) * (1.0 - 0.85 * glass);
+        // (Whiter the further it has fallen - more air in it - the streaks only a variation on that.)
+        white = clamp(mix(0.35, 0.8, smoothstep(1.0, 12.0, vFlow.x)) + (streak - 0.5) * 0.6, 0.0, 1.0) * (1.0 - 0.85 * glass);
         water = mix(water, vec3(0.85, 0.88, 0.9) * (fallLight * 0.8 + 0.2), white);
     }
 
@@ -397,7 +399,7 @@ void main()
     // A fall: a broken, rushing surface (facets turned every way) averages a higher reflectance than a still one, and
     // its clear water is seen as a sheen of what it reflects; the white less (foam is rough).
     if (fall)
-        F = max(F + 0.06, mix(0.45, 0.2, style) * W.look.y * W.fall.x * (0.4 + 0.6 * glass)) * (1.0 - 0.7 * white);
+        F = max(F + 0.06, mix(0.45, 0.2, style) * W.look.y * W.fall.x * (0.5 + 0.5 * glass)) * (1.0 - 0.4 * white);
     vec3 reflected;
     float ssrHit = 0.0;
     if (under) {
@@ -422,7 +424,7 @@ void main()
     // The sun's glint: GGX with a roughness that grows with distance (a far ripple field is a blur of glints).
     if (!under && dot(sun, vec3(1.0)) > 0.0) {
         float rough = mix(0.06, 0.22, smoothstep(10.0, 300.0, dist)) + 0.1 * (1.0 - W.look2.z)
-                     + (fall ? 0.12 : 0.0);  // (a fall's rushing surface: a broad sheen, not a pin-point)
+                     + (fall ? 0.03 : 0.0);  // (a fall: a little broader - its surface rushes - but sharp)
         vec3 H = normalize(L + V);
         float NdotH = max(dot(Ns, H), 0.0), NdotL = max(dot(Ns, L), 0.0);
         float a2 = rough * rough * rough * rough;
@@ -430,7 +432,7 @@ void main()
         float D = a2 / (kPi * dd * dd);
         float Fs = 0.02 + 0.98 * pow(1.0 - max(dot(H, V), 0.0), 5.0);
         float vis = 0.25 / max(NdotL * NdotV, 0.05) * NdotL;
-        colour += sun * (D * Fs * vis * shadow * W.look.y * (1.0 - 0.6 * white));
+        colour += sun * (D * Fs * vis * shadow * W.look.y * (1.0 - 0.3 * white));
     }
 
     // A fall's sparkles: the rushing water is a mass of little facets turned every way, and where one turns a light
@@ -513,7 +515,14 @@ void main()
     // Local lights' share 0, reflectivity 0 (the water reflects by itself; the screen-space pass would add it twice),
     // the direct sunlight's share for the contact shadows.
     outLocal = vec4(0.0, 0.0, 0.2 * shadow, 1.0);
-    vec2 now = vClip.xy / vClip.w, before = vPrevClip.xy / max(vPrevClip.w, 1e-6);
-    outMotion = vec4(vPrevClip.w > 1e-6 ? (now - before) * 0.5 * W.viewport.xy * vec2(1.0, -1.0) : vec2(0.0), 0.0, 1.0);
+    // (A fall's motion: where its water was last frame - up the sheet by the water's speed there - not where the sheet
+    // was: the temporal filter then follows the pattern down instead of smearing it into a blur.)
+    vec4 prevClip = vPrevClip;
+    if (fall) {
+        float dt = clamp(t - W.time.y, 0.0, 0.1);
+        prevClip = W.prevViewProj * vec4(vPos - fallDown * ((3.0 + 9.8 * tau) * dt), 1.0);
+    }
+    vec2 now = vClip.xy / vClip.w, before = prevClip.xy / max(prevClip.w, 1e-6);
+    outMotion = vec4(prevClip.w > 1e-6 ? (now - before) * 0.5 * W.viewport.xy * vec2(1.0, -1.0) : vec2(0.0), 0.0, 1.0);
     outAlbedo = vec4(clamp(mix(deep / max(dot(light, kLuma), 0.05), vec3(0.85), foam), 0.0, 1.0), 1.0);
 }
