@@ -190,6 +190,7 @@ void RvkState::Present()
     PollMaterialMaps();       // material maps decoded in the background, uploaded between frames
     ParticleFrame();
     WeatherFrame();
+    SmokeFrame();
     // Hotkeys (Ctrl+Shift+...). Those for options change the setting (saved, shown in the settings window).
     bool chord = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000);
     static bool down[256];

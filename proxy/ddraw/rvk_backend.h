@@ -22,6 +22,9 @@ unsigned ComIndex(const char* name);              // counter index of "Interface
 void RvkLog(const char* fmt, ...);
 void ParticleFrame();                             // each presented frame (rvk_particles.cpp)
 void WeatherFrame();                              // each presented frame (rvk_weather.cpp)
+void SmokeFrame();                                // each presented frame (rvk_smoke.cpp)
+bool PatchSlot(HMODULE module, uint32_t vtable, uint32_t slot, uint32_t expected, void* hook, void** original,
+               const char* what);                 // (rvk_particles.cpp) module-relative vtable, expected entry
 void* PatchImport(HMODULE module, const char* dll, const char* function, void* hook);   // (com_trace.cpp) the old target
 bool RvkBackend();                                // RANDYVK_DDRAW=rvk installed (com_trace.cpp)
 void CallLogFrame(uint64_t presented);            // each present (rvk_device.cpp: RANDYVK_CALLLOG)
