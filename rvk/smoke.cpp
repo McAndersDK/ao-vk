@@ -87,7 +87,7 @@ static_assert(sizeof(SimPush) == 96, "push constants");
 // The per-draw block (smoke_common.glsl SmokeFrame, std140).
 struct SmokeFrame {
     d3d::Matrix viewProj, view;
-    float camera[4], box[4], colour[4], ambient[4], proj[4], viewport[4], fogColour[4], fogParams[4], detail[4];
+    float camera[4], box[4], colour[4], ambient[4], proj[4], viewport[4], fogColour[4], fogParams[4], detail[4], look[4];
 };
 
 void ArgbTo4(uint32_t c, float out[4])
@@ -684,6 +684,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         for (int i = 0; i < 3; ++i)
             sf.colour[i] = std::max(sf.colour[i], 0.1f) * P.brightness;   // (black smoke dark grey: lit and shadowed,
                                                                           //  not a flat shape)
+        sf.look[0] = std::clamp(P.opacity, 0.0f, 1.0f);
         sf.detail[0] = P.detail;
         sf.detail[1] = 1.2f;
         sf.detail[2] = 2.5f;

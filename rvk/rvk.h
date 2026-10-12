@@ -540,6 +540,7 @@ public:
         float stir = 1.0f;                      // RVK_SmokeStir: how much characters move it (0 not at all)
         float detail = 1.0f;                    // RVK_SmokeWisps: the wisps finer than the grid (0 none)
         float brightness = 1.0f;                // RVK_SmokeBright: its colour, x
+        float opacity = 1.0f;                   // RVK_SmokeOpaque: how opaque it is drawn, x (0..1)
     };
     struct SmokeSource {
         float pos[3] = {0, 0, 0};                // world: where it comes from (its box stands round it)

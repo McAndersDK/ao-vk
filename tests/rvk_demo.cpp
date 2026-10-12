@@ -1405,6 +1405,7 @@ float g_smokeDensity = 1.0f;      // --smoke-density X (RVK_SmokeDensity)
 float g_smokeWindScale = 1.0f;    // --smoke-wind X: the game's wind x X
 float g_smokeWisps = 1.0f;        // --smoke-wisps X (RVK_SmokeWisps)
 bool g_smokeTwo = false;          // --smoke-two: a second, bigger source
+float g_smokeOpaque = 1.0f;       // --smoke-opaque X (RVK_SmokeOpaque)
 float g_rainForce = 0.0f;         // --rain F: rain this hard (0..1; RVK_RainForce), the new weather on
 bool g_waterLamp = false;         // --water-lamp: a warm point light by the camera, as a character's lamp (with
                                   // --light-override, so the frame's lights carry it)
@@ -2865,6 +2866,7 @@ int main(int argc, char** argv)
         else if (a == "--smoke-walker") { g_smoke = g_smokeWalker = true; hdr = true; }
         else if (a == "--smoke-game") { g_smoke = g_smokeGame = true; hdr = true; }
         else if (a == "--smoke-two") g_smokeTwo = true;
+        else if (a == "--smoke-opaque" && i + 1 < argc) g_smokeOpaque = float(std::atof(argv[++i]));
         else if (a == "--smoke-wisps" && i + 1 < argc) g_smokeWisps = float(std::atof(argv[++i]));
         else if (a == "--smoke-wind" && i + 1 < argc) g_smokeWindScale = float(std::atof(argv[++i]));
         else if (a == "--smoke-density" && i + 1 < argc) g_smokeDensity = float(std::atof(argv[++i]));
@@ -3022,6 +3024,7 @@ int main(int argc, char** argv)
         smoke.enable = true;
         smoke.density = g_smokeDensity;
         smoke.detail = g_smokeWisps;
+        smoke.opacity = g_smokeOpaque;
         dev.SetSmokeParams(smoke);
     }
     if (g_rainForce > 0.0f) {
