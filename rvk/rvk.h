@@ -537,6 +537,7 @@ public:
         uint32_t quality = 2;                    // RVK_SmokeQual: 1 low (48^3), 2 medium (64^3), 3 high (80^3)
         float density = 1.0f;                   // RVK_SmokeDensity: how thick, x
         float stir = 1.0f;                      // RVK_SmokeStir: how much characters move it (0 not at all)
+        float detail = 1.0f;                    // RVK_SmokeWisps: the wisps finer than the grid (0 none)
     };
     struct SmokeSource {
         float pos[3] = {0, 0, 0};                // world: where it comes from (its box stands round it)
@@ -1518,10 +1519,12 @@ private:
     SmokeParams m_smokeParams;
     std::vector<SmokeVolume> m_smokeVolumes;
     SmokeImage m_smokeCurl, m_smokeDiv, m_smokePressure[2];
+    SmokeImage m_smokeNoise;                     // the wisps' noise (tiling; made once, smoke_sim.comp stage 10)
+    bool m_smokeNoiseMade = false;
     bool m_smokeSharedFresh = true;
     uint32_t m_smokeN = 0;                       // the cells' count along a side the images have
     double m_smokeLastClock = -1.0;
-    VkSampler m_smokeSampler = VK_NULL_HANDLE;
+    VkSampler m_smokeSampler = VK_NULL_HANDLE, m_smokeRepeatSampler = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_smokeSimSetLayout = VK_NULL_HANDLE, m_smokeSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_smokeSimLayout = VK_NULL_HANDLE, m_smokeLayout = VK_NULL_HANDLE;
     VkPipeline m_smokeSimPipeline = VK_NULL_HANDLE, m_smokePipeline = VK_NULL_HANDLE;

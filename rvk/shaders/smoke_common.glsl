@@ -12,6 +12,8 @@ layout(set = 0, binding = 0) uniform SmokeFrame {
     vec4 viewport;      // width, height, 1 / width, 1 / height
     vec4 fogColour;     // rgb; w: 1 = fog on
     vec4 fogParams;     // start, end, density, table mode (D3DFOG_*)
+    vec4 detail;        // the wisps finer than the grid, carried by the flow: x how strong; y their cycle (s); z how
+                        // fine (per world unit); w a seed
 } S;
 
 float SmokeViewZ(float d) { return S.proj.y / (min(d, 0.9999999) - S.proj.x); }

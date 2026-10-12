@@ -9,6 +9,8 @@
 layout(set = 0, binding = 1) uniform sampler3D density;     // R density
 layout(set = 0, binding = 2) uniform sampler3D sunLight;    // R the sunlight reaching the cell (0..1)
 layout(set = 0, binding = 3) uniform sampler2D sceneDepth;
+layout(set = 0, binding = 5) uniform sampler3D velocity;    // xyz the flow (world / s)
+layout(set = 0, binding = 6) uniform sampler3D wispNoise;   // R tiling noise, 8 lattice cells across (smoke_sim.comp 10)
 
 layout(location = 0) in vec3 vWorld;
 
@@ -19,6 +21,19 @@ layout(location = 3) out vec4 outMotion;
 layout(location = 4) out vec4 outAlbedo;
 
 const float kPi = 3.14159265;
+
+float Wisps(vec3 q) { return texture(wispNoise, q * 0.125).r; }
+
+// The wisps at a point: noise carried along by the flow there, for one cycle, then started again - two cycles half a
+// cycle apart, each faded out as it restarts, so nothing jumps (a flow map).
+float Detail(vec3 p, vec3 vel)
+{
+    float cycle = S.detail.y, time = FL.wind.z / cycle + S.detail.w;
+    float ph1 = fract(time), ph2 = fract(time + 0.5);
+    vec3 q = p * S.detail.z, drift = vel * (cycle * S.detail.z);
+    float n1 = Wisps(q - drift * ph1), n2 = Wisps(q - drift * ph2 + 31.7);
+    return mix(n1, n2, abs(1.0 - 2.0 * ph1));
+}
 
 float Fog(float d)
 {
@@ -79,8 +94,14 @@ void main()
         float dens = texture(density, uvw).r;
         if (dens < 1e-4)
             continue;
+        // Wisps: thin smoke frays right through, thick keeps more of its body (the average kept: 2 x the noise's 0.5).
+        float fray = S.detail.x * mix(0.55, 1.0, 1.0 - smoothstep(0.0, 0.6, dens));
+        if (fray > 0.0)
+            dens *= mix(1.0, 2.0 * smoothstep(0.3, 0.7, Detail(p, texture(velocity, uvw).xyz)), fray);
         float a = 1.0 - exp(-dens * S.colour.w * ds);
-        vec3 lit = S.ambient.rgb + sun * texture(sunLight, uvw).r;
+        // The sky's light, too, less inside the smoke (as far in as the sun's is shadowed, about).
+        float sunIn = texture(sunLight, uvw).r;
+        vec3 lit = S.ambient.rgb * mix(0.45, 1.0, sunIn) + sun * sunIn;
         for (uint k = 0u; k < lamps; ++k) {
             Light li = FL.lights[k];
             uint type = uint(li.position.w + 0.5);

@@ -38,6 +38,7 @@ constexpr uint32_t kSmokeSimMax = 6;            // ... simulated a frame (the ne
 constexpr float kSmokeRange = 160.0f;           // simulated and drawn this near only
 constexpr uint32_t kJacobi = 24;                // pressure steps
 constexpr float kWarmUp = 2.0f, kWarmSpeed = 3.0f;
+constexpr uint32_t kNoiseSize = 64;             // the wisps' noise image (cells a side)
 
 constexpr uint32_t kSmokeBodies = 8;            // characters stirring a volume (smoke_sim.comp Bodies)
 constexpr float kBodyRadius = 0.35f;            // a character's (world)
@@ -48,6 +49,35 @@ struct SmokeBodies {
     float pos[kSmokeBodies][4], vel[kSmokeBodies][4];
 };
 
+constexpr float kWindScale = 0.1f, kWindMax = 0.8f;    // of the game's wind (its sprites drift far less than it says)
+
+// The wind a source's smoke is carried by (world / s, x z).
+void SmokeWind(const Device::SmokeSource& s, const float rain[3], float out[2])
+{
+    out[0] = (s.wind[0] + rain[0]) * kWindScale;
+    out[1] = (s.wind[2] + rain[2]) * kWindScale;
+    const float l = std::hypot(out[0], out[1]);
+    if (l > kWindMax) { out[0] *= kWindMax / l; out[1] *= kWindMax / l; }
+}
+
+// A source's box: standing on it, the source near its floor - and upwind of the middle, as far as the wind blows
+// it (the plume leans downwind, in the box).
+void SmokeCorner(const Device::SmokeSource& s, const float wind[2], float out[3])
+{
+    out[0] = s.pos[0] - s.size * (0.5f - 0.3f * wind[0] / kWindMax);
+    out[1] = s.pos[1] - s.size * 0.08f;
+    out[2] = s.pos[2] - s.size * (0.5f - 0.3f * wind[1] / kWindMax);
+}
+
+// How hard a source puffs now (0.2..1): uneven, so the smoke rises in billows, not as a steady column.
+float Puff(double t, uint64_t key)
+{
+    const double seed = double(key % 997u) * 0.37;
+    const double x = 0.55 + 0.25 * std::sin(t * 2.3 + seed) + 0.2 * std::sin(t * 3.7 + seed * 1.9) +
+                     0.12 * std::sin(t * 6.1 + seed * 0.7);
+    return float(std::clamp(x, 0.2, 1.0));
+}
+
 struct SimPush {
     float a[4], b[4], c[4], d[4], e[4], f[4];   // smoke_sim.comp Params
 };
@@ -56,7 +86,7 @@ static_assert(sizeof(SimPush) == 96, "push constants");
 // The per-draw block (smoke_common.glsl SmokeFrame, std140).
 struct SmokeFrame {
     d3d::Matrix viewProj, view;
-    float camera[4], box[4], colour[4], ambient[4], proj[4], viewport[4], fogColour[4], fogParams[4];
+    float camera[4], box[4], colour[4], ambient[4], proj[4], viewport[4], fogColour[4], fogParams[4], detail[4];
 };
 
 void ArgbTo4(uint32_t c, float out[4])
@@ -102,8 +132,9 @@ void Device::SmokeSourceFrame(uint64_t key, const SmokeSource& source)
         v->key = key;
         v->fresh = true;
         v->age = 0.0f;
-        for (int i = 0; i < 3; ++i)
-            v->corner[i] = source.pos[i] - source.size * (i == 1 ? 0.08f : 0.5f);
+        float wind[2];
+        SmokeWind(source, m_rainWind, wind);
+        SmokeCorner(source, wind, v->corner);
     }
     v->source = source;
     v->lastSeen = m_frameClock;
@@ -147,6 +178,8 @@ void Device::DestroySmokeImages()
         v.age = 0.0f;
     }
     destroy(m_smokeCurl);
+    destroy(m_smokeNoise);
+    m_smokeNoiseMade = false;
     destroy(m_smokeDiv);
     destroy(m_smokePressure[0]);
     destroy(m_smokePressure[1]);
@@ -164,6 +197,9 @@ bool Device::CreateSmokeResources(std::string* error)
     si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     si.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
     if (!Check(vkCreateSampler(m_device, &si, nullptr, &m_smokeSampler), "smoke sampler", error))
+        return false;
+    si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;   // (the wisps' noise)
+    if (!Check(vkCreateSampler(m_device, &si, nullptr, &m_smokeRepeatSampler), "smoke sampler", error))
         return false;
     // The simulation: 0, 1, 10 sampled; 2..9 storage images; 11 the characters.
     {
@@ -202,15 +238,16 @@ bool Device::CreateSmokeResources(std::string* error)
         if (!ok)
             return false;
     }
-    // The rendering: 0 the block, 1 the density, 2 the sunlight, 3 the scene's depth, 4 the frame lights.
-    VkDescriptorSetLayoutBinding b[5] = {};
-    for (uint32_t i = 0; i < 5; ++i)
+    // The rendering: 0 the block, 1 the density, 2 the sunlight, 3 the scene's depth, 4 the frame lights, 5 the flow,
+    // 6 the wisps' noise.
+    VkDescriptorSetLayoutBinding b[7] = {};
+    for (uint32_t i = 0; i < 7; ++i)
         b[i] = {i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                 nullptr};
     b[0].descriptorType = b[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     VkDescriptorSetLayoutCreateInfo sl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     sl.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-    sl.bindingCount = 5;
+    sl.bindingCount = 7;
     sl.pBindings = b;
     if (!Check(vkCreateDescriptorSetLayout(m_device, &sl, nullptr, &m_smokeSetLayout), "smoke set", error))
         return false;
@@ -298,6 +335,7 @@ void Device::DestroySmokeResources()
     if (m_smokeSetLayout) { vkDestroyDescriptorSetLayout(m_device, m_smokeSetLayout, nullptr); m_smokeSetLayout = VK_NULL_HANDLE; }
     if (m_smokeSimSetLayout) { vkDestroyDescriptorSetLayout(m_device, m_smokeSimSetLayout, nullptr); m_smokeSimSetLayout = VK_NULL_HANDLE; }
     if (m_smokeSampler) { vkDestroySampler(m_device, m_smokeSampler, nullptr); m_smokeSampler = VK_NULL_HANDLE; }
+    if (m_smokeRepeatSampler) { vkDestroySampler(m_device, m_smokeRepeatSampler, nullptr); m_smokeRepeatSampler = VK_NULL_HANDLE; }
 }
 
 // The smoke: simulated, then drawn over the finished scene (EndScene: its rendering just closed).
@@ -360,6 +398,20 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
     };
     bool ok = ensure(m_smokeCurl, rgba, false) && ensure(m_smokeDiv, r32, false) && ensure(m_smokePressure[0], r32, false) &&
               ensure(m_smokePressure[1], r32, false);
+    if (ok && !m_smokeNoise.image) {             // (its own size, not the grid's)
+        ok = MakeSmokeImage(r16, kNoiseSize, m_smokeNoise);
+        if (ok) {
+            VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+            b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+            b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b.image = m_smokeNoise.image;
+            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            toGeneral.push_back(b);
+        }
+    }
     for (auto& [d, v] : live) {
         ok = ok && ensure(v->vel[0], rgba, true) && ensure(v->vel[1], rgba, true) && ensure(v->dens[0], rgba, true) &&
              ensure(v->dens[1], rgba, true) && ensure(v->light, r16, false);
@@ -408,16 +460,17 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
     const float sl = std::max(std::sqrt(sun[0] * sun[0] + sun[1] * sun[1] + sun[2] * sun[2]), 1e-6f);
     for (float& s : sun) s /= sl;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_smokeSimPipeline);
-    const uint32_t groups = n / 4;
+    uint32_t groups = n / 4;
     EnsureRingSpace(live.size() * (sizeof(SmokeBodies) + 256) + 1024);
     Frame& f = m_frames[m_frameIndex];
     for (auto& [dist, vp] : live) {
         SmokeVolume& v = *vp;
         const SmokeSource& s = v.source;
         const bool fed = now - v.lastSeen < 0.25;           // a source gone: its smoke goes on, nothing added
-        float corner[3], shift[3];
+        float corner[3], shift[3], wind[2];
+        SmokeWind(s, m_rainWind, wind);
+        SmokeCorner(s, wind, corner);
         for (int i = 0; i < 3; ++i) {
-            corner[i] = s.pos[i] - s.size * (i == 1 ? 0.08f : 0.5f);
             shift[i] = (corner[i] - v.corner[i]) / s.size;
             v.corner[i] = corner[i];
         }
@@ -428,18 +481,20 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         p.a[1] = float(n);
         p.a[2] = step;
         p.a[3] = s.size;
-        p.b[0] = 0.5f;
-        p.b[1] = 0.08f;
-        p.b[2] = 0.5f;
+        for (int i = 0; i < 3; ++i)
+            p.b[i] = (s.pos[i] - corner[i]) / s.size;
         p.b[3] = s.radius / s.size;
-        p.c[0] = fed ? s.rate * P.density : 0.0f;
-        p.c[1] = fed ? s.heat : 0.0f;
-        p.c[2] = fed ? s.speed : 0.0f;
+        const float puff = Puff(now, v.key);
+        // (A small source denser, so it gives about as much smoke; RVK_SmokeDensity is the extinction's, not this.)
+        const float small = std::clamp(0.5f / std::max(s.radius, 0.05f), 1.0f, 3.0f);
+        p.c[0] = fed ? s.rate * small * (0.5f + 0.5f * puff) : 0.0f;
+        p.c[1] = fed ? s.heat * (0.6f + 0.8f * puff) : 0.0f;
+        p.c[2] = fed ? s.speed * (0.4f + 1.0f * puff) : 0.0f;
         p.c[3] = 2.0f / std::max(s.life, 0.3f);            // (the game's sprites fade out over their life)
-        p.d[0] = 1.2f;
-        p.d[1] = 12.0f;
-        p.d[2] = s.wind[0] + m_rainWind[0] * 0.3f;
-        p.d[3] = s.wind[2] + m_rainWind[2] * 0.3f;
+        p.d[0] = 2.5f;
+        p.d[1] = 18.0f;
+        p.d[2] = wind[0];
+        p.d[3] = wind[1];
         std::memcpy(p.e, shift, sizeof(shift));
         std::memcpy(p.f, sun, sizeof(sun));
         p.f[3] = 1.6f;
@@ -478,6 +533,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         std::memcpy(bodiesCpu, &bodies, sizeof(bodies));
         VkDescriptorBufferInfo bodiesInfo{f.ring, bodiesOffset, sizeof(SmokeBodies)};
         const uint32_t c = v.cur, o = c ^ 1u;
+        VkImageView lightView = v.light.view;
         // Bindings: 0 velIn, 1 densIn (sampled); 2 velOut, 3 densOut, 4 curl, 5 pIn, 6 pOut, 7 div, 8 velRead, 9 light;
         // 10 the curl image sampled (MacCormack's forward step).
         auto dispatch = [&](int stage, const SmokeImage& velIn, const SmokeImage& densIn, const SmokeImage& velOut,
@@ -488,7 +544,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
                 {VK_NULL_HANDLE, velOut.view, VK_IMAGE_LAYOUT_GENERAL}, {VK_NULL_HANDLE, densOut.view, VK_IMAGE_LAYOUT_GENERAL},
                 {VK_NULL_HANDLE, m_smokeCurl.view, VK_IMAGE_LAYOUT_GENERAL}, {VK_NULL_HANDLE, pIn.view, VK_IMAGE_LAYOUT_GENERAL},
                 {VK_NULL_HANDLE, pOut.view, VK_IMAGE_LAYOUT_GENERAL},   {VK_NULL_HANDLE, m_smokeDiv.view, VK_IMAGE_LAYOUT_GENERAL},
-                {VK_NULL_HANDLE, velRead.view, VK_IMAGE_LAYOUT_GENERAL}, {VK_NULL_HANDLE, v.light.view, VK_IMAGE_LAYOUT_GENERAL},
+                {VK_NULL_HANDLE, velRead.view, VK_IMAGE_LAYOUT_GENERAL}, {VK_NULL_HANDLE, lightView, VK_IMAGE_LAYOUT_GENERAL},
                 {m_smokeSampler, m_smokeCurl.view, VK_IMAGE_LAYOUT_GENERAL},
             };
             VkWriteDescriptorSet w[12] = {};
@@ -511,6 +567,16 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
         };
         SmokeImage* pr = m_smokePressure;
+        if (!m_smokeNoiseMade) {                 // (once: the wisps' noise, written through the light binding)
+            lightView = m_smokeNoise.view;
+            p.a[1] = float(kNoiseSize);
+            groups = kNoiseSize / 4;
+            dispatch(10, v.vel[c], v.dens[c], v.vel[o], v.dens[o], pr[0], pr[1], v.vel[c], 0.0f);
+            lightView = v.light.view;
+            p.a[1] = float(n);
+            groups = n / 4;
+            m_smokeNoiseMade = true;
+        }
         dispatch(0, v.vel[c], v.dens[c], v.vel[o], v.dens[o], pr[0], pr[1], v.vel[c], float(m_frameNumber % 65521u));
         dispatch(1, v.vel[c], v.dens[c], v.vel[c], v.dens[o], pr[0], pr[1], v.vel[o], 0.0f);   // curl of vel[o]
         dispatch(2, v.vel[o], v.dens[c], v.vel[c], v.dens[o], pr[0], pr[1], v.vel[o], 0.0f);   // vorticity -> vel[c]
@@ -574,6 +640,12 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         std::memcpy(sf.box, v.corner, sizeof(v.corner));
         sf.box[3] = v.source.size;
         ArgbTo4(v.source.colour, sf.colour);
+        for (int i = 0; i < 3; ++i)
+            sf.colour[i] = std::max(sf.colour[i], 0.2f);   // (black smoke dark grey: lit and shadowed, not a flat shape)
+        sf.detail[0] = P.detail;
+        sf.detail[1] = 1.2f;
+        sf.detail[2] = 2.5f;
+        sf.detail[3] = float(v.key % 101u) * 0.137f;
         sf.colour[3] = 1.6f * P.density * std::clamp(v.age / kWarmUp, 0.0f, 1.0f);   // (fading in while it warms up)
         if (m_terrainAmbient[3] > 0.5f)
             std::memcpy(sf.ambient, m_terrainAmbient, 12);
@@ -602,8 +674,10 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         VkDescriptorImageInfo densInfo{m_smokeSampler, v.dens[v.cur].view, VK_IMAGE_LAYOUT_GENERAL};
         VkDescriptorImageInfo sunInfo{m_smokeSampler, v.light.view, VK_IMAGE_LAYOUT_GENERAL};
         VkDescriptorImageInfo depthInfo{m_pointSampler, m_depthView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        VkWriteDescriptorSet w[5] = {};
-        for (uint32_t i = 0; i < 5; ++i) {
+        VkDescriptorImageInfo velInfo{m_smokeSampler, v.vel[v.cur].view, VK_IMAGE_LAYOUT_GENERAL};
+        VkDescriptorImageInfo noiseInfo{m_smokeRepeatSampler, m_smokeNoise.view, VK_IMAGE_LAYOUT_GENERAL};
+        VkWriteDescriptorSet w[7] = {};
+        for (uint32_t i = 0; i < 7; ++i) {
             w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w[i].dstBinding = i;
             w[i].descriptorCount = 1;
@@ -615,7 +689,9 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         w[2].pImageInfo = &sunInfo;
         w[3].pImageInfo = &depthInfo;
         w[4].pBufferInfo = &lightsInfo;
-        vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_smokeLayout, 0, 5, w);
+        w[5].pImageInfo = &velInfo;
+        w[6].pImageInfo = &noiseInfo;
+        vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_smokeLayout, 0, 7, w);
         vkCmdDraw(cmd, 36, 1, 0, 0);
     }
     vkCmdEndRendering(cmd);

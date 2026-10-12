@@ -1399,6 +1399,11 @@ float g_waterEye[3] = {0, 0, 0};  // --water-eye X Y Z (the dump's coordinates):
 bool g_waterEyeSet = false;       // --water-mesh-at
 bool g_smoke = false;             // --smoke: a smoke source on the ground in front of the camera (the new smoke on)
 bool g_smokeWalker = false;       // --smoke-walker: a "character" walking to and fro through the smoke
+bool g_smokeGame = false;         // --smoke-game: the source as the game's barrel smoke hands it over (small, no push
+                                  // of its own, 6 s, the game's wind)
+float g_smokeDensity = 1.0f;      // --smoke-density X (RVK_SmokeDensity)
+float g_smokeWindScale = 1.0f;    // --smoke-wind X: the game's wind x X
+float g_smokeWisps = 1.0f;        // --smoke-wisps X (RVK_SmokeWisps)
 float g_rainForce = 0.0f;         // --rain F: rain this hard (0..1; RVK_RainForce), the new weather on
 bool g_waterLamp = false;         // --water-lamp: a warm point light by the camera, as a character's lamp (with
                                   // --light-override, so the frame's lights carry it)
@@ -1734,6 +1739,10 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
                 src.pos[2] = -12.0f;
                 src.pos[1] = height(src.pos[0], src.pos[2]);
                 src.colour = 0x8A8580;
+                if (g_smokeGame) {
+                    src.radius = 0.25f; src.speed = 1.0f; src.life = 6.0f; src.size = 5.1f; src.colour = 0;
+                    src.wind[0] = 7.65f * g_smokeWindScale; src.wind[1] = 1.36f * g_smokeWindScale; src.wind[2] = -1.92f * g_smokeWindScale;
+                }
                 dev.SmokeSourceFrame(1, src);
             }
         }
@@ -2844,6 +2853,10 @@ int main(int argc, char** argv)
         else if (a == "--water-lamp") g_waterLamp = true;
         else if (a == "--smoke") { g_smoke = true; hdr = true; }
         else if (a == "--smoke-walker") { g_smoke = g_smokeWalker = true; hdr = true; }
+        else if (a == "--smoke-game") { g_smoke = g_smokeGame = true; hdr = true; }
+        else if (a == "--smoke-wisps" && i + 1 < argc) g_smokeWisps = float(std::atof(argv[++i]));
+        else if (a == "--smoke-wind" && i + 1 < argc) g_smokeWindScale = float(std::atof(argv[++i]));
+        else if (a == "--smoke-density" && i + 1 < argc) g_smokeDensity = float(std::atof(argv[++i]));
         else if (a == "--rain" && i + 1 < argc) { g_rainForce = float(std::atof(argv[++i])); hdr = true; }
         else if (a == "--water-mesh-at" && i + 3 < argc) { for (float& x : g_waterMeshAt) x = float(std::atof(argv[++i])); }
         else if (a == "--water-eye" && i + 3 < argc) { for (float& x : g_waterEye) x = float(std::atof(argv[++i])); g_waterEyeSet = true; }
@@ -2996,6 +3009,8 @@ int main(int argc, char** argv)
     if (g_smoke) {
         Device::SmokeParams smoke;
         smoke.enable = true;
+        smoke.density = g_smokeDensity;
+        smoke.detail = g_smokeWisps;
         dev.SetSmokeParams(smoke);
     }
     if (g_rainForce > 0.0f) {
