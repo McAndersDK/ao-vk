@@ -541,11 +541,12 @@ public:
         float pos[3] = {0, 0, 0};                // world: where it comes from (its box stands round it)
         float radius = 0.6f;                     // the source's size (world)
         float rate = 0.6f;                       // the density it keeps where it comes from
-        float heat = 2.0f;                       // temperature added a second (it rises the more)
+        float heat = 1.0f;                       // temperature added a second (it rises the more)
         float speed = 1.0f;                      // its push upwards (world / s)
         float life = 4.0f;                       // about how long the smoke lasts (s)
         float size = 8.0f;                       // its box (world)
         uint32_t colour = 0x707070;              // 0xRRGGBB
+        float wind[3] = {0, 0, 0};               // the wind carrying it (world / s; the game's effects' wind)
     };
     void SetSmokeParams(const SmokeParams& params) { m_smokeParams = params; }
     void SmokeSourceFrame(uint64_t key, const SmokeSource& source);

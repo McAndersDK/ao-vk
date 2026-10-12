@@ -419,8 +419,8 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         p.c[3] = 2.0f / std::max(s.life, 0.3f);            // (the game's sprites fade out over their life)
         p.d[0] = 1.2f;
         p.d[1] = 12.0f;
-        p.d[2] = m_rainWind[0] * 0.3f;
-        p.d[3] = m_rainWind[2] * 0.3f;
+        p.d[2] = s.wind[0] + m_rainWind[0] * 0.3f;
+        p.d[3] = s.wind[2] + m_rainWind[2] * 0.3f;
         std::memcpy(p.e, shift, sizeof(shift));
         std::memcpy(p.f, sun, sizeof(sun));
         p.f[3] = 1.6f;
