@@ -684,7 +684,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         for (int i = 0; i < 3; ++i)
             sf.colour[i] = std::max(sf.colour[i], 0.1f) * P.brightness;   // (black smoke dark grey: lit and shadowed,
                                                                           //  not a flat shape)
-        sf.look[0] = std::clamp(P.opacity, 0.0f, 1.0f);
+        sf.look[0] = std::clamp(P.opacity, 0.0f, 8.0f);
         sf.detail[0] = P.detail;
         sf.detail[1] = 1.2f;
         sf.detail[2] = 2.5f;

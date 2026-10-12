@@ -142,7 +142,7 @@ Setting g_settings[] = {
     {"RVK_SmokeStir",  "Smoke: how much characters stir it",                      "Experimental",     Float, 0, 2, 0.25f, 1, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeWisps", "Smoke: fine wisps carried by the flow",                   "Experimental",     Float, 0, 1, 0.25f, 1, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeBright","Smoke: how light it is",                                   "Experimental",     Float, 0.25f, 3, 0.25f, 1, nullptr, 0, "RVK_SmokeOn"},
-    {"RVK_SmokeOpaque", "Smoke: how opaque it is drawn",                           "Experimental",     Float, 0.05f, 1, 0.05f, 1, nullptr, 0, "RVK_SmokeOn"},
+    {"RVK_SmokeOpaque", "Smoke: how opaque it is drawn",                           "Experimental",     Float, 0.05f, 8, 0.05f, 1, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeGame",  "Smoke: the game's smoke sprites too",                     "Experimental",     Bool,  0, 1, 1, 0, nullptr, 0, "RVK_SmokeOn"},
 
     {"RVK_SunShadow",  "Sun shadows",                                              "Shadows",          Bool,  0, 1, 1, 1, "RANDYVK_SHADOWS", 0},

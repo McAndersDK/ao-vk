@@ -119,8 +119,11 @@ void main()
     float alpha = 1.0 - transmit;
     float fog = Fog(enter + 0.5 * (leave - enter));
     light = mix(S.fogColour.rgb * alpha, light, fog);
-    light *= S.look.x;                           // (premultiplied: see-through as a whole, its shape and shading kept)
-    alpha *= S.look.x;
+    // How opaque (premultiplied, its shape and shading kept): up to 1 see-through as a whole; above, the smoke's cover
+    // as if it were that many times as thick (1 - transmit^k) - its dense parts hide what is behind.
+    float cover = S.look.x <= 1.0 ? alpha * S.look.x : 1.0 - pow(transmit, S.look.x);
+    light *= cover / max(alpha, 1e-5);
+    alpha = cover;
     outScene = vec4(light, alpha);
     // The local-fraction target as covered as the scene: R (whose ambient occlusion is waived) towards 1 - the tone
     // mapping's occlusion, applied after this, must not darken the smoke; its reflectivity (G) and sun share (B, the

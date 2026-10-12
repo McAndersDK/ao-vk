@@ -367,7 +367,7 @@ Some useful ones:
 | `RVK_SmokeStir` | 1 | how much characters stir it: walking through pushes it aside and leaves eddies (0: not at all) |
 | `RVK_SmokeWisps` | 1 | fine wisps finer than its grid, carried along by the simulated flow (0: none) |
 | `RVK_SmokeBright` | 1 | how light the smoke is (0.25 - 3) |
-| `RVK_SmokeOpaque` | 1 | how opaque it is drawn (0.05 - 1): see-through as a whole, unlike the density its shape and shading stay |
+| `RVK_SmokeOpaque` | 1 | how opaque it is drawn (0.05 - 8), its shape and shading kept (unlike the density): below 1 see-through as a whole; above 1 its cover as if that many times as thick - its dense parts hide what is behind them |
 | `RVK_SmokeGame` | 0 | the game's own smoke sprites drawn as well (1) |
 
 ### Hotkeys (Ctrl+Shift + key)
