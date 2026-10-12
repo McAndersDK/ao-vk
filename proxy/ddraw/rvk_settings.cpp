@@ -137,6 +137,7 @@ Setting g_settings[] = {
     {"RVK_SmokeOn",    "Simulated smoke (needs HDR)",  "Experimental",    Bool,  0, 1, 1, 0, nullptr, 0},
     {"RVK_SmokeQual",  "Smoke: quality (1 low, 2 medium, 3 high)",                "Experimental",     Int,   1, 3, 1, 2, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeDensity","Smoke: how thick",                                         "Experimental",     Float, 0.1f, 4, 0.1f, 1, nullptr, 0, "RVK_SmokeOn"},
+    {"RVK_SmokeGame",  "Smoke: the game's smoke sprites too",                     "Experimental",     Bool,  0, 1, 1, 0, nullptr, 0, "RVK_SmokeOn"},
 
     {"RVK_SunShadow",  "Sun shadows",                                              "Shadows",          Bool,  0, 1, 1, 1, "RANDYVK_SHADOWS", 0},
     {"RVK_SunRes",     "Resolution (4096 / 8192)",  "Shadows",          Choice, 1024, 8192, 1, 2048, nullptr, 0, "RVK_SunShadow", "1024 2048 4096 8192"},
