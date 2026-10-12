@@ -72,7 +72,7 @@ void main()
         // this stage) - finer jitter would only average away.
         uint step_ = uint(P.e.w) / 6u;
         ivec3 eddy = id / 3;
-        v.xz += inSource * P.c.z * 1.6 * vec2(Jitter(eddy, step_), Jitter(eddy, step_ + 7919u));
+        v.xz += inSource * P.c.z * 0.8 * vec2(Jitter(eddy, step_), Jitter(eddy, step_ + 7919u));
         if (id.y == 0) v.y = max(v.y, 0.0);                              // the ground
         v *= exp(-0.05 * dt);
         imageStore(velOut, id, vec4(v, 0.0));
@@ -146,7 +146,10 @@ void main()
         dens.r = clamp(dens.r + 0.5 * (texelFetch(densIn, id, 0).r - imageLoad(divImg, id).r), lo, hi);
         vec3 d = (uvw - P.b.xyz) / max(P.b.w, 1e-4);
         float inSource = exp(-dot(d, d));
-        dens.r = max(dens.r * exp(-P.c.w * dt), P.c.x * inSource);
+        // (Built up there over a moment - no blob popping in - up to the level, no more.)
+        float level = P.c.x * inSource;
+        dens.r = dens.r * exp(-P.c.w * dt);
+        dens.r = max(dens.r, min(dens.r + level * 4.0 * dt, level));
         dens.g = (dens.g + P.c.y * inSource * dt) * exp(-0.6 * dt);
         // Fading out towards the walls and the top (what reaches them leaves the box).
         vec3 edge = min(uvw, 1.0 - uvw);

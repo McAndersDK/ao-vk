@@ -5,7 +5,8 @@
 // along it; the sunlight through it), then ray-marched over the finished scene (smoke.vert/.frag), before the rain.
 //
 // A box follows its source; its contents stay where they are in the world (the simulation reads them shifted by the
-// box's move). Sources not handed over any more go on until their smoke has faded (about their life x 1.5); the
+// box's move). A new volume warms up: its first kWarmUp seconds simulated kWarmSpeed times as fast while it fades in,
+// so a source coming into view shows a grown plume, not one growing from nothing. Sources not handed over any more go on until their smoke has faded (about their life x 1.5); the
 // volumes are kept for the next. The velocity and the density are kept in pairs per volume (one read, one written,
 // swapped each step); the curl, the divergence and the pressure are scratch, shared by all.
 #include "internal.h"
@@ -36,6 +37,7 @@ constexpr uint32_t kSmokeMax = 8;               // volumes
 constexpr uint32_t kSmokeSimMax = 6;            // ... simulated a frame (the nearest)
 constexpr float kSmokeRange = 160.0f;           // simulated and drawn this near only
 constexpr uint32_t kJacobi = 24;                // pressure steps
+constexpr float kWarmUp = 2.0f, kWarmSpeed = 3.0f;
 
 struct SimPush {
     float a[4], b[4], c[4], d[4], e[4], f[4];   // smoke_sim.comp Params
@@ -90,6 +92,7 @@ void Device::SmokeSourceFrame(uint64_t key, const SmokeSource& source)
         }
         v->key = key;
         v->fresh = true;
+        v->age = 0.0f;
         for (int i = 0; i < 3; ++i)
             v->corner[i] = source.pos[i] - source.size * (i == 1 ? 0.08f : 0.5f);
     }
@@ -132,6 +135,7 @@ void Device::DestroySmokeImages()
         for (int k = 0; k < 2; ++k) { destroy(v.vel[k]); destroy(v.dens[k]); }
         destroy(v.light);
         v.fresh = true;
+        v.age = 0.0f;
     }
     destroy(m_smokeCurl);
     destroy(m_smokeDiv);
@@ -405,9 +409,12 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
             shift[i] = (corner[i] - v.corner[i]) / s.size;
             v.corner[i] = corner[i];
         }
+        const bool warming = v.age < kWarmUp;
+        const float step = warming ? dt * kWarmSpeed : dt;
+        v.age += dt;
         SimPush p{};
         p.a[1] = float(n);
-        p.a[2] = dt;
+        p.a[2] = step;
         p.a[3] = s.size;
         p.b[0] = 0.5f;
         p.b[1] = 0.08f;
@@ -520,7 +527,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         std::memcpy(sf.box, v.corner, sizeof(v.corner));
         sf.box[3] = v.source.size;
         ArgbTo4(v.source.colour, sf.colour);
-        sf.colour[3] = 1.6f * P.density;
+        sf.colour[3] = 1.6f * P.density * std::clamp(v.age / kWarmUp, 0.0f, 1.0f);   // (fading in while it warms up)
         if (m_terrainAmbient[3] > 0.5f)
             std::memcpy(sf.ambient, m_terrainAmbient, 12);
         else

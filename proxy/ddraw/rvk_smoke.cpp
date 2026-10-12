@@ -122,7 +122,10 @@ void __fastcall SmokeUpdate(void* self, void*)
     std::memcpy(s.pos, pos, sizeof(pos));
     const float startSize = std::isfinite(sizes[0] + sizes[1]) ? 0.5f * (sizes[0] + sizes[1]) : 1.0f;
     const float rise = std::isfinite(speed[0] + speed[1]) && speed[1] > 0.05f ? 0.5f * (speed[0] + speed[1]) : 1.0f;
-    s.radius = std::clamp(0.2f * startSize + 0.5f * std::max(radius[1], 0.0f), 0.15f, 2.0f);
+    // (Its sprites start nearly as points and grow as they rise: the source is the smallest of them, the plume widens
+    // by itself.)
+    const float smallest = std::isfinite(sizes[0]) ? std::max(sizes[0], 0.0f) : 0.5f;
+    s.radius = std::clamp(0.25f * smallest + 0.5f * std::max(radius[1], 0.0f) + 0.15f, 0.12f, 1.5f);
     s.speed = std::clamp(rise, 0.3f, 4.0f);
     s.life = std::isfinite(life) ? std::clamp(life, 1.0f, 12.0f) : 4.0f;
     s.size = std::clamp(s.speed * s.life * 0.6f + 6.0f * s.radius, 3.0f, 16.0f);

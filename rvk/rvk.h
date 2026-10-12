@@ -1510,6 +1510,7 @@ private:
         double lastSeen = -1e9;                  // m_frameClock it was last handed over
         float corner[3] = {0, 0, 0};             // the box's lowest corner (world)
         bool fresh = true;                       // its images to be cleared first
+        float age = 0.0f;                        // seconds simulated (warming up: faster, fading in)
         uint32_t cur = 0;                        // which of each pair holds the state
         SmokeImage vel[2], dens[2], light;
     };
