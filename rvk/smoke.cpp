@@ -39,6 +39,7 @@ constexpr float kSmokeRange = 160.0f;           // simulated and drawn this near
 constexpr uint32_t kJacobi = 24;                // pressure steps
 constexpr float kWarmUp = 2.0f, kWarmSpeed = 3.0f;
 constexpr uint32_t kNoiseSize = 64;             // the wisps' noise image (cells a side)
+constexpr float kExtinction = 3.2f;             // per world unit at density 1 (x RVK_SmokeDensity)
 
 constexpr uint32_t kSmokeBodies = 8;            // characters stirring a volume (smoke_sim.comp Bodies)
 constexpr float kBodyRadius = 0.35f;            // a character's (world)
@@ -486,7 +487,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         p.b[3] = s.radius / s.size;
         const float puff = Puff(now, v.key);
         // (A small source denser, so it gives about as much smoke; RVK_SmokeDensity is the extinction's, not this.)
-        const float small = std::clamp(0.5f / std::max(s.radius, 0.05f), 1.0f, 3.0f);
+        const float small = std::clamp(0.6f / std::max(s.radius, 0.05f), 1.0f, 4.0f);
         p.c[0] = fed ? s.rate * small * (0.5f + 0.5f * puff) : 0.0f;
         p.c[1] = fed ? s.heat * (0.6f + 0.8f * puff) : 0.0f;
         p.c[2] = fed ? s.speed * (0.4f + 1.0f * puff) : 0.0f;
@@ -497,7 +498,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         p.d[3] = wind[1];
         std::memcpy(p.e, shift, sizeof(shift));
         std::memcpy(p.f, sun, sizeof(sun));
-        p.f[3] = 1.6f * P.density;                      // (as thick to the sun as it is to the eye)
+        p.f[3] = kExtinction * P.density;                     // (as thick to the sun as it is to the eye)
         // The characters in the box (last frame's, moved on by how they went), nearest the source first.
         SmokeBodies bodies{};
         bodies.info[1] = P.stir;
@@ -647,7 +648,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         sf.detail[1] = 1.2f;
         sf.detail[2] = 2.5f;
         sf.detail[3] = float(v.key % 101u) * 0.137f;
-        sf.colour[3] = 1.6f * P.density * std::clamp(v.age / kWarmUp, 0.0f, 1.0f);   // (fading in while it warms up)
+        sf.colour[3] = kExtinction * P.density * std::clamp(v.age / kWarmUp, 0.0f, 1.0f);   // (fading in while it warms up)
         if (m_terrainAmbient[3] > 0.5f)
             std::memcpy(sf.ambient, m_terrainAmbient, 12);
         else

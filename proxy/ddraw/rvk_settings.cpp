@@ -136,7 +136,7 @@ Setting g_settings[] = {
 
     {"RVK_SmokeOn",    "Simulated smoke (needs HDR)",  "Experimental",    Bool,  0, 1, 1, 0, nullptr, 0},
     {"RVK_SmokeQual",  "Smoke: quality (1 low, 2 medium, 3 high)",                "Experimental",     Int,   1, 3, 1, 2, nullptr, 0, "RVK_SmokeOn"},
-    {"RVK_SmokeDensity","Smoke: how thick",                                         "Experimental",     Float, 0.1f, 4, 0.1f, 1, nullptr, 0, "RVK_SmokeOn"},
+    {"RVK_SmokeDensity","Smoke: how thick",                                         "Experimental",     Float, 0.1f, 8, 0.1f, 1, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeLife",  "Smoke: how long it lasts (x the game's)",                 "Experimental",     Float, 0.25f, 4, 0.25f, 1, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeStir",  "Smoke: how much characters stir it",                      "Experimental",     Float, 0, 2, 0.25f, 1, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeWisps", "Smoke: fine wisps carried by the flow",                   "Experimental",     Float, 0, 1, 0.25f, 1, nullptr, 0, "RVK_SmokeOn"},
