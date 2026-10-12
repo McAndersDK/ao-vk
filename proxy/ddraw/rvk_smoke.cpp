@@ -26,7 +26,7 @@ constexpr uint32_t kSmokeUpdate = 0x100EFF68 - 0x10000000;
 // Its fields (the update; _GfxControl_t::Process). From +0x14 on the control holds its template's parameters in order
 // (gfxtweak.bin type 1009: parameter k at 0x14 + 4k) - the colours alpha first.
 constexpr size_t kEnded = 0x14;                  // byte: the effect is over
-constexpr size_t kAttach = 0x2c;                 // what it is attached to (+0xc: a position, not the world's)
+constexpr size_t kAttach = 0x2c;                 // what it is attached to (+0xc: the effect's place in its visual's)
 constexpr size_t kAttachPos = 0xc;
 constexpr size_t kVisual = 0x30;                 // its GfxVisualSprite2Type0 (an RRefFrame_t: its world matrix)
 constexpr size_t kRadius = 0x40;                 // two floats: where sprites start, min / max (from its centre)
@@ -71,8 +71,10 @@ void __fastcall SmokeUpdate(void* self, void*)
         return;
     float local[3], pos[3], radius[2], sizes[4], c0[4], c1[4], speed[2];
     std::memcpy(local, static_cast<const uint8_t*>(attach) + kAttachPos, sizeof(local));
-    const float* m = g_worldMatrix(visual);       // row vectors: the translation in the last row
-    std::memcpy(pos, m + 12, sizeof(pos));
+    // The effect's place: the attachment's, in the visual's frame (row vectors: p' = p * M).
+    const float* m = g_worldMatrix(visual);
+    for (int i = 0; i < 3; ++i)
+        pos[i] = local[0] * m[i] + local[1] * m[4 + i] + local[2] * m[8 + i] + m[12 + i];
     std::memcpy(radius, static_cast<const uint8_t*>(self) + kRadius, sizeof(radius));
     std::memcpy(sizes, static_cast<const uint8_t*>(self) + kSizes, sizeof(sizes));
     std::memcpy(c0, static_cast<const uint8_t*>(self) + kColourStart, sizeof(c0));
