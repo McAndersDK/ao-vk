@@ -8,7 +8,7 @@ layout(set = 0, binding = 0) uniform RainFrame {
     vec4 camera;        // xyz: the eye; w: 1 = apply the TAA jitter
     vec4 time;          // x: the rain's clock (s); y: last frame's; z: how hard it rains (0..1); w: how many drops
     vec4 fall;          // xyz: the drops' velocity (world, units / s); w: the box's half size round the camera
-    vec4 colour;        // rgb: the drops' tint; w: their opacity
+    vec4 colour;        // rgb: the drops' tint (x RVK_RainBright); w: their opacity
     vec4 ambient;       // rgb: the terrain's ambient light
     vec4 fogColour;     // rgb; w: 1 = fog on
     vec4 fogParams;     // start, end, density, table mode (D3DFOG_*: 1 exp, 2 exp2, 3 linear; 0 = none)
@@ -25,7 +25,7 @@ vec3 RainLight(vec3 p)
 {
     vec3 V = normalize(R.camera.xyz - p);
     vec3 L = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
-    vec3 light = R.ambient.rgb * 1.2 + FL.sunColor.rgb * (0.5 + 1.5 * pow(max(dot(-V, L), 0.0), 8.0));
+    vec3 light = R.ambient.rgb * 0.55 + FL.sunColor.rgb * (0.15 + 1.2 * pow(max(dot(-V, L), 0.0), 8.0));
     uint count = min(FL.info.x, 64u);
     for (uint i = 0u; i < count; ++i) {
         Light li = FL.lights[i];
@@ -38,7 +38,7 @@ vec3 RainLight(vec3 p)
             continue;
         float att = 1.0 / max(li.atten.x + li.atten.y * d + li.atten.z * d * d, 1e-3);
         att *= 1.0 - smoothstep(0.75, 1.0, d / li.direction.w);
-        light += li.diffuse.rgb * (att * (0.6 + 3.0 * pow(max(dot(-V, dl / d), 0.0), 6.0)));
+        light += li.diffuse.rgb * (att * (0.3 + 2.5 * pow(max(dot(-V, dl / d), 0.0), 6.0)));
     }
     return light;
 }

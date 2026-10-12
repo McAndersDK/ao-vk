@@ -516,6 +516,7 @@ public:
         float force = 0.0f;                      // RVK_RainForce: rain this hard regardless of the game's (0 = the game's)
         float amount = 1.0f;                     // RVK_RainAmount: how many drops, x
         float splashes = 1.0f;                   // RVK_RainSplash: how many splashes, x (0 = none)
+        float brightness = 1.0f;                 // RVK_RainBright: the drops' and splashes' light, x
     };
     struct WeatherState {
         float precipitation = 0.0f;              // how hard (the game's VisualRain_t::process value, as given)

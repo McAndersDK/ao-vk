@@ -257,7 +257,10 @@ void Device::RenderRain(VkCommandBuffer cmd)
     rf.colour[0] = float((c >> 16) & 0xFF) / 255.0f;
     rf.colour[1] = float((c >> 8) & 0xFF) / 255.0f;
     rf.colour[2] = float(c & 0xFF) / 255.0f;
-    rf.colour[3] = 0.45f;
+    const float bright = std::clamp(P.brightness, 0.0f, 4.0f);
+    for (int i = 0; i < 3; ++i)
+        rf.colour[i] *= bright;
+    rf.colour[3] = 0.35f;
     if (m_terrainAmbient[3] > 0.5f)
         std::memcpy(rf.ambient, m_terrainAmbient, 16);
     else

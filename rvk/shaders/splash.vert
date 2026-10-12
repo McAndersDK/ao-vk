@@ -138,7 +138,7 @@ void main()
     float dist = distance(p, R.camera.xyz);
     float fog = RainFog(dist);
     vLight = mix(R.fogColour.rgb, R.colour.rgb * RainLight(p), fog);
-    vAlpha = 0.85 * min(R.time.z * 1.5, 1.0) * mix(0.3, 1.0, fog);
+    vAlpha = 0.6 * min(R.time.z * 1.5, 1.0) * mix(0.3, 1.0, fog);
     vCorner = c;
     vAge = age;
     vSeed = vec2(RainRand(s), RainRand(s));

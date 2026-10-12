@@ -360,6 +360,7 @@ Some useful ones:
 | `RVK_WaterSpeed` | 1.75 | waterfalls: how fast the water falls (1 = as fast as real water would for the game's units in metres) |
 | `RVK_WeatherOn` | 0 | the new weather: rvk draws the game's rain instead of it (needs HDR). Experimental: off by default |
 | `RVK_RainForce` / `RVK_RainAmount` / `RVK_RainSplash` | 0 / 1 / 1 | rain this hard whatever the game's weather (0 = the game's; for trying it), how many drops, how many splashes where it lands; rain rings on water come with it |
+| `RVK_RainBright` | 1 | how bright the rain and its splashes are |
 
 ### Hotkeys (Ctrl+Shift + key)
 
