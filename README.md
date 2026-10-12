@@ -366,6 +366,7 @@ Some useful ones:
 | `RVK_SmokeLife` | 1 | how long the smoke lasts, times the game's (0.25 - 4): longer is taller and thicker |
 | `RVK_SmokeStir` | 1 | how much characters stir it: walking through pushes it aside and leaves eddies (0: not at all) |
 | `RVK_SmokeWisps` | 1 | fine wisps finer than its grid, carried along by the simulated flow (0: none) |
+| `RVK_SmokeBright` | 1 | how light the smoke is (0.25 - 3) |
 | `RVK_SmokeGame` | 0 | the game's own smoke sprites drawn as well (1) |
 
 ### Hotkeys (Ctrl+Shift + key)

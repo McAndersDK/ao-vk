@@ -497,7 +497,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         p.d[3] = wind[1];
         std::memcpy(p.e, shift, sizeof(shift));
         std::memcpy(p.f, sun, sizeof(sun));
-        p.f[3] = 1.6f;
+        p.f[3] = 1.6f * P.density;                      // (as thick to the sun as it is to the eye)
         // The characters in the box (last frame's, moved on by how they went), nearest the source first.
         SmokeBodies bodies{};
         bodies.info[1] = P.stir;
@@ -641,7 +641,8 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         sf.box[3] = v.source.size;
         ArgbTo4(v.source.colour, sf.colour);
         for (int i = 0; i < 3; ++i)
-            sf.colour[i] = std::max(sf.colour[i], 0.2f);   // (black smoke dark grey: lit and shadowed, not a flat shape)
+            sf.colour[i] = std::max(sf.colour[i], 0.1f) * P.brightness;   // (black smoke dark grey: lit and shadowed,
+                                                                          //  not a flat shape)
         sf.detail[0] = P.detail;
         sf.detail[1] = 1.2f;
         sf.detail[2] = 2.5f;

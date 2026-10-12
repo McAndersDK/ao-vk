@@ -140,6 +140,7 @@ Setting g_settings[] = {
     {"RVK_SmokeLife",  "Smoke: how long it lasts (x the game's)",                 "Experimental",     Float, 0.25f, 4, 0.25f, 1, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeStir",  "Smoke: how much characters stir it",                      "Experimental",     Float, 0, 2, 0.25f, 1, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeWisps", "Smoke: fine wisps carried by the flow",                   "Experimental",     Float, 0, 1, 0.25f, 1, nullptr, 0, "RVK_SmokeOn"},
+    {"RVK_SmokeBright","Smoke: how light it is",                                   "Experimental",     Float, 0.25f, 3, 0.25f, 1, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeGame",  "Smoke: the game's smoke sprites too",                     "Experimental",     Bool,  0, 1, 1, 0, nullptr, 0, "RVK_SmokeOn"},
 
     {"RVK_SunShadow",  "Sun shadows",                                              "Shadows",          Bool,  0, 1, 1, 1, "RANDYVK_SHADOWS", 0},
@@ -474,6 +475,7 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
         s.density = V("RVK_SmokeDensity");
         s.stir = V("RVK_SmokeStir");
         s.detail = V("RVK_SmokeWisps");
+        s.brightness = V("RVK_SmokeBright");
         d->SetSmokeParams(s);
     }
     else if (std::strncmp(n, "RVK_Vol", 7) == 0) d->SetVolume(V("RVK_Volume"), V("RVK_VolHaze"), V("RVK_VolShafts"));
