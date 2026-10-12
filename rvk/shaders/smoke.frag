@@ -3,7 +3,7 @@
 // the scene, marched through the simulated density: each step's smoke takes light away from what is behind and adds
 // its own - the ambient light, the sun (as far as the smoke towards it lets it through: the simulation's light
 // image; scattered forwards most, so smoke glows looking towards the sun) and the lamps near. Premultiplied over the
-// scene; the other targets get nothing (they blend alike: 0 leaves them be).
+// scene; the other targets get nothing (they blend alike: 0 leaves them be) but the local fraction (see the end).
 #include "smoke_common.glsl"
 
 layout(set = 0, binding = 1) uniform sampler3D density;     // R density
@@ -120,4 +120,8 @@ void main()
     float fog = Fog(enter + 0.5 * (leave - enter));
     light = mix(S.fogColour.rgb * alpha, light, fog);
     outScene = vec4(light, alpha);
+    // The local-fraction target as covered as the scene: R (whose ambient occlusion is waived) towards 1 - the tone
+    // mapping's occlusion, applied after this, must not darken the smoke; its reflectivity (G) and sun share (B, the
+    // contact shadows) fade behind it.
+    outLocal = vec4(alpha, 0.0, 0.0, alpha);
 }
