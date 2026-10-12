@@ -1397,6 +1397,7 @@ std::string g_waterMesh;          // --water-mesh FILE: the water mesh from a du
 float g_waterMeshAt[3] = {2040.0f, 29.5f, 2340.0f};
 float g_waterEye[3] = {0, 0, 0};  // --water-eye X Y Z (the dump's coordinates): the camera there, looking at
 bool g_waterEyeSet = false;       // --water-mesh-at
+bool g_smoke = false;             // --smoke: a smoke source on the ground in front of the camera (the new smoke on)
 float g_rainForce = 0.0f;         // --rain F: rain this hard (0..1; RVK_RainForce), the new weather on
 bool g_waterLamp = false;         // --water-lamp: a warm point light by the camera, as a character's lamp (with
                                   // --light-override, so the frame's lights carry it)
@@ -1701,6 +1702,14 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
             dev.DrawPrimitive(TriangleList, kFvfMesh, flat.data(), uint32_t(flat.size()));
         } else {
             dev.DrawWater(water.data(), uint32_t(water.size()), waterIdx.data(), uint32_t(waterIdx.size()));
+            if (g_smoke) {                       // (--smoke: a smouldering fire on the shore in front)
+                Device::SmokeSource src;
+                src.pos[0] = -3.0f;
+                src.pos[2] = -12.0f;
+                src.pos[1] = height(src.pos[0], src.pos[2]);
+                src.colour = 0x8A8580;
+                dev.SmokeSourceFrame(1, src);
+            }
         }
         dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG1);
         dev.SetRenderState(RS_ZWRITEENABLE, 1);
@@ -2807,6 +2816,7 @@ int main(int argc, char** argv)
         else if (a == "--water-wall") g_waterWall = true;
         else if (a == "--water-mesh" && i + 1 < argc) g_waterMesh = argv[++i];
         else if (a == "--water-lamp") g_waterLamp = true;
+        else if (a == "--smoke") { g_smoke = true; hdr = true; }
         else if (a == "--rain" && i + 1 < argc) { g_rainForce = float(std::atof(argv[++i])); hdr = true; }
         else if (a == "--water-mesh-at" && i + 3 < argc) { for (float& x : g_waterMeshAt) x = float(std::atof(argv[++i])); }
         else if (a == "--water-eye" && i + 3 < argc) { for (float& x : g_waterEye) x = float(std::atof(argv[++i])); g_waterEyeSet = true; }
@@ -2956,6 +2966,11 @@ int main(int argc, char** argv)
     dev.SetShadows(shadows);
     dev.SetLightHeadroom(headroom);
     dev.SetHdr(hdr);
+    if (g_smoke) {
+        Device::SmokeParams smoke;
+        smoke.enable = true;
+        dev.SetSmokeParams(smoke);
+    }
     if (g_rainForce > 0.0f) {
         Device::WeatherParams weather;
         weather.enable = true;

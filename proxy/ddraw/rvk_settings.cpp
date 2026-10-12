@@ -134,6 +134,10 @@ Setting g_settings[] = {
     {"RVK_RainSplash", "Rain: splashes where it lands (0 = none)",                "Experimental",     Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_RainBright", "Rain: brightness",                                         "Experimental",     Float, 0, 3, 0.05f, 1, nullptr, 0, "RVK_WeatherOn"},
 
+    {"RVK_SmokeOn",    "Simulated smoke (needs HDR)",  "Experimental",    Bool,  0, 1, 1, 0, nullptr, 0},
+    {"RVK_SmokeQual",  "Smoke: quality (1 low, 2 medium, 3 high)",                "Experimental",     Int,   1, 3, 1, 2, nullptr, 0, "RVK_SmokeOn"},
+    {"RVK_SmokeDensity","Smoke: how thick",                                         "Experimental",     Float, 0.1f, 4, 0.1f, 1, nullptr, 0, "RVK_SmokeOn"},
+
     {"RVK_SunShadow",  "Sun shadows",                                              "Shadows",          Bool,  0, 1, 1, 1, "RANDYVK_SHADOWS", 0},
     {"RVK_SunRes",     "Resolution (4096 / 8192)",  "Shadows",          Choice, 1024, 8192, 1, 2048, nullptr, 0, "RVK_SunShadow", "1024 2048 4096 8192"},
     {"RVK_SunStrength","Strength",                                                 "Shadows",          Float, 0, 1, 0.05f, 0.6f, "RANDYVK_SHADOW_STRENGTH", 0, "RVK_SunShadow"},
@@ -458,6 +462,13 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
         w.splashes = V("RVK_RainSplash");
         w.brightness = V("RVK_RainBright");
         d->SetWeatherParams(w);
+    }
+    else if (std::strncmp(n, "RVK_Smoke", 9) == 0) {
+        rvk::Device::SmokeParams s;
+        s.enable = V("RVK_SmokeOn") != 0.0f;
+        s.quality = uint32_t(V("RVK_SmokeQual"));
+        s.density = V("RVK_SmokeDensity");
+        d->SetSmokeParams(s);
     }
     else if (std::strncmp(n, "RVK_Vol", 7) == 0) d->SetVolume(V("RVK_Volume"), V("RVK_VolHaze"), V("RVK_VolShafts"));
     else if (is("RVK_MBlur") || is("RVK_MBlurNear")) d->SetMotionBlur(V("RVK_MBlur"), V("RVK_MBlurNear"));

@@ -1059,6 +1059,16 @@ void ThreadedDevice::SetWeather(const Device::WeatherState& state)
     Enqueue([this, state](const uint8_t*) { m_device.SetWeather(state); });
 }
 
+void ThreadedDevice::SetSmokeParams(const Device::SmokeParams& params)
+{
+    Enqueue([this, params](const uint8_t*) { m_device.SetSmokeParams(params); });
+}
+
+void ThreadedDevice::SmokeSourceFrame(uint64_t key, const Device::SmokeSource& source)
+{
+    Enqueue([this, key, source](const uint8_t*) { m_device.SmokeSourceFrame(key, source); });
+}
+
 void ThreadedDevice::SetWaterParams(const Device::WaterParams& params)
 {
     Enqueue([this, params](const uint8_t*) { m_device.SetWaterParams(params); });

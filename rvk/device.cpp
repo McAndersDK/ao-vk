@@ -206,6 +206,7 @@ Device::~Device()
     DestroyLeafResources();
     DestroyWaterResources();
     DestroyRainResources();
+    DestroySmokeResources();
     DestroyStaticGeometry();
     SavePipelineCache("at exit");
     if (m_pipelineCache) vkDestroyPipelineCache(m_device, m_pipelineCache, nullptr);
@@ -1036,6 +1037,11 @@ bool Device::CreatePipelines(std::string* error)
         if (!CreateRainResources(&rainError)) {
             Log("rain: unavailable (%s)", rainError.c_str());
             DestroyRainResources();
+        }
+        std::string smokeError;                  // nor this: no smoke then
+        if (!CreateSmokeResources(&smokeError)) {
+            Log("smoke: unavailable (%s)", smokeError.c_str());
+            DestroySmokeResources();
         }
     }
     char gpuSkin[8] = "";

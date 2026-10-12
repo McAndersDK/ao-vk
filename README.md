@@ -361,6 +361,8 @@ Some useful ones:
 | `RVK_WeatherOn` | 0 | the new weather: rvk draws the game's rain instead of it (needs HDR). Experimental: off by default |
 | `RVK_RainForce` / `RVK_RainAmount` / `RVK_RainSplash` | 0 / 1 / 1 | rain this hard whatever the game's weather (0 = the game's; for trying it), how many drops, how many splashes where it lands; rain rings on water come with it |
 | `RVK_RainBright` | 1 | how bright the rain and its splashes are |
+| `RVK_SmokeOn` | 0 | simulated smoke: a fluid simulated round each smoke source, lit by the sun and the lamps (needs HDR). Experimental: off by default |
+| `RVK_SmokeQual` / `RVK_SmokeDensity` | 2 / 1 | its grid (1: 48, 2: 64, 3: 80 cells a side), how thick it is |
 
 ### Hotkeys (Ctrl+Shift + key)
 

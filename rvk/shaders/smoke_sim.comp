@@ -1,0 +1,168 @@
+#version 450
+// Smoke (rvk/smoke.cpp StepSmoke): a fluid simulation ("stable fluids") in a box of N^3 cells round a smoke source,
+// one stage per dispatch (P.a.x):
+//   0 velocity moved along itself (semi-Lagrangian), with the forces: buoyancy (hot smoke rises), the wind, the
+//     source's push upwards; the ground (the box's floor) lets nothing through it
+//   1 its curl;   2 vorticity confinement (the small swirls the grid would smooth away put back)
+//   3 its divergence;   4 a Jacobi step of the pressure (P.e.w: the first, from 0);   5 the pressure's gradient taken
+//     away (incompressible)
+//   6 density and temperature moved along the velocity (MacCormack: 6 forward into the curl image, 8 that moved back
+//     again into the divergence image, 9 the forward one corrected by half the round trip's error - clamped to what
+//     was there, so it cannot overshoot: much sharper than moving it once), the source's added, fading
+//   7 the sunlight reaching each cell through the smoke (for the rendering)
+// Velocities in world units / s, the box P.a.w world units across; the box may move with its source (P.e.xyz: by how
+// much since last frame, in box units) - the contents stay where they are in the world.
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+layout(set = 0, binding = 0) uniform sampler3D velIn;            // filtered reads (moving things along)
+layout(set = 0, binding = 1) uniform sampler3D densIn;           // R density, G temperature
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image3D velOut;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image3D densOut;
+layout(set = 0, binding = 4, rgba16f) uniform image3D curlImg;   // xyz curl, w its length
+layout(set = 0, binding = 5, r32f) uniform readonly image3D pIn;
+layout(set = 0, binding = 6, r32f) uniform writeonly image3D pOut;
+layout(set = 0, binding = 7, r32f) uniform image3D divImg;
+layout(set = 0, binding = 8, rgba16f) uniform readonly image3D velRead;   // exact reads (neighbours)
+layout(set = 0, binding = 9, r16f) uniform writeonly image3D lightOut;
+layout(set = 0, binding = 10) uniform sampler3D forwardIn;       // stage 8: the forward step (the curl image)
+
+layout(push_constant) uniform Params {
+    vec4 a;     // x: stage; y: N; z: dt (s); w: the box's size (world)
+    vec4 b;     // xyz: the source (box units, 0..1); w: its radius (box units)
+    vec4 c;     // x: density added a second; y: temperature added a second; z: the source's push up (world / s);
+                // w: how fast the density fades (1 / s)
+    vec4 d;     // x: buoyancy; y: vorticity confinement; zw: the wind (world / s, x z)
+    vec4 e;     // xyz: the box's move since last frame (box units); w: stage 4: 1 = the first Jacobi step (pressure
+                // from 0); stage 0: the step's number (the source's jitter)
+    vec4 f;     // xyz: towards the sun (unit); w: the smoke's extinction (per world unit at density 1)
+} P;
+
+ivec3 Clamp(ivec3 c) { return clamp(c, ivec3(0), ivec3(int(P.a.y) - 1)); }
+
+// -1..1 per cell and step (the source's unsteadiness: a perfectly steady source rises as a straight column).
+float Jitter(ivec3 c, uint salt)
+{
+    uint x = uint(c.x) * 73856093u ^ uint(c.y) * 19349663u ^ uint(c.z) * 83492791u ^ salt * 2654435761u;
+    x ^= x >> 16u; x *= 0x7FEB352Du; x ^= x >> 15u; x *= 0x846CA68Bu; x ^= x >> 16u;
+    return float(x >> 8u) * (2.0 / 16777216.0) - 1.0;
+}
+vec3 Vel(ivec3 c) { return imageLoad(velRead, Clamp(c)).xyz; }
+
+void main()
+{
+    int n = int(P.a.y);
+    ivec3 id = ivec3(gl_GlobalInvocationID);
+    if (any(greaterThanEqual(id, ivec3(n))))
+        return;
+    int stage = int(P.a.x);
+    float dt = P.a.z, size = P.a.w, h = size / float(n);   // h: a cell (world)
+    vec3 uvw = (vec3(id) + 0.5) / float(n);
+
+    if (stage == 0) {
+        vec3 v = texelFetch(velIn, id, 0).xyz;
+        vec3 back = uvw + P.e.xyz - v * (dt / size);
+        v = texture(velIn, back).xyz;
+        float temperature = texelFetch(densIn, id, 0).g;
+        v.y += P.d.x * temperature * dt;                                 // buoyancy
+        v.xz += (P.d.zw - v.xz) * (1.0 - exp(-0.4 * dt));                // dragged along by the wind
+        vec3 d = (uvw - P.b.xyz) / max(P.b.w, 1e-4);
+        float inSource = exp(-dot(d, d));
+        v.y = mix(v.y, max(v.y, P.c.z), inSource);                       // the source pushes up
+        // ... unsteadily: across it, in eddies a few cells wide changing every few steps (P.e.w: the step's number in
+        // this stage) - finer jitter would only average away.
+        uint step_ = uint(P.e.w) / 6u;
+        ivec3 eddy = id / 3;
+        v.xz += inSource * P.c.z * 1.6 * vec2(Jitter(eddy, step_), Jitter(eddy, step_ + 7919u));
+        if (id.y == 0) v.y = max(v.y, 0.0);                              // the ground
+        v *= exp(-0.05 * dt);
+        imageStore(velOut, id, vec4(v, 0.0));
+    } else if (stage == 1) {
+        vec3 dx = (Vel(id + ivec3(1, 0, 0)) - Vel(id - ivec3(1, 0, 0))) / (2.0 * h);
+        vec3 dy = (Vel(id + ivec3(0, 1, 0)) - Vel(id - ivec3(0, 1, 0))) / (2.0 * h);
+        vec3 dz = (Vel(id + ivec3(0, 0, 1)) - Vel(id - ivec3(0, 0, 1))) / (2.0 * h);
+        vec3 curl = vec3(dy.z - dz.y, dz.x - dx.z, dx.y - dy.x);
+        imageStore(curlImg, id, vec4(curl, length(curl)));
+    } else if (stage == 2) {
+        float l = imageLoad(curlImg, Clamp(id - ivec3(1, 0, 0))).w, r = imageLoad(curlImg, Clamp(id + ivec3(1, 0, 0))).w;
+        float bt = imageLoad(curlImg, Clamp(id - ivec3(0, 1, 0))).w, tp = imageLoad(curlImg, Clamp(id + ivec3(0, 1, 0))).w;
+        float bk = imageLoad(curlImg, Clamp(id - ivec3(0, 0, 1))).w, fr = imageLoad(curlImg, Clamp(id + ivec3(0, 0, 1))).w;
+        vec3 grad = vec3(r - l, tp - bt, fr - bk) / (2.0 * h);
+        vec3 curl = imageLoad(curlImg, id).xyz;
+        vec3 v = Vel(id);
+        float gl = length(grad);
+        if (gl > 1e-5)
+            v += P.d.y * h * cross(grad / gl, curl) * dt;
+        imageStore(velOut, id, vec4(v, 0.0));
+    } else if (stage == 3) {
+        // The box's walls are open (smoke leaves through them: the velocity beyond is the edge's); the floor is ground.
+        float div = (Vel(id + ivec3(1, 0, 0)).x - Vel(id - ivec3(1, 0, 0)).x + Vel(id + ivec3(0, 1, 0)).y -
+                     (id.y == 0 ? -Vel(id).y : Vel(id - ivec3(0, 1, 0)).y) + Vel(id + ivec3(0, 0, 1)).z -
+                     Vel(id - ivec3(0, 0, 1)).z) / (2.0 * h);
+        imageStore(divImg, id, vec4(div));
+    } else if (stage == 4) {
+        // Neighbours beyond the walls and the top: 0 (open); below the floor: this cell's (no flow through it).
+        bool first = P.e.w > 0.5;
+        float self = first ? 0.0 : imageLoad(pIn, id).x;
+        float sum = 0.0;
+        const ivec3 offs[6] = ivec3[](ivec3(1, 0, 0), ivec3(-1, 0, 0), ivec3(0, 1, 0), ivec3(0, -1, 0), ivec3(0, 0, 1),
+                                      ivec3(0, 0, -1));
+        for (int i = 0; i < 6; ++i) {
+            ivec3 c = id + offs[i];
+            if (c.y < 0) { sum += self; continue; }
+            if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, ivec3(n)))) continue;
+            sum += first ? 0.0 : imageLoad(pIn, c).x;
+        }
+        float p = (sum - imageLoad(divImg, id).x * h * h) / 6.0;
+        imageStore(pOut, id, vec4(p));
+    } else if (stage == 5) {
+        float self = imageLoad(pIn, id).x;
+        float px1 = id.x + 1 < n ? imageLoad(pIn, id + ivec3(1, 0, 0)).x : 0.0;
+        float px0 = id.x > 0 ? imageLoad(pIn, id - ivec3(1, 0, 0)).x : 0.0;
+        float py1 = id.y + 1 < n ? imageLoad(pIn, id + ivec3(0, 1, 0)).x : 0.0;
+        float py0 = id.y > 0 ? imageLoad(pIn, id - ivec3(0, 1, 0)).x : self;
+        float pz1 = id.z + 1 < n ? imageLoad(pIn, id + ivec3(0, 0, 1)).x : 0.0;
+        float pz0 = id.z > 0 ? imageLoad(pIn, id - ivec3(0, 0, 1)).x : 0.0;
+        vec3 v = Vel(id) - vec3(px1 - px0, py1 - py0, pz1 - pz0) / (2.0 * h);
+        if (id.y == 0) v.y = max(v.y, 0.0);
+        imageStore(velOut, id, vec4(v, 0.0));
+    } else if (stage == 6) {
+        vec3 v = texelFetch(velIn, id, 0).xyz;
+        imageStore(curlImg, id, vec4(texture(densIn, uvw + P.e.xyz - v * (dt / size)).rg, 0.0, 0.0));
+    } else if (stage == 8) {
+        vec3 v = texelFetch(velIn, id, 0).xyz;
+        imageStore(divImg, id, vec4(texture(forwardIn, uvw - P.e.xyz + v * (dt / size)).r));
+    } else if (stage == 9) {
+        vec3 v = texelFetch(velIn, id, 0).xyz;
+        vec3 at = (uvw + P.e.xyz - v * (dt / size)) * float(n) - 0.5;   // where it came from (cells)
+        ivec3 c0 = ivec3(floor(at));
+        float lo = 1e9, hi = -1e9;
+        for (int k = 0; k < 8; ++k) {
+            ivec3 c = c0 + ivec3(k & 1, (k >> 1) & 1, (k >> 2) & 1);
+            float x = any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, ivec3(n))) ? 0.0 : texelFetch(densIn, c, 0).r;
+            lo = min(lo, x);
+            hi = max(hi, x);
+        }
+        vec2 dens = imageLoad(curlImg, id).rg;
+        dens.r = clamp(dens.r + 0.5 * (texelFetch(densIn, id, 0).r - imageLoad(divImg, id).r), lo, hi);
+        vec3 d = (uvw - P.b.xyz) / max(P.b.w, 1e-4);
+        float inSource = exp(-dot(d, d));
+        dens.r = (dens.r + P.c.x * inSource * dt) * exp(-P.c.w * dt);
+        dens.g = (dens.g + P.c.y * inSource * dt) * exp(-0.6 * dt);
+        // Fading out towards the walls and the top (what reaches them leaves the box).
+        vec3 edge = min(uvw, 1.0 - uvw);
+        dens *= smoothstep(0.0, 0.06, min(min(edge.x, edge.z), 1.0 - uvw.y));
+        imageStore(densOut, id, vec4(max(dens, vec2(0.0)), 0.0, 0.0));
+    } else if (stage == 7) {
+        // Towards the sun, to the box's edge: the smoke the light goes through.
+        vec3 s = P.f.xyz;
+        float stepLen = 1.5 / float(n), optical = 0.0;
+        vec3 p = uvw;
+        for (int i = 0; i < 24; ++i) {
+            p += s * stepLen;
+            if (any(lessThan(p, vec3(0.0))) || any(greaterThan(p, vec3(1.0))))
+                break;
+            optical += texture(densIn, p).r;
+        }
+        imageStore(lightOut, id, vec4(exp(-optical * P.f.w * stepLen * size)));
+    }
+}

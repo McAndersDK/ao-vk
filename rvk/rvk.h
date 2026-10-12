@@ -529,6 +529,27 @@ public:
     void SetWeatherParams(const WeatherParams& params) { m_weatherParams = params; }
     void SetWeather(const WeatherState& state);
 
+    // Smoke (smoke.cpp): a fluid simulated in a box round each smoke source, ray-marched into the scene after it. The
+    // sources are handed over each frame they are on (SmokeSourceFrame, keyed); one not handed over goes on rising
+    // and fading until its smoke is gone.
+    struct SmokeParams {
+        bool enable = false;                     // RVK_SmokeOn
+        uint32_t quality = 2;                    // RVK_SmokeQual: 1 low (48^3), 2 medium (64^3), 3 high (80^3)
+        float density = 1.0f;                   // RVK_SmokeDensity: how thick, x
+    };
+    struct SmokeSource {
+        float pos[3] = {0, 0, 0};                // world: where it comes from (its box stands round it)
+        float radius = 0.6f;                     // the source's size (world)
+        float rate = 1.5f;                       // density added a second
+        float heat = 2.0f;                       // temperature added a second (it rises the more)
+        float speed = 1.0f;                      // its push upwards (world / s)
+        float life = 4.0f;                       // about how long the smoke lasts (s)
+        float size = 8.0f;                       // its box (world)
+        uint32_t colour = 0x707070;              // 0xRRGGBB
+    };
+    void SetSmokeParams(const SmokeParams& params) { m_smokeParams = params; }
+    void SmokeSourceFrame(uint64_t key, const SmokeSource& source);
+
     void SetTexture(uint32_t stage, Texture* texture);
     // The game's visual issuing the next draws (rnative::scene): its kind (VisualKind) and class name - for exact
     // decisions where the draw alone needs heuristics. 0 / "": not known.
@@ -1476,6 +1497,36 @@ private:
     bool CreateRainResources(std::string* error);
     void DestroyRainResources();
     void RenderRain(VkCommandBuffer cmd);
+    // Smoke (smoke.cpp).
+    struct SmokeImage {
+        VkImage image = VK_NULL_HANDLE;
+        VmaAllocation_T* allocation = nullptr;
+        VkImageView view = VK_NULL_HANDLE;
+    };
+    struct SmokeVolume {
+        uint64_t key = 0;                        // 0: free
+        SmokeSource source;
+        double lastSeen = -1e9;                  // m_frameClock it was last handed over
+        float corner[3] = {0, 0, 0};             // the box's lowest corner (world)
+        bool fresh = true;                       // its images to be cleared first
+        uint32_t cur = 0;                        // which of each pair holds the state
+        SmokeImage vel[2], dens[2], light;
+    };
+    SmokeParams m_smokeParams;
+    std::vector<SmokeVolume> m_smokeVolumes;
+    SmokeImage m_smokeCurl, m_smokeDiv, m_smokePressure[2];
+    bool m_smokeSharedFresh = true;
+    uint32_t m_smokeN = 0;                       // the cells' count along a side the images have
+    double m_smokeLastClock = -1.0;
+    VkSampler m_smokeSampler = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_smokeSimSetLayout = VK_NULL_HANDLE, m_smokeSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout m_smokeSimLayout = VK_NULL_HANDLE, m_smokeLayout = VK_NULL_HANDLE;
+    VkPipeline m_smokeSimPipeline = VK_NULL_HANDLE, m_smokePipeline = VK_NULL_HANDLE;
+    bool CreateSmokeResources(std::string* error);
+    void DestroySmokeResources();
+    void DestroySmokeImages();
+    bool MakeSmokeImage(VkFormat format, uint32_t n, SmokeImage& out);
+    void RenderSmoke(VkCommandBuffer cmd);
     void UpdateWaterReady();
     const WaterGrid* WaterGridFor(uint32_t segments);
     WaterMap* WaterMapFor(const WaterVertex* v, uint32_t count, const uint16_t* idx, uint32_t icount,

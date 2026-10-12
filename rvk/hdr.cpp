@@ -392,6 +392,7 @@ void Device::EndScene()
     ProfileMark("scene");
     RenderGrassField(cmd);                       // RVK_GrassOn: our ground grass, over the scene (its own block)
     ProfileMark("ground grass");
+    RenderSmoke(cmd);                            // RVK_SmokeOn: the smoke's simulation, and it over the scene
     RenderRain(cmd);                             // RVK_WeatherOn: the rain, over all of it
     double cpu = ProfileCpu();
     Transition(cmd, m_scene, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
