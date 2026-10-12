@@ -35,6 +35,14 @@ constexpr size_t kColourStart = 0x5c;            // four floats: ARGB at birth
 constexpr size_t kColourEnd = 0x6c;              // ... at death
 constexpr size_t kLife = 0x7c;                   // float: a sprite's life (s)
 constexpr size_t kSpeed = 0x90;                  // two floats: a sprite's speed, min / max
+// GfxVisualSprite2Type0 (DisplaySystem: NewSprite, ProcessSprites): its sprites, in its frame.
+constexpr size_t kSpriteCount = 0x220;           // int: slots
+constexpr size_t kSprites = 0x224;               // the slots, kSpriteStride bytes each:
+constexpr size_t kSpriteStride = 0x78;
+constexpr size_t kSpritePos = 0x00;              //   three floats: where it is (the visual's frame)
+constexpr size_t kSpriteLife = 0x34;             //   float: its life left (counts down)
+constexpr size_t kSpriteAlive = 0x74;            //   byte
+constexpr float kNewest = 0.15f;                 // sprites made this recently (s) are where the smoke starts
 
 using UpdateFn = void(__thiscall*)(void* self);
 using DisableFn = void(__thiscall*)(void* visual, int disable);
@@ -75,10 +83,31 @@ void __fastcall SmokeUpdate(void* self, void*)
         return;
     float local[3], pos[3], radius[2], sizes[4], c0[4], c1[4], speed[2];
     std::memcpy(local, static_cast<const uint8_t*>(attach) + kAttachPos, sizeof(local));
-    // The effect's place: the attachment's, in the visual's frame (row vectors: p' = p * M).
+    // Where the smoke starts: the game's newest sprites (the most life left), in the visual's frame (row vectors:
+    // p' = p * M) - wherever the effect's offsets put them. None alive: nothing to go by this frame.
+    const int32_t count = At<int32_t>(visual, kSpriteCount);
+    const uint8_t* sprites = At<const uint8_t*>(visual, kSprites);
+    if (!sprites || count <= 0 || count > 4096)
+        return;
+    float newest = -1e30f;
+    for (int32_t i = 0; i < count; ++i)
+        if (sprites[size_t(i) * kSpriteStride + kSpriteAlive])
+            newest = std::max(newest, At<float>(sprites + size_t(i) * kSpriteStride, kSpriteLife));
+    if (newest < 0.0f)
+        return;
+    float at[3] = {0, 0, 0};
+    int taken = 0;
+    for (int32_t i = 0; i < count; ++i) {
+        const uint8_t* sp = sprites + size_t(i) * kSpriteStride;
+        if (!sp[kSpriteAlive] || At<float>(sp, kSpriteLife) < newest - kNewest)
+            continue;
+        for (int k = 0; k < 3; ++k) at[k] += At<float>(sp, kSpritePos + 4 * k);
+        ++taken;
+    }
+    for (float& a : at) a /= float(taken);
     const float* m = g_worldMatrix(visual);
     for (int i = 0; i < 3; ++i)
-        pos[i] = local[0] * m[i] + local[1] * m[4 + i] + local[2] * m[8 + i] + m[12 + i];
+        pos[i] = at[0] * m[i] + at[1] * m[4 + i] + at[2] * m[8 + i] + m[12 + i];
     std::memcpy(radius, static_cast<const uint8_t*>(self) + kRadius, sizeof(radius));
     std::memcpy(sizes, static_cast<const uint8_t*>(self) + kSizes, sizeof(sizes));
     std::memcpy(c0, static_cast<const uint8_t*>(self) + kColourStart, sizeof(c0));
@@ -108,7 +137,7 @@ void __fastcall SmokeUpdate(void* self, void*)
     s.rate = 0.6f * std::clamp(std::isfinite(c0[0]) ? (c0[0] > 1.5f ? c0[0] / 255.0f : c0[0]) : 0.6f, 0.15f, 1.0f);
     s.colour = Channel(c0[1]) << 16 | Channel(c0[2]) << 8 | Channel(c0[3]);
     if (g_logged.size() < 24 && g_logged.insert(uintptr_t(self)).second)
-        RvkLog("smoke: effect %p at %.1f %.1f %.1f (attachment's %.1f %.1f %.1f): radius %.2f..%.2f, sizes %.2f..%.2f -> "
+        RvkLog("smoke: effect %p at %.1f %.1f %.1f (newest sprites; the attachment's %.1f %.1f %.1f): radius %.2f..%.2f, sizes %.2f..%.2f -> "
                "%.2f..%.2f, ARGB %.2f %.2f %.2f %.2f -> %.2f %.2f %.2f %.2f, life %.2f, speed %.2f..%.2f, wind %.2f %.2f %.2f",
                self, pos[0], pos[1], pos[2], local[0], local[1], local[2], radius[0], radius[1], sizes[0], sizes[1],
                sizes[2], sizes[3], c0[0], c0[1], c0[2], c0[3], c1[0], c1[1], c1[2], c1[3], life, speed[0], speed[1],
