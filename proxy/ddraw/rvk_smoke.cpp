@@ -98,7 +98,7 @@ void __fastcall SmokeUpdate(void* self, void*)
     s.speed = std::clamp(rise, 0.3f, 4.0f);
     s.life = std::isfinite(life) ? std::clamp(life, 1.0f, 12.0f) : 4.0f;
     s.size = std::clamp(s.speed * s.life * 0.8f + 4.0f * s.radius, 4.0f, 20.0f);
-    s.rate = 1.5f * std::clamp(std::isfinite(c0[0]) ? (c0[0] > 1.5f ? c0[0] / 255.0f : c0[0]) : 0.6f, 0.15f, 1.0f);
+    s.rate = 0.6f * std::clamp(std::isfinite(c0[0]) ? (c0[0] > 1.5f ? c0[0] / 255.0f : c0[0]) : 0.6f, 0.15f, 1.0f);
     s.colour = Channel(c0[1]) << 16 | Channel(c0[2]) << 8 | Channel(c0[3]);
     device->SmokeSourceFrame(uint64_t(uintptr_t(self)), s);
     if (rvk_settings::GetEffective("RVK_SmokeGame") == 0.0f)

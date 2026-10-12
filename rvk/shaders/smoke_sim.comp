@@ -29,8 +29,8 @@ layout(set = 0, binding = 10) uniform sampler3D forwardIn;       // stage 8: the
 layout(push_constant) uniform Params {
     vec4 a;     // x: stage; y: N; z: dt (s); w: the box's size (world)
     vec4 b;     // xyz: the source (box units, 0..1); w: its radius (box units)
-    vec4 c;     // x: density added a second; y: temperature added a second; z: the source's push up (world / s);
-                // w: how fast the density fades (1 / s)
+    vec4 c;     // x: the density the source keeps (in it; no more piles up there); y: temperature added a second;
+                // z: the source's push up (world / s); w: how fast the density fades (1 / s)
     vec4 d;     // x: buoyancy; y: vorticity confinement; zw: the wind (world / s, x z)
     vec4 e;     // xyz: the box's move since last frame (box units); w: stage 4: 1 = the first Jacobi step (pressure
                 // from 0); stage 0: the step's number (the source's jitter)
@@ -146,7 +146,7 @@ void main()
         dens.r = clamp(dens.r + 0.5 * (texelFetch(densIn, id, 0).r - imageLoad(divImg, id).r), lo, hi);
         vec3 d = (uvw - P.b.xyz) / max(P.b.w, 1e-4);
         float inSource = exp(-dot(d, d));
-        dens.r = (dens.r + P.c.x * inSource * dt) * exp(-P.c.w * dt);
+        dens.r = max(dens.r * exp(-P.c.w * dt), P.c.x * inSource);
         dens.g = (dens.g + P.c.y * inSource * dt) * exp(-0.6 * dt);
         // Fading out towards the walls and the top (what reaches them leaves the box).
         vec3 edge = min(uvw, 1.0 - uvw);
