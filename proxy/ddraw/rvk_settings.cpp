@@ -135,7 +135,8 @@ Setting g_settings[] = {
     {"RVK_RainBright", "Rain: brightness",                                         "Experimental",     Float, 0, 3, 0.05f, 1, nullptr, 0, "RVK_WeatherOn"},
 
     {"RVK_SmokeOn",    "Simulated smoke (needs HDR)",  "Experimental",    Bool,  0, 1, 1, 0, nullptr, 0},
-    {"RVK_SmokeQual",  "Smoke: quality (1 low, 2 medium, 3 high)",                "Experimental",     Int,   1, 3, 1, 2, nullptr, 0, "RVK_SmokeOn"},
+    {"RVK_SmokeQual",  "Smoke: most cells a box (1: 64, 2: 96, 3: 128 a side)",  "Experimental",     Int,   1, 3, 1, 2, nullptr, 0, "RVK_SmokeOn"},
+    {"RVK_SmokeRes",   "Smoke: cells per world unit (detail)",                    "Experimental",     Float, 4, 24, 1, 12, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeDensity","Smoke: how thick",                                         "Experimental",     Float, 0.1f, 8, 0.1f, 1, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeLife",  "Smoke: how long it lasts (x the game's)",                 "Experimental",     Float, 0.25f, 4, 0.25f, 1, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeStir",  "Smoke: how much characters stir it",                      "Experimental",     Float, 0, 2, 0.25f, 1, nullptr, 0, "RVK_SmokeOn"},
@@ -472,6 +473,7 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
         rvk::Device::SmokeParams s;
         s.enable = V("RVK_SmokeOn") != 0.0f;
         s.quality = uint32_t(V("RVK_SmokeQual"));
+        s.resolution = V("RVK_SmokeRes");
         s.density = V("RVK_SmokeDensity");
         s.stir = V("RVK_SmokeStir");
         s.detail = V("RVK_SmokeWisps");

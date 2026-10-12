@@ -362,7 +362,7 @@ Some useful ones:
 | `RVK_RainForce` / `RVK_RainAmount` / `RVK_RainSplash` | 0 / 1 / 1 | rain this hard whatever the game's weather (0 = the game's; for trying it), how many drops, how many splashes where it lands; rain rings on water come with it |
 | `RVK_RainBright` | 1 | how bright the rain and its splashes are |
 | `RVK_SmokeOn` | 0 | simulated smoke: a fluid simulated round each smoke source, lit by the sun and the lamps (needs HDR). Experimental: off by default |
-| `RVK_SmokeQual` / `RVK_SmokeDensity` | 2 / 1 | its grid (1: 48, 2: 64, 3: 80 cells a side), how thick it is |
+| `RVK_SmokeQual` / `RVK_SmokeRes` / `RVK_SmokeDensity` | 2 / 12 / 1 | its grid: cells per world unit of a source's box (a long-lived source's taller box gets more), at most 64 / 96 / 128 a side (quality 1 / 2 / 3); how thick it is (up to 8) |
 | `RVK_SmokeLife` | 1 | how long the smoke lasts, times the game's (0.25 - 4): longer is taller and thicker |
 | `RVK_SmokeStir` | 1 | how much characters stir it: walking through pushes it aside and leaves eddies (0: not at all) |
 | `RVK_SmokeWisps` | 1 | fine wisps finer than its grid, carried along by the simulated flow (0: none) |

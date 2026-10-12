@@ -534,7 +534,8 @@ public:
     // and fading until its smoke is gone.
     struct SmokeParams {
         bool enable = false;                     // RVK_SmokeOn
-        uint32_t quality = 2;                    // RVK_SmokeQual: 1 low (48^3), 2 medium (64^3), 3 high (80^3)
+        uint32_t quality = 2;                    // RVK_SmokeQual: a box's cells a side at most: 1 64, 2 96, 3 128
+        float resolution = 12.0f;               // RVK_SmokeRes: cells per world unit (a bigger box has more)
         float density = 1.0f;                   // RVK_SmokeDensity: how thick, x
         float stir = 1.0f;                      // RVK_SmokeStir: how much characters move it (0 not at all)
         float detail = 1.0f;                    // RVK_SmokeWisps: the wisps finer than the grid (0 none)
@@ -1515,6 +1516,7 @@ private:
         bool fresh = true;                       // its images to be cleared first
         float age = 0.0f;                        // seconds simulated (warming up: faster, fading in)
         uint32_t cur = 0;                        // which of each pair holds the state
+        uint32_t n = 0;                          // its images' cells a side (0: none yet)
         SmokeImage vel[2], dens[2], light;
     };
     SmokeParams m_smokeParams;
@@ -1523,7 +1525,7 @@ private:
     SmokeImage m_smokeNoise;                     // the wisps' noise (tiling; made once, smoke_sim.comp stage 10)
     bool m_smokeNoiseMade = false;
     bool m_smokeSharedFresh = true;
-    uint32_t m_smokeN = 0;                       // the cells' count along a side the images have
+    uint32_t m_smokeN = 0;                       // the shared scratch images' cells a side (the most a volume has)
     double m_smokeLastClock = -1.0;
     VkSampler m_smokeSampler = VK_NULL_HANDLE, m_smokeRepeatSampler = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_smokeSimSetLayout = VK_NULL_HANDLE, m_smokeSetLayout = VK_NULL_HANDLE;

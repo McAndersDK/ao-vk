@@ -177,6 +177,7 @@ void Device::DestroySmokeImages()
         destroy(v.light);
         v.fresh = true;
         v.age = 0.0f;
+        v.n = 0;
     }
     destroy(m_smokeCurl);
     destroy(m_smokeNoise);
@@ -352,11 +353,6 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
     for (SmokeVolume& v : m_smokeVolumes)
         if (v.key && now - v.lastSeen > double(v.source.life) * 1.5 + 1.0)
             v.key = 0;
-    const uint32_t n = P.quality <= 1 ? 48u : P.quality == 2 ? 64u : 80u;
-    if (n != m_smokeN) {
-        DestroySmokeImages();
-        m_smokeN = n;
-    }
     const auto& vm = m_view.m;
     float eye[3];
     for (int i = 0; i < 3; ++i)
@@ -375,12 +371,53 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         live.resize(kSmokeSimMax);
     if (live.empty())
         return;
+    // Each volume's cells a side: RVK_SmokeRes per world unit of its box (a long-lived source's tall box keeps its
+    // detail), a multiple of 4, at most RVK_SmokeQual's. A volume whose count changed, or a scratch too small for
+    // one, is made again - after the GPU is done with the old (rare: a source's box or the settings changed).
+    const uint32_t most = P.quality <= 1 ? 64u : P.quality == 2 ? 96u : 128u;
+    auto cells = [&](const SmokeVolume& v) {
+        const float want = std::ceil(v.source.size * std::max(P.resolution, 1.0f) / 4.0f) * 4.0f;
+        return uint32_t(std::clamp(want, 32.0f, float(most)));
+    };
+    uint32_t scratch = 0;
+    bool remake = false;
+    for (auto& [d, v] : live) {
+        if (v->n && v->n != cells(*v)) remake = true;
+        scratch = std::max(scratch, cells(*v));
+    }
+    if (scratch > m_smokeN && m_smokeN) remake = true;
+    if (remake) {
+        vkDeviceWaitIdle(m_device);
+        auto destroy = [&](SmokeImage& i) {
+            if (i.view) vkDestroyImageView(m_device, i.view, nullptr);
+            if (i.image) vmaDestroyImage(m_allocator, i.image, i.allocation);
+            i = SmokeImage{};
+        };
+        for (auto& [d, v] : live) {
+            if (v->n && v->n != cells(*v)) {
+                for (int k = 0; k < 2; ++k) { destroy(v->vel[k]); destroy(v->dens[k]); }
+                destroy(v->light);
+                v->n = 0;
+                v->fresh = true;
+            }
+        }
+        if (scratch > m_smokeN) {
+            destroy(m_smokeCurl);
+            destroy(m_smokeDiv);
+            destroy(m_smokePressure[0]);
+            destroy(m_smokePressure[1]);
+        }
+    }
+    m_smokeN = std::max(m_smokeN, scratch);
+    for (auto& [d, v] : live)
+        if (!v->n)
+            v->n = cells(*v);
 
     // Images: the shared scratch, and each volume's on first use.
     const VkFormat rgba = VK_FORMAT_R16G16B16A16_SFLOAT, r32 = VK_FORMAT_R32_SFLOAT, r16 = VK_FORMAT_R16_SFLOAT;
     std::vector<VkImageMemoryBarrier2> toGeneral;
     std::vector<VkImage> toClear;
-    auto ensure = [&](SmokeImage& img, VkFormat f, bool clear) {
+    auto ensure = [&](SmokeImage& img, VkFormat f, bool clear, uint32_t n) {
         if (img.image)
             return true;
         if (!MakeSmokeImage(f, n, img))
@@ -397,8 +434,9 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         if (clear) toClear.push_back(img.image);
         return true;
     };
-    bool ok = ensure(m_smokeCurl, rgba, false) && ensure(m_smokeDiv, r32, false) && ensure(m_smokePressure[0], r32, false) &&
-              ensure(m_smokePressure[1], r32, false);
+    const uint32_t ns = m_smokeN;
+    bool ok = ensure(m_smokeCurl, rgba, false, ns) && ensure(m_smokeDiv, r32, false, ns) &&
+              ensure(m_smokePressure[0], r32, false, ns) && ensure(m_smokePressure[1], r32, false, ns);
     if (ok && !m_smokeNoise.image) {             // (its own size, not the grid's)
         ok = MakeSmokeImage(r16, kNoiseSize, m_smokeNoise);
         if (ok) {
@@ -414,8 +452,8 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         }
     }
     for (auto& [d, v] : live) {
-        ok = ok && ensure(v->vel[0], rgba, true) && ensure(v->vel[1], rgba, true) && ensure(v->dens[0], rgba, true) &&
-             ensure(v->dens[1], rgba, true) && ensure(v->light, r16, false);
+        ok = ok && ensure(v->vel[0], rgba, true, v->n) && ensure(v->vel[1], rgba, true, v->n) &&
+             ensure(v->dens[0], rgba, true, v->n) && ensure(v->dens[1], rgba, true, v->n) && ensure(v->light, r16, false, v->n);
         if (v->fresh)
             for (int k = 0; k < 2; ++k) { toClear.push_back(v->vel[k].image); toClear.push_back(v->dens[k].image); }
         v->fresh = false;
@@ -461,12 +499,14 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
     const float sl = std::max(std::sqrt(sun[0] * sun[0] + sun[1] * sun[1] + sun[2] * sun[2]), 1e-6f);
     for (float& s : sun) s /= sl;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_smokeSimPipeline);
-    uint32_t groups = n / 4;
+    uint32_t groups = 0;
     EnsureRingSpace(live.size() * (sizeof(SmokeBodies) + 256) + 1024);
     Frame& f = m_frames[m_frameIndex];
     for (auto& [dist, vp] : live) {
         SmokeVolume& v = *vp;
         const SmokeSource& s = v.source;
+        const uint32_t n = v.n;
+        groups = n / 4;
         const bool fed = now - v.lastSeen < 0.25;           // a source gone: its smoke goes on, nothing added
         float corner[3], shift[3], wind[2];
         SmokeWind(s, m_rainWind, wind);
@@ -653,7 +693,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
             std::memcpy(sf.ambient, m_terrainAmbient, 12);
         else
             ArgbTo4(m_rs[d3d::RS_AMBIENT], sf.ambient);
-        sf.ambient[3] = float(P.quality <= 1 ? 32 : P.quality == 2 ? 48 : 64);
+        sf.ambient[3] = std::clamp(float(v.n) * 0.75f, 32.0f, 96.0f);   // (the march's steps: about a cell each)
         sf.proj[0] = m_proj.m[2][2];
         sf.proj[1] = m_proj.m[3][2];
         sf.proj[2] = m_proj.m[0][0];

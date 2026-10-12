@@ -178,7 +178,11 @@ void main()
         imageStore(curlImg, id, vec4(texture(densIn, uvw + P.e.xyz - v * (dt / size)).rg, 0.0, 0.0));
     } else if (stage == 8) {
         vec3 v = texelFetch(velIn, id, 0).xyz;
-        imageStore(divImg, id, vec4(texture(forwardIn, uvw - P.e.xyz + v * (dt / size)).r));
+        // (The scratch image may be bigger than this box: only its first n cells a side are this step's.)
+        vec3 at = uvw - P.e.xyz + v * (dt / size);
+        float back = any(lessThan(at, vec3(0.0))) || any(greaterThan(at, vec3(1.0))) ? 0.0
+                   : texture(forwardIn, at * float(n) / vec3(textureSize(forwardIn, 0))).r;
+        imageStore(divImg, id, vec4(back));
     } else if (stage == 9) {
         vec3 v = texelFetch(velIn, id, 0).xyz;
         vec3 at = (uvw + P.e.xyz - v * (dt / size)) * float(n) - 0.5;   // where it came from (cells)

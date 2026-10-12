@@ -1404,6 +1404,7 @@ bool g_smokeGame = false;         // --smoke-game: the source as the game's barr
 float g_smokeDensity = 1.0f;      // --smoke-density X (RVK_SmokeDensity)
 float g_smokeWindScale = 1.0f;    // --smoke-wind X: the game's wind x X
 float g_smokeWisps = 1.0f;        // --smoke-wisps X (RVK_SmokeWisps)
+bool g_smokeTwo = false;          // --smoke-two: a second, bigger source
 float g_rainForce = 0.0f;         // --rain F: rain this hard (0..1; RVK_RainForce), the new weather on
 bool g_waterLamp = false;         // --water-lamp: a warm point light by the camera, as a character's lamp (with
                                   // --light-override, so the frame's lights carry it)
@@ -1744,6 +1745,15 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
                     src.wind[0] = 7.65f * g_smokeWindScale; src.wind[1] = 1.36f * g_smokeWindScale; src.wind[2] = -1.92f * g_smokeWindScale;
                 }
                 dev.SmokeSourceFrame(1, src);
+                if (g_smokeTwo) {                // (--smoke-two: a bigger second one beside it - its own grid size)
+                    Device::SmokeSource big;
+                    big.pos[0] = 3.0f;
+                    big.pos[2] = -10.0f;
+                    big.pos[1] = height(big.pos[0], big.pos[2]);
+                    big.size = 9.0f;
+                    big.colour = 0x8A8580;
+                    dev.SmokeSourceFrame(2, big);
+                }
             }
         }
         dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG1);
@@ -2854,6 +2864,7 @@ int main(int argc, char** argv)
         else if (a == "--smoke") { g_smoke = true; hdr = true; }
         else if (a == "--smoke-walker") { g_smoke = g_smokeWalker = true; hdr = true; }
         else if (a == "--smoke-game") { g_smoke = g_smokeGame = true; hdr = true; }
+        else if (a == "--smoke-two") g_smokeTwo = true;
         else if (a == "--smoke-wisps" && i + 1 < argc) g_smokeWisps = float(std::atof(argv[++i]));
         else if (a == "--smoke-wind" && i + 1 < argc) g_smokeWindScale = float(std::atof(argv[++i]));
         else if (a == "--smoke-density" && i + 1 < argc) g_smokeDensity = float(std::atof(argv[++i]));
