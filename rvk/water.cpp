@@ -1481,15 +1481,20 @@ void Device::DrawWater(const WaterVertex* vertices, uint32_t vertexCount, const 
     static std::vector<std::vector<uint32_t>> fallTris;
     meshOut.resize(vertexCount);
     BuildFallVertices(vertices, vertexCount, steep, meshOut.data(), shore, fallTris);
-    std::vector<const WaterFall*> sheets;
-    VkDeviceSize sheetBytes = 0;
+    // (Keys, not pointers, while m_waterFalls changes: adding or dropping a fall moves the others.)
+    std::vector<uint64_t> sheetKeys;
     for (const std::vector<uint32_t>& tris : fallTris) {
         const uint64_t key = FallKey(meshOut.data(), steep, tris);
         auto it = std::find_if(m_waterFalls.begin(), m_waterFalls.end(), [&](const WaterFall& w) { return w.key == key; });
         if (it == m_waterFalls.end()) {
-            if (m_waterFalls.size() >= 8)
-                m_waterFalls.erase(std::min_element(m_waterFalls.begin(), m_waterFalls.end(),
-                                                    [](const WaterFall& a, const WaterFall& b) { return a.lastFrame < b.lastFrame; }));
+            if (m_waterFalls.size() >= 8) {
+                // The one unseen longest goes - never one drawn this frame (all 8 are: this one isn't drawn).
+                auto oldest = std::min_element(m_waterFalls.begin(), m_waterFalls.end(),
+                                               [](const WaterFall& a, const WaterFall& b) { return a.lastFrame < b.lastFrame; });
+                if (oldest->lastFrame == m_frameNumber)
+                    continue;
+                m_waterFalls.erase(oldest);
+            }
             std::vector<MeshVertexOut> sv;
             WaterFall w;
             w.key = key;
@@ -1502,11 +1507,16 @@ void Device::DrawWater(const WaterVertex* vertices, uint32_t vertexCount, const 
             it = m_waterFalls.end() - 1;
         }
         it->lastFrame = m_frameNumber;
-        if (it->indices.empty())
-            continue;
-        sheets.push_back(&*it);
-        sheetBytes += it->vertices.size() * 4 + it->indices.size() * 4 + 512;
+        if (!it->indices.empty())
+            sheetKeys.push_back(key);
     }
+    std::vector<const WaterFall*> sheets;
+    VkDeviceSize sheetBytes = 0;
+    for (const WaterFall& w : m_waterFalls)
+        if (std::find(sheetKeys.begin(), sheetKeys.end(), w.key) != sheetKeys.end()) {
+            sheets.push_back(&w);
+            sheetBytes += w.vertices.size() * 4 + w.indices.size() * 4 + 512;
+        }
     // Their feet, as segments (FootSegment) between neighbouring foot points - the nearest kFootMax to the camera.
     m_waterFoot.clear();
     for (const WaterFall* w : sheets)
