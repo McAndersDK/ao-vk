@@ -127,8 +127,9 @@ void __fastcall SmokeUpdate(void* self, void*)
     const float smallest = std::isfinite(sizes[0]) ? std::max(sizes[0], 0.0f) : 0.5f;
     s.radius = std::clamp(0.25f * smallest + 0.5f * std::max(radius[1], 0.0f) + 0.15f, 0.12f, 1.5f);
     s.speed = std::clamp(rise, 0.3f, 4.0f);
-    s.life = std::isfinite(life) ? std::clamp(life, 1.0f, 12.0f) : 4.0f;
-    s.size = std::clamp(s.speed * s.life * 0.6f + 6.0f * s.radius, 3.0f, 16.0f);
+    s.life = (std::isfinite(life) ? std::clamp(life, 1.0f, 12.0f) : 4.0f) *
+             std::clamp(rvk_settings::GetEffective("RVK_SmokeLife"), 0.25f, 4.0f);   // (x RVK_SmokeLife)
+    s.size = std::clamp(s.speed * s.life * 0.6f + 6.0f * s.radius, 3.0f, 20.0f);
     // The wind the game's smoke drifts with (its sprites' update is handed the effect handler's).
     if (const void* handler = g_handler ? g_handler() : nullptr) {
         float w[3];

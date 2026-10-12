@@ -10,6 +10,7 @@
 //     again into the divergence image, 9 the forward one corrected by half the round trip's error - clamped to what
 //     was there, so it cannot overshoot: much sharper than moving it once), the source's added, fading
 //   7 the sunlight reaching each cell through the smoke (for the rendering)
+// Characters (B) stir it: the smoke in one moves with it, a moving one leaves eddies behind it.
 // Velocities in world units / s, the box P.a.w world units across; the box may move with its source (P.e.xyz: by how
 // much since last frame, in box units) - the contents stay where they are in the world.
 layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
@@ -25,6 +26,12 @@ layout(set = 0, binding = 7, r32f) uniform image3D divImg;
 layout(set = 0, binding = 8, rgba16f) uniform readonly image3D velRead;   // exact reads (neighbours)
 layout(set = 0, binding = 9, r16f) uniform writeonly image3D lightOut;
 layout(set = 0, binding = 10) uniform sampler3D forwardIn;       // stage 8: the forward step (the curl image)
+// The characters in the box (rvk/smoke.cpp SmokeBodies): upright capsules the smoke moves with and flows round.
+layout(set = 0, binding = 11, std140) uniform Bodies {
+    vec4 info;          // x: how many; y: how strongly they stir it (RVK_SmokeStir)
+    vec4 pos[8];        // x z: its middle, y: its feet, w: its top (box units)
+    vec4 vel[8];        // xyz: its velocity (world / s); w: its radius (box units)
+} B;
 
 layout(push_constant) uniform Params {
     vec4 a;     // x: stage; y: N; z: dt (s); w: the box's size (world)
@@ -36,6 +43,17 @@ layout(push_constant) uniform Params {
                 // from 0); stage 0: the step's number (the source's jitter)
     vec4 f;     // xyz: towards the sun (unit); w: the smoke's extinction (per world unit at density 1)
 } P;
+
+// How much of a cell is inside a character (0..1) and how near it is (1 at its surface, 0 a body width away).
+float InBody(vec3 uvw, int i, out float near_)
+{
+    vec4 b = B.pos[i];
+    float r = B.vel[i].w, soft = 1.5 / P.a.y;
+    vec3 axis = vec3(b.x, clamp(uvw.y, b.y + r, max(b.w - r, b.y + r)), b.z);
+    float dist = length(uvw - axis);
+    near_ = 1.0 - smoothstep(r, 2.2 * r + soft, dist);
+    return 1.0 - smoothstep(r - soft, r + soft, dist);
+}
 
 ivec3 Clamp(ivec3 c) { return clamp(c, ivec3(0), ivec3(int(P.a.y) - 1)); }
 
@@ -73,6 +91,16 @@ void main()
         uint step_ = uint(P.e.w) / 6u;
         ivec3 eddy = id / 3;
         v.xz += inSource * P.c.z * 0.8 * vec2(Jitter(eddy, step_), Jitter(eddy, step_ + 7919u));
+        // Characters: inside one the smoke moves as it does (pushed ahead, pulled along behind - the pressure solve
+        // sends the rest round it); round a moving one, eddies in its wake as fast as it goes.
+        for (int i = 0; i < int(B.info.x); ++i) {
+            float near_, inside = InBody(uvw, i, near_);
+            vec3 bv = B.vel[i].xyz;
+            v = mix(v, bv, inside * min(B.info.y, 1.0));
+            float wake = near_ * (1.0 - inside) * length(bv) * 0.7 * B.info.y;
+            uint salt = uint(P.e.w) / 4u + uint(i) * 131u;
+            v += wake * vec3(Jitter(id / 2, salt), 0.5 * Jitter(id / 2, salt + 17u), Jitter(id / 2, salt + 7919u));
+        }
         if (id.y == 0) v.y = max(v.y, 0.0);                              // the ground
         v *= exp(-0.05 * dt);
         imageStore(velOut, id, vec4(v, 0.0));
@@ -151,6 +179,10 @@ void main()
         dens.r = dens.r * exp(-P.c.w * dt);
         dens.r = max(dens.r, min(dens.r + level * 4.0 * dt, level));
         dens.g = (dens.g + P.c.y * inSource * dt) * exp(-0.6 * dt);
+        for (int i = 0; i < int(B.info.x); ++i) {                       // (none left inside a character)
+            float near_, inside = InBody(uvw, i, near_);
+            dens *= 1.0 - inside * min(12.0 * dt, 1.0) * min(B.info.y, 1.0);
+        }
         // Fading out towards the walls and the top (what reaches them leaves the box).
         vec3 edge = min(uvw, 1.0 - uvw);
         dens *= smoothstep(0.0, 0.06, min(min(edge.x, edge.z), 1.0 - uvw.y));

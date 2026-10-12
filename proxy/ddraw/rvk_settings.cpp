@@ -137,6 +137,8 @@ Setting g_settings[] = {
     {"RVK_SmokeOn",    "Simulated smoke (needs HDR)",  "Experimental",    Bool,  0, 1, 1, 0, nullptr, 0},
     {"RVK_SmokeQual",  "Smoke: quality (1 low, 2 medium, 3 high)",                "Experimental",     Int,   1, 3, 1, 2, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeDensity","Smoke: how thick",                                         "Experimental",     Float, 0.1f, 4, 0.1f, 1, nullptr, 0, "RVK_SmokeOn"},
+    {"RVK_SmokeLife",  "Smoke: how long it lasts (x the game's)",                 "Experimental",     Float, 0.25f, 4, 0.25f, 1, nullptr, 0, "RVK_SmokeOn"},
+    {"RVK_SmokeStir",  "Smoke: how much characters stir it",                      "Experimental",     Float, 0, 2, 0.25f, 1, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeGame",  "Smoke: the game's smoke sprites too",                     "Experimental",     Bool,  0, 1, 1, 0, nullptr, 0, "RVK_SmokeOn"},
 
     {"RVK_SunShadow",  "Sun shadows",                                              "Shadows",          Bool,  0, 1, 1, 1, "RANDYVK_SHADOWS", 0},
@@ -469,6 +471,7 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
         s.enable = V("RVK_SmokeOn") != 0.0f;
         s.quality = uint32_t(V("RVK_SmokeQual"));
         s.density = V("RVK_SmokeDensity");
+        s.stir = V("RVK_SmokeStir");
         d->SetSmokeParams(s);
     }
     else if (std::strncmp(n, "RVK_Vol", 7) == 0) d->SetVolume(V("RVK_Volume"), V("RVK_VolHaze"), V("RVK_VolShafts"));

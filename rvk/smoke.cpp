@@ -2,7 +2,7 @@
 // colour...) gets a box of N^3 cells round it - standing on it, the source near its floor - in which a fluid is
 // simulated on the GPU each frame (shaders/smoke_sim.comp: velocity moved along itself with buoyancy, the wind and the
 // source's push; vorticity confinement; a pressure solve keeping it incompressible; density and temperature moved
-// along it; the sunlight through it), then ray-marched over the finished scene (smoke.vert/.frag), before the rain.
+// along it; characters stirring it; the sunlight through it), then ray-marched over the finished scene (smoke.vert/.frag), before the rain.
 //
 // A box follows its source; its contents stay where they are in the world (the simulation reads them shifted by the
 // box's move). A new volume warms up: its first kWarmUp seconds simulated kWarmSpeed times as fast while it fades in,
@@ -38,6 +38,15 @@ constexpr uint32_t kSmokeSimMax = 6;            // ... simulated a frame (the ne
 constexpr float kSmokeRange = 160.0f;           // simulated and drawn this near only
 constexpr uint32_t kJacobi = 24;                // pressure steps
 constexpr float kWarmUp = 2.0f, kWarmSpeed = 3.0f;
+
+constexpr uint32_t kSmokeBodies = 8;            // characters stirring a volume (smoke_sim.comp Bodies)
+constexpr float kBodyRadius = 0.35f;            // a character's (world)
+
+// The characters in a volume (smoke_sim.comp Bodies, std140).
+struct SmokeBodies {
+    float info[4];
+    float pos[kSmokeBodies][4], vel[kSmokeBodies][4];
+};
 
 struct SimPush {
     float a[4], b[4], c[4], d[4], e[4], f[4];   // smoke_sim.comp Params
@@ -156,15 +165,16 @@ bool Device::CreateSmokeResources(std::string* error)
     si.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
     if (!Check(vkCreateSampler(m_device, &si, nullptr, &m_smokeSampler), "smoke sampler", error))
         return false;
-    // The simulation: 0, 1, 10 sampled; 2..9 storage images.
+    // The simulation: 0, 1, 10 sampled; 2..9 storage images; 11 the characters.
     {
-        VkDescriptorSetLayoutBinding b[11] = {};
-        for (uint32_t i = 0; i < 11; ++i)
+        VkDescriptorSetLayoutBinding b[12] = {};
+        for (uint32_t i = 0; i < 12; ++i)
             b[i] = {i, i < 2 || i == 10 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1,
                     VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+        b[11].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         VkDescriptorSetLayoutCreateInfo sl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         sl.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-        sl.bindingCount = 11;
+        sl.bindingCount = 12;
         sl.pBindings = b;
         if (!Check(vkCreateDescriptorSetLayout(m_device, &sl, nullptr, &m_smokeSimSetLayout), "smoke sim set", error))
             return false;
@@ -399,6 +409,8 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
     for (float& s : sun) s /= sl;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_smokeSimPipeline);
     const uint32_t groups = n / 4;
+    EnsureRingSpace(live.size() * (sizeof(SmokeBodies) + 256) + 1024);
+    Frame& f = m_frames[m_frameIndex];
     for (auto& [dist, vp] : live) {
         SmokeVolume& v = *vp;
         const SmokeSource& s = v.source;
@@ -431,6 +443,40 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         std::memcpy(p.e, shift, sizeof(shift));
         std::memcpy(p.f, sun, sizeof(sun));
         p.f[3] = 1.6f;
+        // The characters in the box (last frame's, moved on by how they went), nearest the source first.
+        SmokeBodies bodies{};
+        bodies.info[1] = P.stir;
+        if (P.stir > 0.0f) {
+            const float ahead = float(std::clamp(now - m_waterBodiesTime, 0.0, 0.1));
+            std::vector<std::pair<float, const WaterBody*>> in;
+            for (const WaterBody& w : m_waterBodies) {
+                const float top = 2.0f * w.centreY - w.minY;
+                const float x = (w.x - corner[0]) / s.size, z = (w.z - corner[2]) / s.size;
+                if (x < -0.1f || x > 1.1f || z < -0.1f || z > 1.1f || top < corner[1] || w.minY > corner[1] + s.size)
+                    continue;
+                in.emplace_back(std::hypot(w.x - s.pos[0], w.z - s.pos[2]), &w);
+            }
+            std::sort(in.begin(), in.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+            const uint32_t count = uint32_t(std::min<size_t>(in.size(), kSmokeBodies));
+            for (uint32_t i = 0; i < count; ++i) {
+                const WaterBody& w = *in[i].second;
+                const float vy = std::clamp(-w.fall, -10.0f, 10.0f);
+                const float top = 2.0f * w.centreY - w.minY;
+                bodies.pos[i][0] = (w.x + w.vx * ahead - corner[0]) / s.size;
+                bodies.pos[i][1] = (w.minY + vy * ahead - corner[1]) / s.size;
+                bodies.pos[i][2] = (w.z + w.vz * ahead - corner[2]) / s.size;
+                bodies.pos[i][3] = (top + vy * ahead - corner[1]) / s.size;
+                bodies.vel[i][0] = w.vx;
+                bodies.vel[i][1] = vy;
+                bodies.vel[i][2] = w.vz;
+                bodies.vel[i][3] = kBodyRadius / s.size;
+            }
+            bodies.info[0] = float(count);
+        }
+        void* bodiesCpu = nullptr;
+        const VkDeviceSize bodiesOffset = Allocate(sizeof(SmokeBodies), 256, &bodiesCpu);
+        std::memcpy(bodiesCpu, &bodies, sizeof(bodies));
+        VkDescriptorBufferInfo bodiesInfo{f.ring, bodiesOffset, sizeof(SmokeBodies)};
         const uint32_t c = v.cur, o = c ^ 1u;
         // Bindings: 0 velIn, 1 densIn (sampled); 2 velOut, 3 densOut, 4 curl, 5 pIn, 6 pOut, 7 div, 8 velRead, 9 light;
         // 10 the curl image sampled (MacCormack's forward step).
@@ -445,15 +491,17 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
                 {VK_NULL_HANDLE, velRead.view, VK_IMAGE_LAYOUT_GENERAL}, {VK_NULL_HANDLE, v.light.view, VK_IMAGE_LAYOUT_GENERAL},
                 {m_smokeSampler, m_smokeCurl.view, VK_IMAGE_LAYOUT_GENERAL},
             };
-            VkWriteDescriptorSet w[11] = {};
-            for (uint32_t i = 0; i < 11; ++i) {
+            VkWriteDescriptorSet w[12] = {};
+            for (uint32_t i = 0; i < 12; ++i) {
                 w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 w[i].dstBinding = i;
                 w[i].descriptorCount = 1;
                 w[i].descriptorType = i < 2 || i == 10 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                w[i].pImageInfo = &info[i];
+                w[i].pImageInfo = i < 11 ? &info[i] : nullptr;
             }
-            vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_smokeSimLayout, 0, 11, w);
+            w[11].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            w[11].pBufferInfo = &bodiesInfo;
+            vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_smokeSimLayout, 0, 12, w);
             SimPush q = p;
             q.a[0] = float(stage);
             q.e[3] = first;
@@ -490,7 +538,6 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
     EnsureRingSpace(live.size() * (sizeof(SmokeFrame) + 256) + sizeof(FrameLights) + 1024);
     if (m_frameLightsDirty || m_frameLightsGeneration != m_ringGeneration)
         WriteFrameLights();
-    Frame& f = m_frames[m_frameIndex];
     Texture* targets[5] = {m_scene, m_glow, m_localFraction, m_motionVectors, m_albedo};
     VkRenderingAttachmentInfo colors[5] = {};
     for (int i = 0; i < 5; ++i) {

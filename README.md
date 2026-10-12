@@ -363,6 +363,8 @@ Some useful ones:
 | `RVK_RainBright` | 1 | how bright the rain and its splashes are |
 | `RVK_SmokeOn` | 0 | simulated smoke: a fluid simulated round each smoke source, lit by the sun and the lamps (needs HDR). Experimental: off by default |
 | `RVK_SmokeQual` / `RVK_SmokeDensity` | 2 / 1 | its grid (1: 48, 2: 64, 3: 80 cells a side), how thick it is |
+| `RVK_SmokeLife` | 1 | how long the smoke lasts, times the game's (0.25 - 4): longer is taller and thicker |
+| `RVK_SmokeStir` | 1 | how much characters stir it: walking through pushes it aside and leaves eddies (0: not at all) |
 | `RVK_SmokeGame` | 0 | the game's own smoke sprites drawn as well (1) |
 
 ### Hotkeys (Ctrl+Shift + key)

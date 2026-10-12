@@ -1398,6 +1398,7 @@ float g_waterMeshAt[3] = {2040.0f, 29.5f, 2340.0f};
 float g_waterEye[3] = {0, 0, 0};  // --water-eye X Y Z (the dump's coordinates): the camera there, looking at
 bool g_waterEyeSet = false;       // --water-mesh-at
 bool g_smoke = false;             // --smoke: a smoke source on the ground in front of the camera (the new smoke on)
+bool g_smokeWalker = false;       // --smoke-walker: a "character" walking to and fro through the smoke
 float g_rainForce = 0.0f;         // --rain F: rain this hard (0..1; RVK_RainForce), the new weather on
 bool g_waterLamp = false;         // --water-lamp: a warm point light by the camera, as a character's lamp (with
                                   // --light-override, so the frame's lights carry it)
@@ -1702,6 +1703,31 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
             dev.DrawPrimitive(TriangleList, kFvfMesh, flat.data(), uint32_t(flat.size()));
         } else {
             dev.DrawWater(water.data(), uint32_t(water.size()), waterIdx.data(), uint32_t(waterIdx.size()));
+            if (g_smokeWalker) {                 // (drawn after the water: the bodies are taken from last frame's draws)
+                std::this_thread::sleep_for(std::chrono::milliseconds(16));
+                std::vector<VtxMesh> cv;
+                std::vector<uint16_t> ci;
+                const float wx = -3.0f + 3.5f * std::sin(float(frame) * 0.01f);   // ~2 m/s at 60 fps
+                AddCube(cv, ci, wx, 0.0f, -11.5f, 0.3f);
+                const float ground = height(wx, -11.5f);
+                for (VtxMesh& m : cv) {
+                    m.y = ground + (m.y + 0.3f) * 3.0f;                         // 1.8 tall, on the ground
+                    if (m.y > ground + 0.2f) m.x += 0.05f * std::sin(frame * 0.7f);
+                }
+                dev.SetRenderState(RS_LIGHTING, 1);
+                dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
+                dev.SetRenderState(RS_ZWRITEENABLE, 1);
+                dev.SetTexture(0, nullptr);
+                dev.SetTextureStageState(0, TSS_COLOROP, TOP_SELECTARG2);
+                dev.SetDrawVisual(uint32_t(VisualKind::Character), "walker");
+                dev.DrawPrimitive(TriangleList, kFvfMesh, cv.data(), uint32_t(cv.size()));
+                dev.SetDrawVisual(0, nullptr);
+                dev.SetRenderState(RS_LIGHTING, 0);
+                dev.SetRenderState(RS_ALPHABLENDENABLE, 1);
+                dev.SetRenderState(RS_ZWRITEENABLE, 0);
+                dev.SetTexture(0, waterTex);
+                dev.SetTextureStageState(0, TSS_COLOROP, TOP_MODULATE);
+            }
             if (g_smoke) {                       // (--smoke: a smouldering fire on the shore in front)
                 Device::SmokeSource src;
                 src.pos[0] = -3.0f;
@@ -2817,6 +2843,7 @@ int main(int argc, char** argv)
         else if (a == "--water-mesh" && i + 1 < argc) g_waterMesh = argv[++i];
         else if (a == "--water-lamp") g_waterLamp = true;
         else if (a == "--smoke") { g_smoke = true; hdr = true; }
+        else if (a == "--smoke-walker") { g_smoke = g_smokeWalker = true; hdr = true; }
         else if (a == "--rain" && i + 1 < argc) { g_rainForce = float(std::atof(argv[++i])); hdr = true; }
         else if (a == "--water-mesh-at" && i + 3 < argc) { for (float& x : g_waterMeshAt) x = float(std::atof(argv[++i])); }
         else if (a == "--water-eye" && i + 3 < argc) { for (float& x : g_waterEye) x = float(std::atof(argv[++i])); g_waterEyeSet = true; }

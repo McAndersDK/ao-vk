@@ -536,6 +536,7 @@ public:
         bool enable = false;                     // RVK_SmokeOn
         uint32_t quality = 2;                    // RVK_SmokeQual: 1 low (48^3), 2 medium (64^3), 3 high (80^3)
         float density = 1.0f;                   // RVK_SmokeDensity: how thick, x
+        float stir = 1.0f;                      // RVK_SmokeStir: how much characters move it (0 not at all)
     };
     struct SmokeSource {
         float pos[3] = {0, 0, 0};                // world: where it comes from (its box stands round it)
