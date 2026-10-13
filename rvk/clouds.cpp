@@ -702,14 +702,20 @@ void Device::MarchCloudPuffs(VkCommandBuffer cmd, const std::vector<std::pair<fl
         for (int j = 0; j < 3; ++j)
             cf.eye[j] = eyeW[0] * inv.m[0][j] + eyeW[1] * inv.m[1][j] + eyeW[2] * inv.m[2][j] + inv.m[3][j];
         cf.eye[3] = TaaActive() ? 1.0f : 0.0f;
-        // The box: the sheet given a body across its thin axis, half as thick as it is wide.
+        // The box: the sheet given a body across its thin axis - a curved puff half as thick as it is wide, a flat sheet
+        // (the game's storm layers: hundreds of units across, none thick) a sixth - but never reaching the eye: the
+        // sky's sheets can lie near the eye's height in its space, and a body round the eye is a wall of cloud with
+        // the box's sides as hard edges.
         float low[3], high[3];
         std::memcpy(low, p.low, sizeof(low));
         std::memcpy(high, p.high, sizeof(high));
         const int a = p.thin == 0 ? 1 : 0, b = p.thin == 2 ? 1 : 2;
         const float width = std::min(high[a] - low[a], high[b] - low[b]);
         const float mid = 0.5f * (low[p.thin] + high[p.thin]);
-        const float thick = std::max(0.5f * (high[p.thin] - low[p.thin]), 0.25f * width);
+        const float sheet = 0.5f * (high[p.thin] - low[p.thin]);
+        const bool flat = sheet < 0.02f * width;
+        float thick = std::max(sheet, (flat ? 0.08f : 0.25f) * width);
+        thick = std::max(std::min(thick, 0.5f * std::fabs(cf.eye[p.thin] - mid)), std::max(sheet, 1e-3f * width));
         low[p.thin] = mid - thick;
         high[p.thin] = mid + thick;
         std::memcpy(cf.low, low, sizeof(low));
