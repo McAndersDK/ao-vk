@@ -237,7 +237,7 @@ bool Device::CreateCloudResources(std::string* error)
         ul.pBindings = u;
         if (!Check(vkCreateDescriptorSetLayout(m_device, &ul, nullptr, &m_cloudUpSetLayout), "cloud up set", error))
             return false;
-        VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16};
+        VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 48};   // (cloud_up: 16; cloud_fogged: 48)
         VkPipelineLayoutCreateInfo upl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         upl.setLayoutCount = 1;
         upl.pSetLayouts = &m_cloudUpSetLayout;
@@ -737,7 +737,7 @@ void Device::DrawClouds(VkCommandBuffer cmd)
         float lo[2] = {0.0f, 0.0f}, hi[2] = {float(fw), float(fh)};
         Texture* clouds = m_cloudHalf;           // the half-size clouds to filter up
         if (layer) {
-            m_cloudFogDepth = FogEndDepth();
+            m_cloudFogDepth = FogDepth(0.75f);   // (the clouds go over what the fog has taken a quarter of, and more)
             MakeCloudWeather(work, eyeNow);
             clouds = ReusedCloudLayer(work, skipCovered, eyeNow);
             m_cloudFrameClouds = clouds;          // (ComposeCloudsOverFog, after the scene's draws)
@@ -1456,31 +1456,32 @@ Texture* Device::ReusedCloudLayer(VkCommandBuffer cmd, bool skipCovered, const f
     return m_cloudHistory[cur];
 }
 
-// The depth (the scene's projection) of the distance where the scene's fog is complete - past it the game draws
-// surfaces wholly in the fog's colour; 2 (beyond any depth) without fog.
-float Device::FogEndDepth() const
+// The depth (the scene's projection) of the distance where the scene's fog leaves `left` of a surface's colour (0:
+// complete); 2 (beyond any depth) without fog.
+float Device::FogDepth(float left) const
 {
     float fog[4], params[4];
     SceneFog(fog, params);
     if (fog[3] < 0.5f)
         return 2.0f;
     const uint32_t mode = uint32_t(params[3]);
-    float end = 0.0f;
-    if (mode == 3) end = params[1];
-    else if (mode == 1 && params[2] > 0.0f) end = 4.6f / params[2];             // (exp: 1% left)
-    else if (mode == 2 && params[2] > 0.0f) end = 2.15f / params[2];            // (exp2: 1% left)
-    if (end <= 1.0f)
+    left = std::clamp(left, 0.01f, 0.99f);
+    float d = 0.0f;
+    if (mode == 3) d = params[1] - left * (params[1] - params[0]);
+    else if (mode == 1 && params[2] > 0.0f) d = -std::log(left) / params[2];
+    else if (mode == 2 && params[2] > 0.0f) d = std::sqrt(-std::log(left)) / params[2];
+    if (d <= 1.0f)
         return 2.0f;
     const d3d::Matrix& proj = m_aoProjValid ? m_aoProj : m_proj;
-    const float d = end * 0.97f;
     const float w = d * proj.m[2][3] + proj.m[3][3];
     if (w <= 1e-6f)
         return 2.0f;
     return (d * proj.m[2][2] + proj.m[3][2]) / w;
 }
 
-// After the scene's draws: this frame's clouds over the surfaces the game fogs away wholly (cloud_fogged.frag) - in
-// its own rendering, the scene's depth read.
+// After the scene's draws: this frame's clouds over the surfaces the game fogs (cloud_fogged.frag), as much as it
+// fogs them - the game blends them towards its fog's colour, its sky's low down; with clouds in the sky, towards them.
+// In its own rendering, the scene's depth read.
 void Device::ComposeCloudsOverFog(VkCommandBuffer cmd)
 {
     if (!m_cloudFoggedPipeline || !m_cloudFrameClouds || m_cloudFrameCloudsFrame != m_frameNumber ||
@@ -1525,7 +1526,12 @@ void Device::ComposeCloudsOverFog(VkCommandBuffer cmd)
         w[i].pImageInfo = &images[i];
     }
     vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudUpLayout, 0, 2, w);
-    const float push[4] = {float(fw), float(fh), m_cloudFogDepth, m_prepassClearZ};
+    float fog[4], fogParams[4];
+    SceneFog(fog, fogParams);
+    const d3d::Matrix& proj = m_aoProjValid ? m_aoProj : m_proj;
+    const float push[12] = {float(fw), float(fh), m_prepassClearZ, fogParams[3],
+                            fogParams[0], fogParams[1], fogParams[2], m_cloudFogDepth,
+                            proj.m[2][2], proj.m[3][2], proj.m[2][3], proj.m[3][3]};
     vkCmdPushConstants(cmd, m_cloudUpLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), push);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRendering(cmd);
