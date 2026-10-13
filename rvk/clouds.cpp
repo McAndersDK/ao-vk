@@ -53,9 +53,6 @@ const uint32_t kCloudLayerFragSpirv[] = {
 const uint32_t kCloudResolveFragSpirv[] = {
 #include "cloud_resolve.frag.inc"
 };
-const uint32_t kCloudFoggedFragSpirv[] = {
-#include "cloud_fogged.frag.inc"
-};
 
 constexpr uint32_t kShadowSize = 256;           // the clouds' shadow map (pixels a side)
 constexpr float kShadowArea = 3000.0f;          // ... over this much of the world round the camera
@@ -226,15 +223,13 @@ bool Device::CreateCloudResources(std::string* error)
         if (!Check(vkCreatePipelineLayout(m_device, &spl, nullptr, &m_cloudShadowLayout), "cloud shadow layout", error))
             return false;
     }
-    // The half size's upsampling: 0 the clouds (linear), 1 the scene's depth (cloud_fogged.frag); push: the scene's
-    // size (and the fogged pass's depths).
+    // The half size's upsampling: 0 the clouds (linear); push: the scene's size.
     {
-        VkDescriptorSetLayoutBinding u[2] = {{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-                                             {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
+        VkDescriptorSetLayoutBinding u{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         VkDescriptorSetLayoutCreateInfo ul{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         ul.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-        ul.bindingCount = 2;
-        ul.pBindings = u;
+        ul.bindingCount = 1;
+        ul.pBindings = &u;
         if (!Check(vkCreateDescriptorSetLayout(m_device, &ul, nullptr, &m_cloudUpSetLayout), "cloud up set", error))
             return false;
         VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16};
@@ -326,8 +321,6 @@ bool Device::CreateCloudResources(std::string* error)
                     m_cloudUpLayout, sceneFormats, 5, VK_FORMAT_UNDEFINED, &m_cloudUpPipeline) &&
            pipeline(kFullscreenVertSpirv, sizeof(kFullscreenVertSpirv), kCloudUpFragSpirv, sizeof(kCloudUpFragSpirv),
                     m_cloudUpLayout, sceneFormats, 5, kDepthFormat, &m_cloudUpScenePipeline) &&
-           pipeline(kFullscreenVertSpirv, sizeof(kFullscreenVertSpirv), kCloudFoggedFragSpirv, sizeof(kCloudFoggedFragSpirv),
-                    m_cloudUpLayout, sceneFormats, 5, VK_FORMAT_UNDEFINED, &m_cloudFoggedPipeline) &&
            // (Blended over with alpha 1: written.)
            pipeline(kFullscreenVertSpirv, sizeof(kFullscreenVertSpirv), kCloudShadowFragSpirv, sizeof(kCloudShadowFragSpirv),
                     m_cloudShadowLayout, &shadowFormat, 1, VK_FORMAT_UNDEFINED, &m_cloudShadowPipeline);
@@ -424,7 +417,7 @@ void Device::DestroyCloudResources()
 {
     for (VkPipeline* p : {&m_cloudPipeline, &m_cloudHalfPipeline, &m_cloudUpPipeline, &m_cloudUpScenePipeline,
                           &m_cloudShadowPipeline, &m_cloudLayerNoisePipeline, &m_cloudWeatherPipeline, &m_cloudLayerPipeline,
-                          &m_cloudResolvePipeline, &m_cloudFoggedPipeline})
+                          &m_cloudResolvePipeline})
         if (*p) { vkDestroyPipeline(m_device, *p, nullptr); *p = VK_NULL_HANDLE; }
     for (VkPipelineLayout* l : {&m_cloudLayerNoiseLayout, &m_cloudWeatherLayout, &m_cloudLayerLayout, &m_cloudResolveLayout})
         if (*l) { vkDestroyPipelineLayout(m_device, *l, nullptr); *l = VK_NULL_HANDLE; }
@@ -438,8 +431,6 @@ void Device::DestroyCloudResources()
     if (m_cloudWeather) { DestroyTexture(m_cloudWeather); m_cloudWeather = nullptr; }
     for (Texture** t : {&m_cloudQuarter, &m_cloudHistory[0], &m_cloudHistory[1]})
         if (*t) { DestroyTexture(*t); *t = nullptr; }
-    m_cloudFrameClouds = nullptr;
-    m_cloudFrameCloudsFrame = ~0ull;
     m_cloudHistoryValid = false;
     if (m_cloudShadowLayout) { vkDestroyPipelineLayout(m_device, m_cloudShadowLayout, nullptr); m_cloudShadowLayout = VK_NULL_HANDLE; }
     if (m_cloudShadowSetLayout) { vkDestroyDescriptorSetLayout(m_device, m_cloudShadowSetLayout, nullptr); m_cloudShadowSetLayout = VK_NULL_HANDLE; }
@@ -737,11 +728,8 @@ void Device::DrawClouds(VkCommandBuffer cmd)
         float lo[2] = {0.0f, 0.0f}, hi[2] = {float(fw), float(fh)};
         Texture* clouds = m_cloudHalf;           // the half-size clouds to filter up
         if (layer) {
-            m_cloudFogDepth = FogEndDepth();
             MakeCloudWeather(work, eyeNow);
             clouds = ReusedCloudLayer(work, skipCovered, eyeNow);
-            m_cloudFrameClouds = clouds;          // (ComposeCloudsOverFog, after the scene's draws)
-            m_cloudFrameCloudsFrame = m_frameNumber;
         } else {
             Transition(work, m_cloudHalf, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
@@ -1306,7 +1294,6 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     // Towards the horizon the clouds become the fog's colour as far as the game's are fogged (a little at least).
     lf.horizon[0] = std::clamp(0.25f + 0.75f * m_cloudFogged, 0.0f, 1.0f);
     lf.horizon[1] = std::clamp(m_cloudParams.shade, 0.25f, 4.0f);
-    lf.horizon[2] = m_cloudFogDepth;             // (covered past it: marched too - ComposeCloudsOverFog lays them over)
     std::memcpy(lf.tint, m_cloudTint, 12);
     const float storm = std::clamp(m_rain, 0.0f, 1.0f);
     lf.tint[3] = m_cloudParams.brightness * (1.0f - 0.4f * storm);
@@ -1454,84 +1441,6 @@ Texture* Device::ReusedCloudLayer(VkCommandBuffer cmd, bool skipCovered, const f
     m_cloudHistoryFrame = m_frameNumber;
     std::memcpy(m_cloudHistoryEye, eye, sizeof(m_cloudHistoryEye));
     return m_cloudHistory[cur];
-}
-
-// The depth (the scene's projection) of the distance where the scene's fog is complete - past it the game draws
-// surfaces wholly in the fog's colour; 2 (beyond any depth) without fog.
-float Device::FogEndDepth() const
-{
-    float fog[4], params[4];
-    SceneFog(fog, params);
-    if (fog[3] < 0.5f)
-        return 2.0f;
-    const uint32_t mode = uint32_t(params[3]);
-    float end = 0.0f;
-    if (mode == 3) end = params[1];
-    else if (mode == 1 && params[2] > 0.0f) end = 4.6f / params[2];             // (exp: 1% left)
-    else if (mode == 2 && params[2] > 0.0f) end = 2.15f / params[2];            // (exp2: 1% left)
-    if (end <= 1.0f)
-        return 2.0f;
-    const d3d::Matrix& proj = m_aoProjValid ? m_aoProj : m_proj;
-    const float d = end * 0.97f;
-    const float w = d * proj.m[2][3] + proj.m[3][3];
-    if (w <= 1e-6f)
-        return 2.0f;
-    return (d * proj.m[2][2] + proj.m[3][2]) / w;
-}
-
-// After the scene's draws: this frame's clouds over the surfaces the game fogs away wholly (cloud_fogged.frag) - in
-// its own rendering, the scene's depth read.
-void Device::ComposeCloudsOverFog(VkCommandBuffer cmd)
-{
-    if (!m_cloudFoggedPipeline || !m_cloudFrameClouds || m_cloudFrameCloudsFrame != m_frameNumber ||
-        m_cloudFogDepth >= 1.0f || !m_scene || !m_depth)
-        return;
-    const uint32_t fw = m_scene->m_width, fh = m_scene->m_height;
-    ImageBarrier(cmd, m_depth, VK_IMAGE_ASPECT_DEPTH_BIT, m_depthLayout, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                 VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                 VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-    m_depthLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    Texture* targets[5] = {m_scene, m_glow, m_localFraction, m_motionVectors, m_albedo};
-    VkRenderingAttachmentInfo colors[5] = {};
-    for (int i = 0; i < 5; ++i) {
-        Transition(cmd, targets[i], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        colors[i].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        colors[i].imageView = targets[i]->m_view;
-        colors[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        colors[i].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-        colors[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    }
-    VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
-    ri.renderArea = {{0, 0}, {fw, fh}};
-    ri.layerCount = 1;
-    ri.colorAttachmentCount = 5;
-    ri.pColorAttachments = colors;
-    vkCmdBeginRendering(cmd, &ri);
-    VkViewport full{0.0f, 0.0f, float(fw), float(fh), 0.0f, 1.0f};
-    VkRect2D area{{0, 0}, {fw, fh}};
-    vkCmdSetViewport(cmd, 0, 1, &full);
-    vkCmdSetScissor(cmd, 0, 1, &area);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudFoggedPipeline);
-    VkDescriptorImageInfo images[2] = {
-        {m_cloudClampSampler, m_cloudFrameClouds->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {m_pointSampler, m_depthView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
-    VkWriteDescriptorSet w[2] = {};
-    for (uint32_t i = 0; i < 2; ++i) {
-        w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w[i].dstBinding = i;
-        w[i].descriptorCount = 1;
-        w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        w[i].pImageInfo = &images[i];
-    }
-    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudUpLayout, 0, 2, w);
-    const float push[4] = {float(fw), float(fh), m_cloudFogDepth, m_prepassClearZ};
-    vkCmdPushConstants(cmd, m_cloudUpLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), push);
-    vkCmdDraw(cmd, 3, 1, 0, 0);
-    vkCmdEndRendering(cmd);
-    m_cache = StateCache{};
-    m_arenaBound = m_bindlessBound = false;
-    ProfileMark("clouds over fog");
 }
 
 VkImageView Device::CloudShadowView() const

@@ -394,7 +394,6 @@ void Device::EndScene()
     ProfileMark("scene");
     RenderGrassField(cmd);                       // RVK_GrassOn: our ground grass, over the scene (its own block)
     ProfileMark("ground grass");
-    ComposeCloudsOverFog(cmd);                   // RVK_CloudLayer: its clouds over what the game fogs away wholly
     RenderSmoke(cmd);                            // RVK_SmokeOn: the smoke's simulation, and it over the scene
     RenderRain(cmd);                             // RVK_WeatherOn: the rain, over all of it
     double cpu = ProfileCpu();

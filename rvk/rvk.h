@@ -1672,14 +1672,6 @@ private:
     VkPipelineLayout m_cloudResolveLayout = VK_NULL_HANDLE;
     VkPipeline m_cloudResolvePipeline = VK_NULL_HANDLE;
     Texture* ReusedCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float eye[3]);
-    // ... over what the game fogs away (cloud_fogged.frag, after the scene's draws): this frame's clouds, the fog's end
-    // as a depth (2: no fog).
-    VkPipeline m_cloudFoggedPipeline = VK_NULL_HANDLE;
-    Texture* m_cloudFrameClouds = nullptr;
-    uint64_t m_cloudFrameCloudsFrame = ~0ull;
-    float m_cloudFogDepth = 2.0f;
-    float FogEndDepth() const;
-    void ComposeCloudsOverFog(VkCommandBuffer cmd);
     VkImageView CloudShadowView() const;         // the map to bind (any image when there is none: FL.clouds says so)
     bool CreateCloudResources(std::string* error);
     void DestroyCloudResources();
