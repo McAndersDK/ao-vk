@@ -63,8 +63,12 @@ void Device::UpdateMist()
     const float l = std::max(std::sqrt(m_trueSunDir[0] * m_trueSunDir[0] + m_trueSunDir[1] * m_trueSunDir[1] +
                                        m_trueSunDir[2] * m_trueSunDir[2]), 1e-6f);
     const float sunUp = -m_trueSunDir[1] / l;
-    m_mistSunTrend += ((sunUp - m_mistSunPrev) - m_mistSunTrend) * (1.0f - std::exp(-dt / 60.0f));
-    m_mistSunPrev = sunUp;
+    // (Against its height 30 seconds before: frame to frame the change is below the numbers' precision.)
+    if (first || now - m_mistSunPrevClock >= 30.0) {
+        if (!first) m_mistSunTrend = sunUp - m_mistSunPrev;
+        m_mistSunPrev = sunUp;
+        m_mistSunPrevClock = now;
+    }
     const float lowSun = 1.0f - Smooth(-0.05f, 0.35f, sunUp);
     const float rising = m_mistSunTrend >= 0.0f ? 1.0f : 0.6f;
     // The sky: clear calm nights make the most; rain lately more (wet ground) - fading over an hour.

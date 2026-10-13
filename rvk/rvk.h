@@ -972,7 +972,7 @@ private:
     std::vector<float> m_mistSamples;            // this frame's terrain heights near the eye
     float m_mistFloor = 0.0f, m_mistAmount = 0.0f, m_mistWet = 0.0f, m_mistSunPrev = 0.0f, m_mistSunTrend = 0.0f;
     bool m_mistFloorSet = false;
-    double m_mistClock = -1.0;
+    double m_mistClock = -1.0, m_mistSunPrevClock = 0.0;
     void NoteTerrainHeights(uint32_t fvf, const void* vertices, uint32_t vertexCount);
     void UpdateMist();
     void MistParams(float out[2]) const;
