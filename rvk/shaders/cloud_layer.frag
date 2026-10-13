@@ -128,20 +128,37 @@ vec4 Cirrus(vec3 eye, vec3 dir)
     if (t <= 0.0 || t > L.layer.w * 2.5)
         return vec4(0.0);
     vec3 p = eye + dir * t;
-    vec2 along = L.cirrus.zw, across = vec2(-along.y, along.x);
     vec2 q = p.xz + L.wind.xz * 2.5;             // (they drift faster: higher winds)
-    vec2 f = vec2(dot(q, along), dot(q, across));
     // Patches: where the high cloud is (broad, slow).
     float patches = textureLod(shapeNoise, vec3(q / 26000.0, 0.37 + L.eye.w * 0.00002), 0.0).r;
     patches = clamp((patches - 0.54) / 0.26, 0.0, 1.0);   // (its values bunch in 0.54..0.80)
     float cover = smoothstep(1.0 - L.cirrus.x, 1.35 - L.cirrus.x, patches);
     if (cover <= 0.0)
         return vec4(0.0);
-    // Fibres: long along the wind, thin across - two scales, the finer bent by the coarser (hooks, curls).
-    // (Kilometres off: fibres a few hundred units wide at the least, or they alias into a cross-hatch.)
-    float a = textureLod(shapeNoise, vec3(f.x / 40000.0, f.y / 6000.0, 0.21), 0.0).g;
-    float b = textureLod(shapeNoise, vec3(f.x / 16000.0 + a * 0.2, f.y / 1800.0, 0.63), 0.0).b;
-    float fibre = smoothstep(0.35, 0.8, a * 0.55 + b * 0.6);
+    // Strands: thin threads of ice with gaps between (ridged noise), drawn out along the wind - their direction
+    // bending slowly over the sky (curving, hooked strands), each breaking off along its length (they end, taper).
+    vec2 along = L.cirrus.zw, across = vec2(-along.y, along.x);
+    vec2 f = vec2(dot(q, along), dot(q, across));
+    // (Bent by shifting them sideways, slowly over the sky - curving strands. Not by turning the coordinates: those
+    // are kilometres, and a turn that varies over the sky winds them into spirals.)
+    f.y += (textureLod(shapeNoise, vec3(q / 40000.0, 0.81), 0.0).r - 0.67) * 9000.0;
+    float strands = 0.0;
+    for (int o = 0; o < 2; ++o) {
+        float w = o == 0 ? 1.0 : 1.0 - smoothstep(9000.0, 20000.0, t);   // (fine strands only near: no aliasing)
+        if (w <= 0.0) break;
+        float scale = o == 0 ? 2200.0 : 700.0;
+        // Across: the strands, bent along their length (wavy threads, not straight ruled lines).
+        float wobble = textureLod(shapeNoise, vec3(f.x / (scale * 20.0), 0.13 + 0.3 * float(o), 0.5), 0.0).r - 0.67;
+        float n = textureLod(shapeNoise, vec3(f.x / (scale * 60.0), (f.y + wobble * scale * 0.9) / scale, 0.29 + 0.4 * float(o)), 0.0).r;
+        n = clamp((n - 0.54) / 0.26, 0.0, 1.0);
+        float ridge = 1.0 - abs(2.0 * n - 1.0);
+        ridge = mix(ridge * ridge, pow(ridge, 6.0), 0.5);             // (threads, soft-edged)
+        // Along: where a strand is, and where it has broken off (its ends taper).
+        float run = textureLod(shapeNoise, vec3(f.x / (scale * 10.0), f.y / (scale * 3.0), 0.71 + 0.2 * float(o)), 0.0).r;
+        ridge *= smoothstep(0.58, 0.72, run);
+        strands += ridge * w * (o == 0 ? 0.8 : 0.45);
+    }
+    float fibre = clamp(strands, 0.0, 1.0);
     float density = cover * fibre;
     if (density <= 0.002)
         return vec4(0.0);
