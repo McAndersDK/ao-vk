@@ -2600,21 +2600,18 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
             // saturates the ground's lighting pass and local lights (the player's) vanish on it.
             if (override && terrain && slot.light.type == d3d::LIGHT_DIRECTIONAL)
                 continue;
-            // By night the game's light from under the ground comes from the moon (night.cpp).
-            d3d::Light moonLight;
-            const bool moon = override && slot.light.type == d3d::LIGHT_DIRECTIONAL &&
-                              VisualKind(m_drawVisualKind) != VisualKind::Sky && MoonLightFor(slot.light, false, &moonLight);
-            FillGpuLight(moon ? moonLight : slot.light, slot.cosHalfTheta, slot.cosHalfPhi, c.lights[lightCount++],
+            // By night the game's light from under the ground fades out as the moon's comes in (night.cpp).
+            d3d::Light scaled;
+            const bool night = override && slot.light.type == d3d::LIGHT_DIRECTIONAL &&
+                               VisualKind(m_drawVisualKind) != VisualKind::Sky && MoonScaledGameLight(slot.light, &scaled);
+            FillGpuLight(night ? scaled : slot.light, slot.cosHalfTheta, slot.cosHalfPhi, c.lights[lightCount++],
                          LightScale(slot.light));
             if (slot.light.type != d3d::LIGHT_DIRECTIONAL) ++localLights;
         }
-    // ... and the ground, which the game keeps directional light off, gets the moon's.
-    if ((flags & F_LIGHTING) && override && terrain && lightCount < kMaxLights) {
-        d3d::Light moonLight{}, none{};
-        none.type = d3d::LIGHT_DIRECTIONAL;
-        if (MoonLightFor(none, true, &moonLight))
-            FillGpuLight(moonLight, 0.0f, 0.0f, c.lights[lightCount++], 1.0f);
-    }
+    // ... and the moon's light (the ground too, which the game keeps directional light off).
+    if ((flags & F_LIGHTING) && override && MoonOn() && VisualKind(m_drawVisualKind) != VisualKind::Sky &&
+        lightCount < kMaxLights)
+        FillGpuLight(MoonAsLight(), 0.0f, 0.0f, c.lights[lightCount++], 1.0f);
     c.lightInfo[0] = lightCount;
     c.lightInfo[1] = localLights;
     c.lightInfo[2] = override ? carrier : 0;   // frame light (index + 1) this draw carries: it doesn't light it

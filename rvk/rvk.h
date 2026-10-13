@@ -966,7 +966,8 @@ private:
     void NoteSkyMesh(uint32_t fvf, const void* vertices, uint32_t vertexCount);
     void UpdateMoon();
     bool MoonOn() const { return m_moonFade > 0.0f; }
-    bool MoonLightFor(const d3d::Light& game, bool terrain, d3d::Light* out) const;
+    bool MoonScaledGameLight(const d3d::Light& game, d3d::Light* out) const;
+    d3d::Light MoonAsLight() const;
     float m_sunColor[3] = {}, m_shadowSunColor[3] = {};   // this frame's sun / the shadow map's
     bool CreateShadowResources(std::string* error);
     void DestroyShadowResources();

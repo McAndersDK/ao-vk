@@ -1,7 +1,7 @@
 // Nights (docs/night-plan.md): the moon's light. Once the sun is down the game lights its scene with one dim blue
 // directional light pointing up - the sun under the ground - and a grey ambient; the land gets no light from any
 // side. Here the moon in the game's sky becomes a light: a dim cool one from where it stands, the shadow map drawn
-// from it (shadow.cpp RenderShadowMap), the game's night light turned to come from it (draw.cpp: lit draws), and on
+// from it (shadow.cpp RenderShadowMap), added to the lit draws (draw.cpp) as the game's night light fades, and on
 // the ground and grass, which the game keeps directional light off, added (FrameLights moon).
 #include "internal.h"
 
@@ -119,26 +119,29 @@ void Device::UpdateMoon()
     }
 }
 
-// The light a lit draw gets in place of the game's directional one while the moon lights (false: keep the game's).
-// The ground (terrain: the game keeps directional light off it, its lightmap holds the sun) gets the moon alone; any
-// other the game's night light - pointing up, the sun under the ground - from the moon, its colour going over to the
-// moon's.
-bool Device::MoonLightFor(const d3d::Light& game, bool terrain, d3d::Light* out) const
+// The game's night light (pointing up: the sun under the ground) while the moon lights: kept as the game has it,
+// fading out as the moon's light comes in (none with a high moon at night) - turned to come from the moon instead, it
+// lit everything facing even a low moon, brighter than the game's night (user, 2026-10-13). false: not that light.
+bool Device::MoonScaledGameLight(const d3d::Light& game, d3d::Light* out) const
 {
-    if (!MoonOn())
-        return false;
-    if (!terrain && game.direction.y <= 0.0f)
+    if (!MoonOn() || game.direction.y <= 0.0f)
         return false;                            // the sun, still up
-    const float f = m_moonFade;
+    const float keep = std::max(0.0f, 1.0f - 4.0f * m_moonFade);
     *out = game;
-    out->direction = {m_moonDir[0], m_moonDir[1], m_moonDir[2]};
-    const float keep = terrain ? 0.0f : 1.0f - f;
-    out->diffuse = {game.diffuse.r * keep + m_moonColour[0], game.diffuse.g * keep + m_moonColour[1],
-                    game.diffuse.b * keep + m_moonColour[2], game.diffuse.a};
-    out->specular = {game.specular.r * keep + m_moonColour[0], game.specular.g * keep + m_moonColour[1],
-                     game.specular.b * keep + m_moonColour[2], game.specular.a};
-    if (terrain) out->ambient = {0.0f, 0.0f, 0.0f, 0.0f};
+    out->diffuse = {game.diffuse.r * keep, game.diffuse.g * keep, game.diffuse.b * keep, game.diffuse.a};
+    out->specular = {game.specular.r * keep, game.specular.g * keep, game.specular.b * keep, game.specular.a};
     return true;
+}
+
+// The moon as a directional light (MoonOn).
+d3d::Light Device::MoonAsLight() const
+{
+    d3d::Light l{};
+    l.type = d3d::LIGHT_DIRECTIONAL;
+    l.direction = {m_moonDir[0], m_moonDir[1], m_moonDir[2]};
+    l.diffuse = {m_moonColour[0], m_moonColour[1], m_moonColour[2], 1.0f};
+    l.specular = l.diffuse;
+    return l;
 }
 
 }  // namespace rvk
