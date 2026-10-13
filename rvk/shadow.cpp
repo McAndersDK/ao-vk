@@ -503,8 +503,9 @@ void Device::RecordShadowCaster(uint32_t primitive, uint32_t fvf, uint32_t strid
     }
     CasterStreak& streak = m_casterStreaks[key];
     if (streak.lastFrame + 1 == m_frameNumber) ++streak.count;
-    else if (streak.lastFrame != m_frameNumber) streak.count = 1;
+    else if (streak.lastFrame != m_frameNumber) { streak.count = 1; ++m_cacheStreakStarts; }
     streak.lastFrame = m_frameNumber;
+    if (streak.count >= kPromoteFrames && !vertices) ++m_cacheRefusedNoVertices;
     if (streak.count >= kPromoteFrames && vertices)     // (skinned on the GPU: no vertices here to keep)
         CacheCaster(key, c, vertices, indices);
 }
@@ -573,8 +574,10 @@ uint64_t Device::CasterKey(uint32_t primitive, uint32_t fvf, uint32_t stride, co
 
 void Device::CacheCaster(uint64_t key, const ShadowCaster& c, const void* vertices, const uint16_t* indices)
 {
-    if (m_casterCache.size() >= kMaxCachedCasters)
+    if (m_casterCache.size() >= kMaxCachedCasters) {
+        ++m_cacheRefusedFull;
         return;
+    }
     CachedCaster e{};
     e.primitive = c.primitive;
     e.stride = c.stride;
@@ -608,8 +611,11 @@ void Device::CacheCaster(uint64_t key, const ShadowCaster& c, const void* vertic
         float d = std::max(std::max(e.boundsMin[j] - m_frameEye[j], 0.0f), m_frameEye[j] - e.boundsMax[j]);
         d2 += d * d;
     }
-    if (d2 > 9.0f * kCasterCacheRange * kCasterCacheRange)
+    if (d2 > 9.0f * kCasterCacheRange * kCasterCacheRange) {
+        ++m_cacheRefusedFar;
+        m_cacheRefusedFarD = std::sqrt(d2);
         return;
+    }
     // One slot of the caster arena: the vertices (at a multiple of the stride, so the draw's vertexOffset is exact),
     // then the indices (2-aligned: firstIndex = offset / 2). Shared buffers let remembered casters batch together
     // (each in a buffer of its own was a batch, binds and an indirect call of its own, per cascade and cube face).
@@ -645,6 +651,13 @@ void Device::ForgetCasterTexture(Texture* texture)
 // that the game didn't draw (removed, or replaced by another level of detail) - or that are far away.
 void Device::UpdateCasterCache()
 {
+    if (m_frameNumber % 300 == 0) {
+        Log("caster cache: %zu remembered, %zu streaks; this frame %u streaks started, refused %u far (last %.0f from the "
+            "eye (%.1f %.1f %.1f)), %u full, %u without vertices", m_casterCache.size(), m_casterStreaks.size(),
+            m_cacheStreakStarts, m_cacheRefusedFar, double(m_cacheRefusedFarD), double(m_frameEye[0]),
+            double(m_frameEye[1]), double(m_frameEye[2]), m_cacheRefusedFull, m_cacheRefusedNoVertices);
+    }
+    m_cacheStreakStarts = m_cacheRefusedFar = m_cacheRefusedFull = m_cacheRefusedNoVertices = 0;
     for (auto it = m_casterStreaks.begin(); it != m_casterStreaks.end();)
         it = it->second.lastFrame == m_frameNumber ? std::next(it) : m_casterStreaks.erase(it);
     if (!m_frameEyeValid)

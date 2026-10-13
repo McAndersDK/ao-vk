@@ -1044,6 +1044,9 @@ private:
     // Static casters remembered across frames, so objects the camera turned away from (and the game therefore
     // no longer draws) keep casting. A caster drawn unchanged for kPromoteFrames frames in a row is copied here.
     static constexpr uint32_t kPromoteFrames = 20, kMaxCachedCasters = 16384;
+    // (Diagnostics, a frame's: streaks begun, and casters refused by the cache, by why.)
+    uint32_t m_cacheStreakStarts = 0, m_cacheRefusedFar = 0, m_cacheRefusedFull = 0, m_cacheRefusedNoVertices = 0;
+    float m_cacheRefusedFarD = 0.0f;
     struct ArenaChunk;
     struct CachedCaster {
         // Its vertices then indices in a slot of the caster arena (shared buffers: casters batch together).
