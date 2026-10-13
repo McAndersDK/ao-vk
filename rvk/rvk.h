@@ -570,6 +570,9 @@ public:
         uint32_t steps = 32;                     // RVK_CloudSteps: the march's steps through a puff
         bool half = true;                        // RVK_CloudHalf: marched at half resolution
         float shadow = 0.6f;                     // RVK_CloudShadow: how dark their shadows on the ground (0: none)
+        bool layer = true;                       // RVK_CloudLayer: a cloud layer over the sky (else each puff a volume)
+        float cover = 0.0f;                      // RVK_CloudCover: the layer's coverage, more (+) or less (-)
+        float height = 900.0f;                   // RVK_CloudHeight: the layer's base above the eye's ground (world)
     };
     void SetCloudParams(const CloudParams& params);
     void SmokeSourceFrame(uint64_t key, const SmokeSource& source);
@@ -1626,6 +1629,26 @@ private:
     VkPipelineLayout m_cloudShadowLayout = VK_NULL_HANDLE;
     VkPipeline m_cloudShadowPipeline = VK_NULL_HANDLE;
     void MakeCloudShadow(VkCommandBuffer cmd);
+    // RVK_CloudLayer (clouds.cpp; docs/clouds-layer-plan.md): the shape and detail noise (3D, made once), the weather
+    // map (each frame), the march.
+    struct CloudVolume {
+        VkImage image = VK_NULL_HANDLE;
+        VmaAllocation_T* allocation = nullptr;
+        VkImageView view = VK_NULL_HANDLE;
+    };
+    CloudVolume m_cloudShape, m_cloudDetail;
+    bool m_cloudLayerNoiseMade = false;
+    VkPipelineLayout m_cloudLayerNoiseLayout = VK_NULL_HANDLE;
+    VkPipeline m_cloudLayerNoisePipeline = VK_NULL_HANDLE;
+    Texture* m_cloudWeather = nullptr;
+    float m_cloudWeatherArea[3] = {};            // its corner x, z (world), its size
+    VkDescriptorSetLayout m_cloudWeatherSetLayout = VK_NULL_HANDLE, m_cloudLayerSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout m_cloudWeatherLayout = VK_NULL_HANDLE, m_cloudLayerLayout = VK_NULL_HANDLE;
+    VkPipeline m_cloudWeatherPipeline = VK_NULL_HANDLE, m_cloudLayerPipeline = VK_NULL_HANDLE;
+    float m_cloudBase = 0.0f;                    // the layer's base (world y), easing after the eye's height
+    double m_cloudBaseClock = -1.0;
+    void MakeCloudWeather(VkCommandBuffer cmd, const float eye[3]);
+    void MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered);
     VkImageView CloudShadowView() const;         // the map to bind (any image when there is none: FL.clouds says so)
     bool CreateCloudResources(std::string* error);
     void DestroyCloudResources();

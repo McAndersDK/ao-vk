@@ -140,13 +140,6 @@ void ArgbTo4(uint32_t c, float out[4])
     out[3] = (c >> 24) / 255.0f;
 }
 
-float AsFloatBits(uint32_t v)
-{
-    float f;
-    std::memcpy(&f, &v, 4);
-    return f;
-}
-
 // Diagnostics (RANDYVK_SMOKE_RESIDUAL=F): at frame F the first volume's pressure and divergence are copied out; a few
 // frames later the pressure equation's residual is logged (how well the solve converged).
 struct SmokeResidual {

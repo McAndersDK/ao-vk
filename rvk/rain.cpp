@@ -62,13 +62,6 @@ void ArgbTo4(uint32_t c, float out[4])
     out[3] = (c >> 24) / 255.0f;
 }
 
-float AsFloatBits(uint32_t v)
-{
-    float f;
-    std::memcpy(&f, &v, 4);
-    return f;
-}
-
 }  // namespace
 
 void Device::SetWeather(const WeatherState& state)

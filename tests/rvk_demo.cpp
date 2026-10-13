@@ -1407,7 +1407,7 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
 int g_waterScene = 0;             // 1 = --water-lake, 2 = --water-coast
 float g_waterStyle = 0.5f;        // --water-style S (0 = enhanced AO, 1 = realistic)
 float g_waterYaw = 0.0f;          // --water-yaw R: the camera turned R radians from the scene's default
-float g_waterPitch = -1.0f;       // --water-pitch R: looking R radians down (default per scene)
+float g_waterPitch = -10.0f;      // --water-pitch R: looking R radians down (negative: up; default per scene)
 float g_waterHeight = -1.0f;      // --water-height H: the eye this high above the water (default per scene)
 float g_waterWaves = 1.0f;        // --water-waves W
 int g_waterQuality = 2;           // --water-quality 1..3
@@ -1430,6 +1430,9 @@ std::vector<std::string> g_meshPieces;   // --mesh-piece FILE: a piece dumped fr
                                   //  offset, index count; vertices; indices), drawn as a static object (a mesh id test)
 bool g_clouds = false;            // --clouds: cloud puffs in the sky, as the game's (VisualSingleCloud_t)
 bool g_cloudsGame = false;
+float g_cloudCover = 0.0f;        // --cloud-cover X: RVK_CloudCover
+float g_cloudThick = 1.0f;        // --cloud-thick X: RVK_CloudThick
+bool g_cloudLayer = true;         // --cloud-puffs: RVK_CloudLayer off (a volume per puff)
 bool g_cloudsHalf = true;         // --clouds-full: RVK_CloudHalf off        // --clouds-game: ... drawn as the game draws them (RVK_CloudsOn off)
 bool g_fixedClock = false;        // --fixed-clock MS: the renderer's clock steps MS a frame (no sleeping: benchmarks)
 bool g_waterWalker = false;       // --water-walker: a "character" standing in the lake with its feet under the surface,
@@ -1701,7 +1704,7 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
         // Standing on the shore (the eye 1.8 above the ground there, or --water-height above the water), looking out.
         const float ex = coast ? 2.0f : 0.0f, ez = g_waterZ > -1e5f ? g_waterZ : coast ? 22.0f : -25.0f;
         const float eyeY = g_waterHeight >= 0.0f ? g_waterHeight : std::max(height(ex, ez), 0.0f) + 1.8f;
-        const float pitch = g_waterPitch >= 0.0f ? g_waterPitch : (coast ? 0.1f : 0.16f);
+        const float pitch = g_waterPitch > -5.0f ? g_waterPitch : (coast ? 0.1f : 0.16f);
         const float yaw = kPi * 0.5f + g_waterYaw;           // +z
         Vector eye{ex, eyeY, ez};
         if (g_waterEyeSet)
@@ -2988,6 +2991,9 @@ int main(int argc, char** argv)
         else if (a == "--mesh-piece" && i + 1 < argc) g_meshPieces.push_back(argv[++i]);
         else if (a == "--clouds-game") { g_clouds = g_cloudsGame = true; hdr = true; }
         else if (a == "--clouds-full") g_cloudsHalf = false;
+        else if (a == "--cloud-puffs") g_cloudLayer = false;
+        else if (a == "--cloud-cover" && i + 1 < argc) g_cloudCover = float(std::atof(argv[++i]));
+        else if (a == "--cloud-thick" && i + 1 < argc) g_cloudThick = float(std::atof(argv[++i]));
         else if (a == "--fixed-clock" && i + 1 < argc) { g_fixedClock = true; Device::SetFixedClock(std::atof(argv[++i]) * 1e-3); }
         else if (a == "--cache-test" && i + 1 < argc) { cacheTest = std::atoi(argv[++i]); shadowTest = shadows = true; }
         else if (a == "--dump" && i + 1 < argc) dump = argv[++i];
@@ -3192,6 +3198,9 @@ int main(int argc, char** argv)
         Device::CloudParams clouds;
         clouds.enable = g_clouds && !g_cloudsGame;
         clouds.half = g_cloudsHalf;
+        clouds.layer = g_cloudLayer;
+        clouds.cover = g_cloudCover;
+        clouds.density = g_cloudThick;
         dev.SetCloudParams(clouds);
     }
     if (g_smoke) {
