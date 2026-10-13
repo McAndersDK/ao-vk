@@ -1143,7 +1143,9 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
     // seconds: the game fades puffs in and out and moves them round the camera - the layer mustn't pulse with them.
     // (Only how cloudy and what kind: where the puffs are says nothing about the world - they stay round the eye.)
     const float cloudy = std::clamp(0.2f + 0.45f * (1.0f - std::exp(-0.6f * cover)) + 0.25f * flatShare + 0.6f * rain, 0.0f, 1.0f);
-    const float type = std::clamp(0.5f + 0.5f * rain - 0.35f * flatShare * (1.0f - rain), 0.0f, 1.0f);
+    // (Flat sheets: lumpy layered cloud - stratocumulus - not a thin stratus band, which seen from below at a low
+    // angle smears into waves and streaks.)
+    const float type = std::clamp(0.5f + 0.5f * rain - 0.12f * flatShare * (1.0f - rain), 0.0f, 1.0f);
     {
         const double gap = m_cloudWeatherClock < 0.0 ? 1e9 : m_frameClock - m_cloudWeatherClock;
         const float k = gap > 5.0 ? 1.0f : 1.0f - std::exp(-float(gap) / 8.0f);
