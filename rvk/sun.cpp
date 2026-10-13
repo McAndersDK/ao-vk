@@ -3,8 +3,8 @@
 // drawn after them, left little of them. Each frame the sprites are noted (where, how big, their colour) and grouped
 // into suns; at the first sprite of the next frame each sun is drawn into the sky, before the game's sheets and the
 // cloud layer, which cover it as thick as they are: a disc (about twice the real sun's size, very bright - the bloom
-// its glare - limb darkened, golden then red and dimmer low in the sky), a halo, and its rays - the game's flare made
-// anew: streaks of many lengths, turning slowly and shimmering, in the sun's colour. The game's own sprites off by
+// its glare - limb darkened, golden then red and dimmer low in the sky), a halo, and its corona - the game's flare made
+// anew: a soft glow in broad lobes, flowing slowly and breathing, in the sun's colour (streaks looked strange). The game's own sprites off by
 // default (RVK_GameSun). User's choices, 2026-10-13.
 #include "internal.h"
 
@@ -17,9 +17,11 @@ namespace rvk {
 using namespace vk;
 using namespace detail;
 
-// A sun sprite: where (its middle through its matrix, from the eye), how big (its farthest vertex from the middle,
-// over the distance), its colour (the vertices' mean).
-void Device::NoteSunSprite(uint32_t fvf, const void* vertices, uint32_t vertexCount)
+// A sun sprite: a fan of triangles round its sun (the hub: the vertex most triangles share - the middle of the
+// rays; their bounding box or mean is not, the rays being of many lengths). Where (the hub through its matrix, from
+// the eye), how big (its farthest vertex from the hub, over the distance), its colour (the vertices' mean).
+void Device::NoteSunSprite(uint32_t fvf, const void* vertices, uint32_t vertexCount, const uint16_t* indices,
+                           uint32_t indexCount)
 {
     if (m_sunSpritesFrame != m_frameNumber) {    // (a new frame: the last one's kept until now - DrawSun read them)
         m_sunSprites.clear();
@@ -29,12 +31,20 @@ void Device::NoteSunSprite(uint32_t fvf, const void* vertices, uint32_t vertexCo
         return;
     const FvfLayout layout = DecodeFvf(fvf);
     const uint8_t* base = static_cast<const uint8_t*>(vertices);
-    float c[3] = {}, col[3] = {};
+    uint32_t hub = 0;
+    if (indices && indexCount > 0 && vertexCount <= 256) {
+        uint16_t uses[256] = {};
+        for (uint32_t i = 0; i < indexCount; ++i)
+            if (indices[i] < vertexCount && ++uses[indices[i]] > uses[hub]) hub = indices[i];
+    }
+    float c[3], col[3] = {};
+    std::memcpy(c, base + size_t(hub) * layout.stride + layout.offset[0], sizeof(c));
+    float reach = 0.0f;
     for (uint32_t i = 0; i < vertexCount; ++i) {
         const uint8_t* v = base + size_t(i) * layout.stride;
         float p[3];
         std::memcpy(p, v + layout.offset[0], sizeof(p));
-        for (int k = 0; k < 3; ++k) c[k] += p[k] / float(vertexCount);
+        reach = std::max(reach, (p[0] - c[0]) * (p[0] - c[0]) + (p[1] - c[1]) * (p[1] - c[1]) + (p[2] - c[2]) * (p[2] - c[2]));
         if (layout.offset[2] >= 0) {
             uint32_t argb;
             std::memcpy(&argb, v + layout.offset[2], 4);
@@ -42,12 +52,6 @@ void Device::NoteSunSprite(uint32_t fvf, const void* vertices, uint32_t vertexCo
             col[1] += float((argb >> 8) & 0xFF) / 255.0f / float(vertexCount);
             col[2] += float(argb & 0xFF) / 255.0f / float(vertexCount);
         }
-    }
-    float reach = 0.0f;
-    for (uint32_t i = 0; i < vertexCount; ++i) {
-        float p[3];
-        std::memcpy(p, base + size_t(i) * layout.stride + layout.offset[0], sizeof(p));
-        reach = std::max(reach, (p[0] - c[0]) * (p[0] - c[0]) + (p[1] - c[1]) * (p[1] - c[1]) + (p[2] - c[2]) * (p[2] - c[2]));
     }
     const auto& w = m_world.m;
     const auto& v = m_view.m;
@@ -66,6 +70,7 @@ void Device::NoteSunSprite(uint32_t fvf, const void* vertices, uint32_t vertexCo
     s.size = std::sqrt(reach) * scale / l;
     if (layout.offset[2] < 0) col[0] = col[1] = col[2] = 1.0f;
     std::memcpy(s.colour, col, sizeof(col));
+    s.hub = hub;
     m_sunSprites.push_back(s);
 }
 
@@ -87,8 +92,11 @@ void Device::DrawSun()
             const float lum = 0.3f * s.colour[0] + 0.59f * s.colour[1] + 0.11f * s.colour[2] + 1e-3f;
             const float wgt = lum * std::max(s.size, 1e-4f);
             int k = 0;
-            for (; k < count; ++k)
-                if (suns[k].dir[0] * s.dir[0] + suns[k].dir[1] * s.dir[1] + suns[k].dir[2] * s.dir[2] > 0.9945f) break;
+            for (; k < count; ++k) {             // (its sum of directions, weighted: compared normalised)
+                const float* d = suns[k].dir;
+                const float dot = d[0] * s.dir[0] + d[1] * s.dir[1] + d[2] * s.dir[2];
+                if (dot > 0.9945f * std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2])) break;
+            }
             if (k == count) {
                 if (count == 4) continue;
                 suns[count++] = Sun{{0, 0, 0}, 0.0f, {0, 0, 0}, 0.0f};
@@ -114,6 +122,7 @@ void Device::DrawSun()
         biggest = std::max(biggest, u.size);
         brightest = std::max(brightest, 0.3f * u.colour[0] + 0.59f * u.colour[1] + 0.11f * u.colour[2]);
     }
+    std::sort(suns, suns + count, [](const Sun& a, const Sun& b) { return a.weight > b.weight; });   // (the main sun first)
     struct Push {
         d3d::Matrix invViewProj;
         float toSun[4], colour[4], view[4], rays[4];
@@ -152,22 +161,28 @@ void Device::DrawSun()
         push.colour[3] = 1.0f;                   // the halo
         push.view[0] = float(m_scene->m_width);
         push.view[1] = float(m_scene->m_height);
-        push.view[2] = 0.0f;                     // (the old starburst: the rays now)
+        push.view[2] = 0.0f;                     // (the old starburst: the corona now)
         push.view[3] = 0.09f;                    // the halo's width (radians, ~5 degrees)
-        push.rays[0] = float(std::fmod(m_frameClock, 3600.0));   // the rays' clock (turning, shimmering)
-        push.rays[1] = 1.0f;                     // their strength
-        push.rays[2] = float(k) * 17.31f;        // each sun its own rays
-        push.rays[3] = 0.12f;                    // their reach (radians, ~7 degrees)
+        push.rays[0] = float(std::fmod(m_frameClock, 3600.0));   // the corona's clock (flowing, breathing)
+        push.rays[1] = 1.0f;                     // its strength
+        push.rays[2] = float(k) * 17.31f;        // each sun its own corona
+        push.rays[3] = 0.10f;                    // its reach (radians, ~6 degrees)
         vkCmdPushConstants(cmd, m_sunLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
         vkCmdDraw(cmd, 3, 1, 0, 0);
     }
     m_cache = StateCache{};                      // (not the scene's pipeline: its state set again)
     m_arenaBound = m_bindlessBound = false;
-    if (m_frameNumber % 600 == 50)
-        Log("suns: %d from %zu sprites (last frame's): first towards (%.2f %.2f %.2f) colour %.2f %.2f %.2f size %.3f; "
-            "second %s", count, m_sunSprites.size(), double(suns[0].dir[0]), double(suns[0].dir[1]),
-            double(suns[0].dir[2]), double(suns[0].colour[0]), double(suns[0].colour[1]), double(suns[0].colour[2]),
-            double(suns[0].size), count > 1 ? "seen" : "none");
+    if (m_frameNumber % 600 == 50) {
+        Log("suns: %d from %zu sprites (last frame's)", count, m_sunSprites.size());
+        for (const SunSprite& s : m_sunSprites)
+            Log("  sprite: hub %u towards (%.3f %.3f %.3f) size %.3f colour %.2f %.2f %.2f", s.hub, double(s.dir[0]),
+                double(s.dir[1]), double(s.dir[2]), double(s.size), double(s.colour[0]), double(s.colour[1]),
+                double(s.colour[2]));
+        for (int k = 0; k < count; ++k)
+            Log("  sun %d: towards (%.3f %.3f %.3f) size %.3f colour %.2f %.2f %.2f weight %.3f", k,
+                double(suns[k].dir[0]), double(suns[k].dir[1]), double(suns[k].dir[2]), double(suns[k].size),
+                double(suns[k].colour[0]), double(suns[k].colour[1]), double(suns[k].colour[2]), double(suns[k].weight));
+    }
 }
 
 }  // namespace rvk

@@ -977,10 +977,11 @@ private:
     uint64_t m_sunDrawnFrame = ~0ull;            // ... drawn this frame (once: the first of the game's sun sprites)
     bool m_gameSun = false;                      // RVK_GameSun: the game's sun sprites drawn (off: our suns alone)
     // The game's sun sprites seen this frame / the last (sun.cpp): where, how big, their colour - grouped into suns.
-    struct SunSprite { float dir[3], size, colour[3]; };
+    struct SunSprite { float dir[3], size, colour[3]; uint32_t hub; };
     std::vector<SunSprite> m_sunSprites;
     uint64_t m_sunSpritesFrame = 0;
-    void NoteSunSprite(uint32_t fvf, const void* vertices, uint32_t vertexCount);
+    void NoteSunSprite(uint32_t fvf, const void* vertices, uint32_t vertexCount, const uint16_t* indices,
+                       uint32_t indexCount);
     void DrawSun();
     std::vector<float> m_mistSamples;            // this frame's terrain heights near the eye
     float m_mistFloor = 0.0f, m_mistAmount = 0.0f, m_mistWet = 0.0f, m_mistSunPrev = 0.0f, m_mistSunTrend = 0.0f;
