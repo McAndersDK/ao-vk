@@ -118,8 +118,10 @@ void Device::ProfileBeginFrame(VkCommandBuffer cmd)
         ProfileAdd(m_profileCpu, "render thread frame", now - m_profileCpuStart);
     m_profileCpuStart = now;
     ProfileMark("start");
-    if (m_profileFrames >= kProfileFrames && !m_profileManual)
+    if (m_profileFrames >= kProfileFrames && !m_profileManual) {
         ProfileLog("");
+        LogMeshIds();                            // (mesh ids: how many draws were named)
+    }
 }
 
 // A GPU timestamp after everything recorded so far; the interval up to it is named `name` (a string literal).

@@ -859,6 +859,12 @@ void ThreadedDevice::SetGrading(float saturation, float contrast, float warmth, 
     Enqueue([=, this](const uint8_t*) { m_device.SetGrading(saturation, contrast, warmth, lutAmount, nightTint, vignette); });
 }
 
+void ThreadedDevice::LoadMeshIds(const char* path)
+{
+    std::string p(path ? path : "");
+    Enqueue([this, p](const uint8_t*) { m_device.LoadMeshIds(p.c_str()); });
+}
+
 void ThreadedDevice::SetColorLut(uint32_t slot, uint32_t size, const uint8_t* rgba)
 {
     std::vector<uint8_t> data;

@@ -299,6 +299,9 @@ public:
       m_nightTint = nightTint; m_vignette = vignette; }
     // A 3D colour lookup table: slot 0 day, 1 night; size^3 RGBA8, red fastest. size 0: the identity.
     void SetColorLut(uint32_t slot, uint32_t size, const uint8_t* rgba);
+    // Mesh ids (meshids.cpp): ao-assets' table of the static meshes' piece geometries (mesh-ids.bin) - which mesh a
+    // draw is. False (logged) when there is none.
+    bool LoadMeshIds(const char* path);
     // Wind for small plants (grass, bushes, flowers): 0 = still.
     void SetSway(float strength) { m_sway = strength; m_constantsDirty = true; m_frameLightsDirty = true; }
     // Grass and plants bending out of the way of characters walking through them (0 = off; scales reach and bend).
@@ -1188,8 +1191,40 @@ private:
         uint64_t firstFrame, lastFrame;
         bool diffuseAlphaOne = true, specularAlphaOne = true;   // every vertex colour's alpha byte is 255 (pre-pass)
         mutable int8_t flatShape = -1;           // SwayParams: 1 = one plane (a sign, a card), 0 = not, -1 = not looked at
+        uint64_t geo = 0, raw = 0;               // mesh ids (meshids.cpp): its geometry's hashes (0: not a static piece)
+        uint32_t idCandidates = 0;               // ... the pieces in the table with its geometry
+        bool rawSame = false;                    // ... one of them has its vertex bytes too
     };
     std::unordered_map<uint64_t, MeshInfo> m_meshInfo;
+    // Mesh ids (meshids.cpp).
+    struct MeshIdEntry {
+        uint64_t geo = 0, raw = 0;
+        uint32_t type = 0, id = 0;
+        uint16_t piece = 0, pieces = 0;
+        uint32_t name = 0;                       // offset in m_meshIdNames
+    };
+    std::vector<MeshIdEntry> m_meshIds;          // sorted by geo
+    std::vector<char> m_meshIdNames;
+    struct MeshIdObject {                        // the object (visual) drawing now: the meshes it can be
+        uint32_t visual = 0;
+        uint64_t frame = 0;
+        uint32_t pieces = 0;
+        std::vector<uint64_t> candidates;        // type << 32 | id, sorted
+    };
+    MeshIdObject m_idObject;
+    struct MeshIdResult { uint64_t mesh; uint32_t candidates; uint64_t frame; };   // mesh: type << 32 | id (0: not one)
+    std::unordered_map<uint32_t, MeshIdResult> m_meshIdObjects;   // by visual
+    struct MeshIdStats {
+        uint64_t pieces = 0, known = 0, rawSame = 0, objects = 0, named = 0, ambiguous = 0;
+        uint32_t loggedPieces = 0, loggedObjects = 0;
+    } m_meshIdStats;
+    const char* MeshIdName(const MeshIdEntry& e) const;
+    std::pair<const MeshIdEntry*, const MeshIdEntry*> MeshIdsOf(uint64_t geo) const;
+    void HashMeshId(MeshInfo& info, uint32_t fvf, uint32_t stride, const void* vertices, uint32_t vertexCount,
+                    const uint16_t* indices, uint32_t indexCount);
+    void NoteMeshPiece();
+    void SettleMeshObject();
+    void LogMeshIds();
     const MeshInfo* m_drawMesh = nullptr;        // the current draw's (null: external geometry, pre-transformed)
     const skin::Job* m_drawSkin = nullptr;       // the current draw is this skinned character piece (DrawSkinned)
     uint32_t m_drawVisualKind = 0;               // SetDrawVisual (VisualKind)

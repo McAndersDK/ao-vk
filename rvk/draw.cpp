@@ -1309,6 +1309,7 @@ void Device::DrawMeshInfo(uint32_t fvf, uint32_t stride, const void* vertices, u
     }
     info.indexHash = indices && indexCount ? HashBytes(indices, size_t(indexCount) * 2, indexCount) : 0;
     info.firstFrame = info.lastFrame = m_frameNumber;
+    HashMeshId(info, fvf, stride, vertices, vertexCount, indices, indexCount);   // (mesh ids: a static piece's)
     MeshInfo* placed = &m_meshInfo.emplace(key, info).first->second;
     m_drawMesh = placed;
     if (m_drawSlot && m_drawStaticBuffer) { m_drawSlot->mesh = placed; m_drawSlot->meshKey = key; }
@@ -2070,6 +2071,7 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     if (m_grassOn && !m_external && vertices && IsTerrain(fvf))
         CaptureTerrain(primitive, layout, vertices, vertexCount, indices, indexCount);
     DrawMeshInfo(fvf, layout.stride, vertices, vertexCount, indices, indexCount);
+    NoteMeshPiece();                             // (mesh ids: which mesh the object drawing is)
     // (A GPU-skinned character has no vertices here: DrawSkinned hands the pick its CPU-skinned ones.)
     if (m_pickActive && !m_external && (vertices || m_pickSkinned) && (m_textures[0] || m_drawVisual) &&
         (m_target == m_scene || m_target == m_main) && (fvf & d3d::FVF_POSITION_MASK) == d3d::FVF_XYZ &&

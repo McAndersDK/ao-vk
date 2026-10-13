@@ -1425,6 +1425,9 @@ bool g_waterPool = false;         // --water-pool: the lake's water only a 6 x 6
 bool g_waterWall = false;         // --water-wall: a steep sheet of the water mesh standing in the lake (a fall)
 bool g_waterShelf = false;        // --water-shelf: the mesh terraced - the surface with a lower shore shelf in front
                                   // (as Anarchy Online hangs its aprons), which used to render as a "mountain of water"
+std::string g_meshIds;             // --mesh-ids FILE: ao-assets' mesh-ids.bin (the mesh ids' table)
+std::vector<std::string> g_meshPieces;   // --mesh-piece FILE: a piece dumped from rdb.db (fvf, count, stride, texture
+                                  //  offset, index count; vertices; indices), drawn as a static object (a mesh id test)
 bool g_clouds = false;            // --clouds: cloud puffs in the sky, as the game's (VisualSingleCloud_t)
 bool g_cloudsGame = false;
 bool g_cloudsHalf = true;         // --clouds-full: RVK_CloudHalf off        // --clouds-game: ... drawn as the game draws them (RVK_CloudsOn off)
@@ -1751,6 +1754,28 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
         if (g_clouds)
             DrawDemoPuffs(dev, eye, kPi * 0.5f + g_waterYaw, puffTex, puffMesh, puffIdx, 1.0f);
         dev.SetMaterial(mat);
+        // --mesh-piece: each a static object of its own (as the game's: one visual each), drawn at the origin.
+        for (size_t k = 0; k < g_meshPieces.size(); ++k) {
+            static std::vector<std::vector<uint8_t>> pieces;
+            if (pieces.size() < g_meshPieces.size()) {
+                pieces.resize(g_meshPieces.size());
+                for (size_t j = 0; j < g_meshPieces.size(); ++j)
+                    if (FILE* f = std::fopen(g_meshPieces[j].c_str(), "rb")) {
+                        int c;
+                        while ((c = std::fgetc(f)) != EOF) pieces[j].push_back(uint8_t(c));
+                        std::fclose(f);
+                    }
+            }
+            const std::vector<uint8_t>& d = pieces[k];
+            if (d.size() < 20) continue;
+            uint32_t head[5];
+            std::memcpy(head, d.data(), 20);
+            const uint8_t* verts = d.data() + 20;
+            const uint16_t* idx = reinterpret_cast<const uint16_t*>(verts + size_t(head[1]) * head[2]);
+            dev.SetDrawVisual(uint32_t(VisualKind::Static), "RTriMesh_t", 0, uint32_t(0x1000 + k));
+            dev.DrawIndexedPrimitive(TriangleList, head[0], verts, head[1], idx, head[4]);
+            dev.SetDrawVisual(0, nullptr);
+        }
         // The ground: base pass, then the light pass (lightmap + ambient, multiplied).
         dev.SetRenderState(RS_LIGHTING, 0);
         dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
@@ -2959,6 +2984,8 @@ int main(int argc, char** argv)
         else if (a == "--frame-ms" && i + 1 < argc) frameMs = std::atoi(argv[++i]);
         else if (a == "--size" && i + 2 < argc) { g_width = uint32_t(std::atoi(argv[++i])); g_height = uint32_t(std::atoi(argv[++i])); }
         else if (a == "--clouds") { g_clouds = true; hdr = true; }
+        else if (a == "--mesh-ids" && i + 1 < argc) g_meshIds = argv[++i];
+        else if (a == "--mesh-piece" && i + 1 < argc) g_meshPieces.push_back(argv[++i]);
         else if (a == "--clouds-game") { g_clouds = g_cloudsGame = true; hdr = true; }
         else if (a == "--clouds-full") g_cloudsHalf = false;
         else if (a == "--fixed-clock" && i + 1 < argc) { g_fixedClock = true; Device::SetFixedClock(std::atof(argv[++i]) * 1e-3); }
@@ -3159,6 +3186,8 @@ int main(int argc, char** argv)
     dev.SetShadows(shadows);
     dev.SetLightHeadroom(headroom);
     dev.SetHdr(hdr);
+    if (!g_meshIds.empty())
+        dev.LoadMeshIds(g_meshIds.c_str());
     {
         Device::CloudParams clouds;
         clouds.enable = g_clouds && !g_cloudsGame;
