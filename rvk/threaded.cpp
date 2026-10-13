@@ -792,6 +792,11 @@ void ThreadedDevice::SetMaterialMaps(Texture* texture, Texture* orm, Texture* al
     Enqueue([this, texture, orm, albedo](const uint8_t*) { m_device.SetMaterialMaps(texture, orm, albedo); });
 }
 
+void ThreadedDevice::SetTextureRdbId(Texture* texture, uint32_t id)
+{
+    Enqueue([this, texture, id](const uint8_t*) { m_device.SetTextureRdbId(texture, id); });
+}
+
 void ThreadedDevice::SetEmissiveMap(Texture* texture, Texture* emissive)
 {
     Enqueue([this, texture, emissive](const uint8_t*) { m_device.SetEmissiveMap(texture, emissive); });

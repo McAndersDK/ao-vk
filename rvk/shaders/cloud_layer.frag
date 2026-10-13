@@ -24,6 +24,8 @@ layout(set = 0, binding = 0, std140) uniform LayerFrame {
                         // 2x2 marched, into a quarter-size target) or 1 (every pixel)
     vec4 horizon;       // x: how much the game fogs its clouds (0..1: towards the horizon they become the fog's colour,
                         // as the game's do - the fogged ground meets them seamlessly); y: contrast (RVK_CloudShade)
+    vec4 cirrus;        // the high wisps (cirrus): x how much (0..1), y their height (world y), zw the wind's way (x z,
+                        // unit: they stretch along it)
 } L;
 layout(set = 0, binding = 1) uniform sampler2D weatherMap;
 layout(set = 0, binding = 2) uniform sampler3D shapeNoise;
@@ -114,6 +116,51 @@ float Density(vec3 p, bool detail)
 
 float HG(float c, float g) { return (1.0 - g * g) / (4.0 * kPi * pow(1.0 + g * g - 2.0 * g * c, 1.5)); }
 
+// The high wisps (cirrus): a thin shell far above the layer, met once by the view ray - fibrous streaks of ice drawn
+// out along the wind (the detail noise stretched ten times along it, at two scales), in patches (the shape noise,
+// broad), bright towards the sun, in the sky's colour, hazed by distance. Premultiplied.
+vec4 Cirrus(vec3 eye, vec3 dir)
+{
+    if (L.cirrus.x <= 0.0 || dir.y < -0.05)
+        return vec4(0.0);
+    vec2 hit = Sphere(eye, dir, gCentre, L.layer.z + (L.cirrus.y - eye.y));
+    float t = hit.y;
+    if (t <= 0.0 || t > L.layer.w * 2.5)
+        return vec4(0.0);
+    vec3 p = eye + dir * t;
+    vec2 along = L.cirrus.zw, across = vec2(-along.y, along.x);
+    vec2 q = p.xz + L.wind.xz * 2.5;             // (they drift faster: higher winds)
+    vec2 f = vec2(dot(q, along), dot(q, across));
+    // Patches: where the high cloud is (broad, slow).
+    float patches = textureLod(shapeNoise, vec3(q / 26000.0, 0.37 + L.eye.w * 0.00002), 0.0).r;
+    patches = clamp((patches - 0.54) / 0.26, 0.0, 1.0);   // (its values bunch in 0.54..0.80)
+    float cover = smoothstep(1.0 - L.cirrus.x, 1.35 - L.cirrus.x, patches);
+    if (cover <= 0.0)
+        return vec4(0.0);
+    // Fibres: long along the wind, thin across - two scales, the finer bent by the coarser (hooks, curls).
+    // (Kilometres off: fibres a few hundred units wide at the least, or they alias into a cross-hatch.)
+    float a = textureLod(shapeNoise, vec3(f.x / 40000.0, f.y / 6000.0, 0.21), 0.0).g;
+    float b = textureLod(shapeNoise, vec3(f.x / 16000.0 + a * 0.2, f.y / 1800.0, 0.63), 0.0).b;
+    float fibre = smoothstep(0.35, 0.8, a * 0.55 + b * 0.6);
+    float density = cover * fibre;
+    if (density <= 0.002)
+        return vec4(0.0);
+    vec3 sunL = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
+    float sunUp = smoothstep(-0.08, 0.12, sunL.y);
+    float cosT = dot(dir, sunL);
+    float phase = mix(1.0, (HG(cosT, 0.7) * 0.7 + HG(cosT, -0.2) * 0.3) * 4.0 * kPi, 0.6);
+    // Ice: whitish, the sky's colour in the shade, the sun's (warm at sunset) in the light.
+    vec3 light = (L.ambient.rgb * 0.9 + FL.sunColor.rgb * sunUp * phase * 0.8) *
+                 mix(L.tint.rgb, vec3(dot(L.tint.rgb, vec3(0.3, 0.59, 0.11))), 0.6) * L.tint.w;
+    float alpha = clamp(density * 0.75, 0.0, 0.85);
+    // Hazed by distance and low down, as the layer.
+    float low = 1.0 - smoothstep(0.0, 0.5, dir.y);
+    float haze = max((1.0 - exp(-t / (L.haze.w * 1.5))) * 0.8, L.horizon.x * low * low * (3.0 - 2.0 * low));
+    light = mix(light, L.haze.rgb, haze);
+    alpha *= 1.0 - smoothstep(0.75, 1.0, t / (L.layer.w * 2.5));
+    return vec4(light * alpha, alpha);
+}
+
 void main()
 {
     // The half-size pixel marched (one of each 2x2 when reused over frames).
@@ -138,6 +185,7 @@ void main()
     gInner = R + (L.layer.x - eye.y);
     float outer = R + (L.layer.y - eye.y);
     gThick = outer - gInner;
+    vec4 high = Cirrus(eye, dir);                // (behind the layer: seen through its gaps)
     vec2 si = Sphere(eye, dir, gCentre, gInner), so = Sphere(eye, dir, gCentre, outer);
     float r0 = length(eye - gCentre);
     float t0, t1;
@@ -148,13 +196,13 @@ void main()
         t0 = 0.0;
         t1 = si.y > 0.0 && si.x > 0.0 ? si.x : so.y;
     } else {                                     // above it
-        if (so.y < 0.0 || so.x > so.y) { outScene = vec4(0.0); return; }
+        if (so.y < 0.0 || so.x > so.y) { outScene = high; return; }
         t0 = max(so.x, 0.0);
         t1 = si.x > 0.0 && si.y > si.x ? si.x : so.y;
     }
     t1 = min(t1, L.layer.w);
     if (t1 <= t0) {
-        outScene = vec4(0.0);
+        outScene = high;
         return;
     }
     // Steps growing with the distance (short near the eye: the near clouds' detail; long far off), at most L.view.z.
@@ -229,7 +277,7 @@ void main()
     }
     float alpha = 1.0 - transmit;
     if (alpha <= 0.0) {
-        outScene = vec4(0.0);
+        outScene = high;
         return;
     }
     // Haze: the cloud's distance (where along the ray it is) blends it into the game's distance colour; the very
@@ -242,5 +290,6 @@ void main()
     haze = max(haze, L.horizon.x * low * low * (3.0 - 2.0 * low));
     light = mix(light, L.haze.rgb * alpha, haze);
     float fade = 1.0 - smoothstep(0.7 * L.layer.w, L.layer.w, dist);
-    outScene = vec4(light, alpha) * fade;
+    vec4 layer = vec4(light, alpha) * fade;
+    outScene = layer + (1.0 - layer.a) * high;
 }

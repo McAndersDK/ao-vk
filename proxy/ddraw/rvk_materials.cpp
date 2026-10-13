@@ -477,6 +477,7 @@ void AttachMaterialMaps(RSurface* top)
     if (!top || !top->rdbId || !top->texture || top->materialsFor == top->texture || !g_rvk.device)
         return;
     top->materialsFor = top->texture;
+    g_rvk.device->SetTextureRdbId(top->texture, top->rdbId);   // (the renderer tells the game's textures apart: clouds)
     uint64_t key = KeyOf(top->rdbType, top->rdbId);
     Waiter waiter{top, top->texture};
     if (DecodedPtr cached = CacheGet(key)) {

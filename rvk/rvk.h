@@ -95,6 +95,7 @@ private:
     Texture* m_ormMap = nullptr;       // PBR material: R occlusion, G roughness, B metallic (owned; SetMaterialMaps)
     Texture* m_albedoMap = nullptr;    // drawn instead of this texture's own pixels (owned; SetMaterialMaps)
     Texture* m_emissiveMap = nullptr;  // light the surface gives off, added to it (owned; SetEmissiveMap)
+    uint32_t m_rdbId = 0;              // the game's RDB texture it holds (SetTextureRdbId; 0: not known)
     uint32_t m_bindless = ~0u;         // its slot in the bindless image array (M1)
     // Layout as of the end of the commands recorded so far (main command buffer for render targets;
     // plain textures only change layout in the upload command buffer, which runs first).
@@ -222,6 +223,7 @@ public:
     // `albedo` is drawn instead of the texture's own pixels wherever the texture is used (a higher resolution
     // replacement; its alpha is used too). The device owns both and frees them with the texture; null removes one.
     void SetMaterialMaps(Texture* texture, Texture* orm, Texture* albedo);
+    void SetTextureRdbId(Texture* texture, uint32_t id) { if (texture) texture->m_rdbId = id; }
     // `emissive`: the light a texture's surface gives off (its colour, any resolution), added after the lighting and
     // as bright as PbrSettings::emissive - into the bloom with HDR. Owned by the device as above; null removes it.
     void SetEmissiveMap(Texture* texture, Texture* emissive);
@@ -574,6 +576,7 @@ public:
         float cover = 0.0f;                      // RVK_CloudCover: the layer's coverage, more (+) or less (-)
         float height = 900.0f;                   // RVK_CloudHeight: the layer's base above the eye's ground (world)
         float shade = 1.6f;                      // RVK_CloudShade: contrast (light and shade; 1 = as lit)
+        float cirrus = 1.0f;                     // RVK_CloudCirrus: the high wisps, x (0: none)
     };
     void SetCloudParams(const CloudParams& params);
     void SmokeSourceFrame(uint64_t key, const SmokeSource& source);
@@ -1608,6 +1611,7 @@ private:
         float colour[4];                         // as the game lit it; a: its opacity
         float fogColour[4], fogParams[4];        // the fog it was drawn with (w: on), start, end, density, mode
         Texture* texture = nullptr;
+        uint32_t rdbId = 0;                      // its texture's RDB id (single_cloud01..04: kCloudTex*)
     };
     CloudParams m_cloudParams;
     std::vector<CloudPuff> m_cloudPuffs;         // this frame's, taken from the sky's draws
@@ -1656,6 +1660,7 @@ private:
     float m_cloudTint[3] = {0.8f, 0.8f, 0.8f}, m_cloudHaze[3] = {0.5f, 0.5f, 0.5f};   // eased (MarchCloudLayer)
     double m_cloudColourClock = -1.0;
     float m_cloudFogged = 0.0f;                  // how fogged the game's clouds are (0..1), eased
+    float m_cloudWispy = 0.0f, m_cloudCirrus = 0.0f;   // the game's wispy puffs' share; the cirrus's amount (eased)
     float m_cloudDrift[3] = {};                  // the clouds' drift (world x, z) and evolution (UpdateCloudDrift)
     float m_cloudWindDir[2] = {0.8f, 0.6f};
     double m_cloudDriftClock = -1.0;

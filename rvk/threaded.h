@@ -133,6 +133,7 @@ public:
     void SetNormalMaps(bool enable, float strength);
     void SetNormalMap(Texture* texture, Texture* normal);   // the device owns `normal` from here on
     void SetMaterialMaps(Texture* texture, Texture* orm, Texture* albedo);   // ... and these
+    void SetTextureRdbId(Texture* texture, uint32_t id);
     void SetEmissiveMap(Texture* texture, Texture* emissive);               // ... and this
     void RequestPick(float x, float y);
     Device::PickResult LastPick() const { return m_device.LastPick(); }   // (thread-safe)
