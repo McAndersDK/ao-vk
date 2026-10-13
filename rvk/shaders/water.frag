@@ -17,6 +17,8 @@ layout(set = 0, binding = 10) uniform sampler2D detail;                // RG: ri
 layout(set = 0, binding = 11) uniform sampler2D gameTexture;           // the game's water texture
 layout(set = 0, binding = 12) uniform sampler2D envAtlas;              // the environment probe (env_common.glsl)
 layout(set = 0, binding = 2, std430) readonly buffer Feet { FootSegment feet[]; };   // the grid: the falls' feet
+layout(set = 0, binding = 14) uniform sampler2D cloudShadow;   // the clouds' (rvk clouds.cpp)
+#include "cloud_shadow_common.glsl"
 #include "env_common.glsl"
 
 layout(location = 0) in vec3 vPos;
@@ -65,7 +67,7 @@ float SunShadow(vec3 posW)
             break;
         }
     }
-    return 1.0 - (1.0 - lit) * FL.shadowParams.y;
+    return (1.0 - (1.0 - lit) * FL.shadowParams.y) * CloudShadowMap(posW);   // (and the clouds')
 }
 
 // The ripples' slope (dh/dx, dh/dz) at a world point: two layers of the detail texture drifting across each other.

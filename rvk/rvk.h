@@ -1580,6 +1580,7 @@ private:
     VkPipelineLayout m_cloudShadowLayout = VK_NULL_HANDLE;
     VkPipeline m_cloudShadowPipeline = VK_NULL_HANDLE;
     void MakeCloudShadow(VkCommandBuffer cmd);
+    VkImageView CloudShadowView() const;         // the map to bind (any image when there is none: FL.clouds says so)
     bool CreateCloudResources(std::string* error);
     void DestroyCloudResources();
     bool CaptureCloudPuff(uint32_t fvf, const void* vertices, uint32_t vertexCount, const uint16_t* indices,

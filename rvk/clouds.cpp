@@ -796,6 +796,13 @@ void Device::MakeCloudShadow(VkCommandBuffer cmd)
     Transition(cmd, m_cloudShadowMap, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 
+VkImageView Device::CloudShadowView() const
+{
+    return m_cloudShadowMap && m_cloudShadowMap->m_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+               ? m_cloudShadowMap->m_view
+               : m_blackTexture->m_view;
+}
+
 // Once (the first frame): the clouds' noise, before the scene's rendering opens.
 void Device::MakeCloudNoise(VkCommandBuffer cmd)
 {

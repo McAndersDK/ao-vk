@@ -33,20 +33,8 @@ float SunVisible(float t)
     return 1.0;
 }
 
-// The sunlight through the clouds at a point (1: none in the way): their shadow map, in the cloud layer's plane, where
-// the sun's ray through the point crosses it - light shafts through the gaps between them.
-float CloudLight(vec3 q)
-{
-    vec3 L = -FL.sunDir.xyz;
-    if (floatBitsToUint(FL.clouds.w) == 0u || L.y < 0.05 || q.y >= FL.clouds2.x)
-        return 1.0;
-    vec2 uv = (q.xz + (FL.clouds2.x - q.y) * L.xz / L.y - FL.clouds.xy) * FL.clouds.z;
-    vec2 edge = min(uv, 1.0 - uv);
-    float inside = smoothstep(0.0, 0.08, min(edge.x, edge.y));
-    if (inside <= 0.0)
-        return 1.0;
-    return mix(1.0, textureLod(cloudShadow, uv, 0.0).r, FL.clouds2.y * inside);
-}
+// The sunlight through the clouds (light shafts through the gaps between them).
+#include "cloud_shadow_common.glsl"
 
 void main()
 {
@@ -83,7 +71,7 @@ void main()
             // the sky leave it soon (the sky isn't washed out), air near the ground - where shadows fall - keeps it.
             float density = exp(-max(q.y - (P.eye.y - 2.0), 0.0) / kHazeHeight);
             float w = (2.0 * u) * exp(-kExtinction * t) * density;
-            lit += SunVisible(t) * CloudLight(q) * w;
+            lit += SunVisible(t) * CloudShadowMap(q) * w;
             open += w;
         }
         // Shafts are contrast: a ray partly in shadow is darkened by a power of its lit fraction, a fully lit one

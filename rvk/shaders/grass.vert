@@ -32,6 +32,8 @@ layout(set = 0, binding = 2, std430) readonly buffer Blades { Blade blades[]; };
 layout(set = 0, binding = 3, std430) readonly buffer Trails { uint trail[]; };
 layout(set = 0, binding = 5) uniform sampler2DArrayShadow shadowMap;            // the sun's cascades
 layout(set = 0, binding = 6) uniform samplerCubeArrayShadow pointShadowMaps;     // the point lights' cubes
+layout(set = 0, binding = 7) uniform sampler2D cloudShadow;                      // the clouds' (rvk clouds.cpp)
+#include "cloud_shadow_common.glsl"
 // Which of the frame's 64 lights reach this tile (grass.cpp: the tile's box against each light's range).
 layout(push_constant) uniform GrassPush { uvec2 lightMask; } GP;
 
@@ -130,7 +132,10 @@ vec2 TrailAt(vec2 xz)
 // grass's own shadow (the map's layer after the cascades, grass_shadow.vert: the nearest cascade's square) at half
 // strength - a field shading itself in full would be much darker than the ground it grows on.
 const float kGrassShadowLayer = 4.0;            // rvk.h kGrassShadowLayer
-float SunShadow(vec3 posW)
+float SunShadowCasters(vec3 posW);
+float SunShadow(vec3 posW) { return SunShadowCasters(posW) * CloudShadowMap(posW); }   // (and the clouds')
+
+float SunShadowCasters(vec3 posW)
 {
     int count = int(FL.shadowParams.z);
     for (int c = 0; c < count; ++c) {

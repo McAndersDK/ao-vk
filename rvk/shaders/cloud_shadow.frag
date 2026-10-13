@@ -23,7 +23,7 @@ void main()
     if (cloudy > 0.0) {
         vec2 q = (p + S.drift.xy) / S.info.w;
         float n = texture(noiseTexture, vec3(q, S.info.x * 0.0015)).r * 0.65 + texture(noiseTexture, vec3(q * 2.7 + 0.31, 0.5)).g * 0.35;
-        float cut = 1.0 - cloudy * 0.75;
+        float cut = 1.0 - cloudy * 0.6;          // (overcast still leaves gaps: shadows that move)
         light *= 1.0 - smoothstep(cut - 0.06, cut + 0.12, n) * min(0.4 + cloudy, 0.9);
     }
     int count = int(S.area.w);
