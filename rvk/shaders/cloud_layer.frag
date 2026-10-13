@@ -23,7 +23,8 @@ layout(set = 0, binding = 0, std140) uniform LayerFrame {
     vec4 sub;           // reused over frames (cloud_resolve.frag): xy this frame's pixel in each 2x2, z: 2 (one of each
                         // 2x2 marched, into a quarter-size target) or 1 (every pixel)
     vec4 horizon;       // x: how much the game fogs its clouds (0..1: towards the horizon they become the fog's colour,
-                        // as the game's do - the fogged ground meets them seamlessly); y: contrast (RVK_CloudShade)
+                        // as the game's do - the fogged ground meets them seamlessly); y: contrast (RVK_CloudShade);
+                        // z: the depth past which the game fogs surfaces away (marched there too; 2: no fog)
 } L;
 layout(set = 0, binding = 1) uniform sampler2D weatherMap;
 layout(set = 0, binding = 2) uniform sampler3D shapeNoise;
@@ -122,7 +123,10 @@ void main()
         ivec2 at = ivec2(hp) * 2, last = textureSize(sceneDepth, 0) - 1;
         bool open = false;
         for (int k = 0; k < 4; ++k)
-            open = open || texelFetch(sceneDepth, min(at + ivec2(k & 1, k >> 1), last), 0).r == L.wind.w;
+        {   // (Sky - the clear value - or past the fog's end: the game fogs it away; the clouds go over it after.)
+            float z = texelFetch(sceneDepth, min(at + ivec2(k & 1, k >> 1), last), 0).r;
+            open = open || z == L.wind.w || z >= L.horizon.z;
+        }
         if (!open)
             discard;
     }
