@@ -572,6 +572,18 @@ uint64_t Device::CasterKey(uint32_t primitive, uint32_t fvf, uint32_t stride, co
     int32_t at[3] = {int32_t(std::floor(m_world.m[3][0] * 4.0f)), int32_t(std::floor(m_world.m[3][1] * 4.0f)),
                      int32_t(std::floor(m_world.m[3][2] * 4.0f))};
     key = HashBytes(at, sizeof(at), key);
+    // ... and which way it faces (its heading round the vertical, to 5 degrees, and whether it is mirrored), unless it
+    // sways: a city wall of one mesh turned round one pivot was one caster to the cache - one segment remembered, its
+    // rotations recorded as "sway" and played back out of view: a flickering, holed shadow (user, 2026-10-13). Plants
+    // swaying by a tilting matrix barely turn about the vertical.
+    if (!(m_drawSway[3] > 0.5f) && !m_drawLeaves) {
+        const auto& w = m_world.m;
+        const float heading = std::atan2(w[0][2], w[0][0]);
+        const float det = w[0][0] * (w[1][1] * w[2][2] - w[1][2] * w[2][1]) - w[0][1] * (w[1][0] * w[2][2] - w[1][2] * w[2][0]) +
+                          w[0][2] * (w[1][0] * w[2][1] - w[1][1] * w[2][0]);
+        const int32_t facing[2] = {int32_t(std::lround(heading * (180.0f / 3.14159265f) / 5.0f)), det < 0.0f ? 1 : 0};
+        key = HashBytes(facing, sizeof(facing), key ^ 0xFACEull);
+    }
     return HashBytes(&texture, sizeof(texture), key ^ uint64_t(texOffset + 1));
 }
 
