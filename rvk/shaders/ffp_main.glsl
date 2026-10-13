@@ -457,7 +457,7 @@ vec3 CloudSheet(vec4 tex)
     vec3 sky = FL.cloudSky.rgb * mix(1.0, 0.72, thick) * NightSky() * mix(1.0, 0.7, MoonShare()) * tint;
     vec3 S = (sun + sky + Afterglow(sunL) * 0.6 * tint) * FL.cloudTint.w * mix(0.8, 1.05, dot(tex.rgb, luma));
     float low = HorizonBand(dir, FL.cloudAir.w);
-    return mix(S, AirColour(FL.cloudAir.rgb, low), max(mix(0.25, 0.4, Night()), low));   // (as the layer's: Aerial)
+    return mix(S, AirColour(FL.cloudAir.rgb, low), max(0.25, low));
 }
 
 void main()

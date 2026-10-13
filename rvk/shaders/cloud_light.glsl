@@ -32,8 +32,7 @@ float Night()
 // game's colour on its own.
 float NightSky()
 {
-    return mix(1.0, 5.0, Night());               // (user: 1.7 x the first 2.0 in game; 5 once the stuck afterglow
-                                                 // was gone - darker than the sky, storm clouds - user)
+    return mix(1.0, 3.4, Night());               // (user: 1.7 x the first 2.0 in game)
 }
 
 // Low in the sky, the horizon's band (up to ~12 degrees), as much as the game fogs its clouds (amount): 0 .. amount.
