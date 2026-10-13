@@ -105,9 +105,12 @@ void main()
             open += w;
         }
         if (open > 1e-6) {
-            // Contrast as the near shafts': the shadowed air dark, the beams through the gaps standing out.
+            // Contrast as the near shafts': the shadowed air dark, the beams through the gaps standing out - and only
+            // where the ray crosses both lit and shaded air (4 f (1 - f)): air lit all along is the haze (tonemap.frag
+            // Air) already. With the clouds' shadows mostly lit (finer patches) the old open * f^4 lit kilometres of
+            // air towards the sun: the morning washed out (user).
             float fraction = lit / open;
-            float beams = open * pow(fraction, 4.0);
+            float beams = open * fraction * fraction * 4.0 * fraction * (1.0 - fraction);
             const float g = 0.7;
             float cosAngle = dot(dir, -normalize(FL.sunDir.xyz));
             float phase = min((1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * cosAngle, 1.5), 6.0);
