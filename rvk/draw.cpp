@@ -2782,6 +2782,8 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     if (m_textures[0] && texStage0 == m_textures[0]->m_albedoMap) dt.mat[2] |= kMatAlbedo;   // (debug view 7)
     if (m_pickHighlight && m_textures[0] == m_pickHighlight)
         dt.mat[2] |= kMatPicked;                 // (texture picking: flashes)
+    if (VisualKind(m_drawVisualKind) == VisualKind::Sky)
+        dt.mat[2] |= kMatSky;                    // (the sky: kept inside the far plane, ffp.vert)
     if (m_drawEmissive) {                        // (sampled with the ORM map's sampler, set either way)
         dt.mat[3] = BindlessImage(m_drawEmissive);
         dt.mat[2] |= kMatEmissive;

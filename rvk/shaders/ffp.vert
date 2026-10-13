@@ -382,6 +382,10 @@ void main()
 #endif
         vec4 pv = C.view * posW;
         gl_Position = C.proj * pv;
+        // The sky's meshes (its cloud puffs, hundreds of units across, 1-3 km out) can reach past the far plane: kept
+        // just inside it rather than cut off along a straight line (the game's own renderer didn't cut them).
+        if ((D.mat.z & MAT_SKY) != 0u)
+            gl_Position.z = min(gl_Position.z, gl_Position.w * 0.999999);
         vClip = gl_Position;                     // motion vectors: without the jitter
         if ((C.flags.x & F_HDR) != 0u)
             gl_Position.xy += FL.taa.xy * gl_Position.w;   // temporal anti-aliasing: this frame's sub-pixel offset

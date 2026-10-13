@@ -52,7 +52,7 @@ struct DrawTransform {
     uint32_t leafSet[4];           // ... its leaves in the pool: first, drawn now | falling-leaf slots << 16, all; the
                                    // ground under it (world y, float bits: where its fallen leaves lie)
 };
-enum : uint32_t { kMatPbr = 1, kMatBase = 2, kMatAlbedo = 4, kMatEmissive = 8, kMatPicked = 16 };   // DrawTransform
+enum : uint32_t { kMatPbr = 1, kMatBase = 2, kMatAlbedo = 4, kMatEmissive = 8, kMatPicked = 16, kMatSky = 32 };   // DrawTransform
                                                  // mat[2]: has an ORM map; it is the ground base's; stage 0 draws an
                                                  // albedo map; has an emissive map; its texture was picked
 // GPU-driven M2: one record a draw (binding 12). `constIndex` selects the shared DrawConstants it draws with; the
