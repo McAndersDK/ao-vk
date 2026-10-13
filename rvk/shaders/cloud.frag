@@ -8,6 +8,9 @@
 
 layout(set = 0, binding = 1) uniform sampler2D puffTexture;
 layout(set = 0, binding = 2) uniform sampler3D noiseTexture; // r: billowy (value x worley), g, b: worley, a: value
+#ifdef RVK_CLOUD_HALF
+layout(set = 0, binding = 3) uniform sampler2D sceneDepth;  // the pre-pass's (C.distance.z): only where it is clear
+#endif
 
 layout(location = 0) in vec3 vLocal;
 
@@ -45,6 +48,17 @@ void main()
 {
 #ifndef RVK_CLOUD_HALF
     outGlow = outLocal = outMotion = outAlbedo = vec4(0.0);
+#else
+    // The four scene pixels under this one: none of them sky (the pre-pass's depth isn't its clear value) - an opaque
+    // surface is drawn over all of them later; nothing to march.
+    if (C.distance.z > 0.5) {
+        ivec2 at = ivec2(gl_FragCoord.xy) * 2, last = textureSize(sceneDepth, 0) - 1;
+        bool open = false;
+        for (int k = 0; k < 4; ++k)
+            open = open || texelFetch(sceneDepth, min(at + ivec2(k & 1, k >> 1), last), 0).r == C.distance.y;
+        if (!open)
+            discard;
+    }
 #endif
     vec3 lo = C.low.xyz, hi = C.high.xyz;
     vec3 eye = C.eye.xyz;

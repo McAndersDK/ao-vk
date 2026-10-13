@@ -68,7 +68,8 @@ struct CloudFrame {
     float noise[4];        // xyz: the noise's drift (world units); w: its scale (per world unit)
     float fogColour[4];    // rgb; w: 1 = fog on
     float fogParams[4];    // start, end, density, table mode (D3DFOG_*)
-    float distance[4];     // x: the puff's middle's view depth (its fog)
+    float distance[4];     // x: the puff's middle's view depth (its fog); y: the pre-pass's clear depth; z: 1 = skip
+                           // where the pre-pass's depth isn't that (half size: an opaque surface covers it later)
 };
 
 float AsFloat(uint32_t v)
@@ -147,15 +148,16 @@ bool Device::CreateCloudResources(std::string* error)
         if (!ok)
             return false;
     }
-    // The drawing: 0 the block, 1 the puff's texture, 2 the noise, 4 the frame lights.
-    VkDescriptorSetLayoutBinding b[4] = {
+    // The drawing: 0 the block, 1 the puff's texture, 2 the noise, 3 the pre-pass's depth (half size), 4 the frame lights.
+    VkDescriptorSetLayoutBinding b[5] = {
         {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
     VkDescriptorSetLayoutCreateInfo sl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     sl.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-    sl.bindingCount = 4;
+    sl.bindingCount = 5;
     sl.pBindings = b;
     if (!Check(vkCreateDescriptorSetLayout(m_device, &sl, nullptr, &m_cloudSetLayout), "cloud set", error))
         return false;
@@ -277,6 +279,8 @@ bool Device::CreateCloudResources(std::string* error)
                     m_cloudLayout, &halfFormat, 1, VK_FORMAT_UNDEFINED, &m_cloudHalfPipeline) &&
            pipeline(kFullscreenVertSpirv, sizeof(kFullscreenVertSpirv), kCloudUpFragSpirv, sizeof(kCloudUpFragSpirv),
                     m_cloudUpLayout, sceneFormats, 5, VK_FORMAT_UNDEFINED, &m_cloudUpPipeline) &&
+           pipeline(kFullscreenVertSpirv, sizeof(kFullscreenVertSpirv), kCloudUpFragSpirv, sizeof(kCloudUpFragSpirv),
+                    m_cloudUpLayout, sceneFormats, 5, kDepthFormat, &m_cloudUpScenePipeline) &&
            // (Blended over with alpha 1: written.)
            pipeline(kFullscreenVertSpirv, sizeof(kFullscreenVertSpirv), kCloudShadowFragSpirv, sizeof(kCloudShadowFragSpirv),
                     m_cloudShadowLayout, &shadowFormat, 1, VK_FORMAT_UNDEFINED, &m_cloudShadowPipeline);
@@ -284,7 +288,8 @@ bool Device::CreateCloudResources(std::string* error)
 
 void Device::DestroyCloudResources()
 {
-    for (VkPipeline* p : {&m_cloudPipeline, &m_cloudHalfPipeline, &m_cloudUpPipeline, &m_cloudShadowPipeline})
+    for (VkPipeline* p : {&m_cloudPipeline, &m_cloudHalfPipeline, &m_cloudUpPipeline, &m_cloudUpScenePipeline,
+                          &m_cloudShadowPipeline})
         if (*p) { vkDestroyPipeline(m_device, *p, nullptr); *p = VK_NULL_HANDLE; }
     if (m_cloudShadowLayout) { vkDestroyPipelineLayout(m_device, m_cloudShadowLayout, nullptr); m_cloudShadowLayout = VK_NULL_HANDLE; }
     if (m_cloudShadowSetLayout) { vkDestroyDescriptorSetLayout(m_device, m_cloudShadowSetLayout, nullptr); m_cloudShadowSetLayout = VK_NULL_HANDLE; }
@@ -438,8 +443,15 @@ bool Device::CaptureCloudPuff(uint32_t fvf, const void* vertices, uint32_t verte
     return true;
 }
 
-// The puffs taken this frame, drawn as volumes into the scene's rendering where the sky ends (no depth test: only the
-// sky is there yet). Far ones first.
+// The puffs taken this frame, drawn as volumes where the sky ends (no depth test: only the sky is there yet). Far ones
+// first.
+//
+// RVK_CloudHalf marches them into a half-size target and filters that up over the scene's targets; RVK_CloudShadow
+// makes their shadow map first. Both need their own renderings - outside the scene's. With the depth pre-pass armed
+// (prepass.cpp: the scene's rendering split at its depth clear) they are recorded into their own commands, run after
+// the pre-pass and before the scene's draws (Frame::clouds): the scene's rendering - and its pre-pass segment - go on
+// unbroken, and the march skips every pixel the pre-pass found an opaque surface at (the scene's draws cover it
+// later). Without the pre-pass, the scene's rendering is ended for them and begun again (and nothing is skipped).
 void Device::DrawClouds(VkCommandBuffer cmd)
 {
     m_cloudsDrawn = true;
@@ -447,7 +459,8 @@ void Device::DrawClouds(VkCommandBuffer cmd)
         return;
     FlushGroup();
     ProfileSceneClass(0);
-    EnsureRingSpace(m_cloudPuffs.size() * (sizeof(CloudFrame) + 256) + sizeof(FrameLights) + 1024);
+    EnsureRingSpace(m_cloudPuffs.size() * (sizeof(CloudFrame) + 256) + sizeof(FrameLights) + sizeof(ShadowFrame) + 2048);
+    cmd = m_frames[m_frameIndex].main;           // (a flush there submits and swaps the frame's commands)
     if (m_frameLightsDirty || m_frameLightsGeneration != m_ringGeneration)
         WriteFrameLights();
     Frame& f = m_frames[m_frameIndex];
@@ -463,27 +476,56 @@ void Device::DrawClouds(VkCommandBuffer cmd)
         order.emplace_back(z, &p);   // (the view depth: the fog's distance too, as the game's per-vertex fog about)
     }
     std::sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
-    // RVK_CloudHalf: the scene's rendering closed (reopened after), the clouds marched into a half-size target (cleared),
-    // then filtered up over the scene's targets where the puffs are.
     const uint32_t fw = m_scene->m_width, fh = m_scene->m_height, hw = (fw + 1) / 2, hh = (fh + 1) / 2;
     if (m_cloudParams.half && (!m_cloudHalf || m_cloudHalf->m_width != hw || m_cloudHalf->m_height != hh)) {
         if (m_cloudHalf) DestroyTexture(m_cloudHalf);
         m_cloudHalf = CreateImage(hw, hh, Format::RGBA16F, 1, true);
     }
-    const bool half = m_cloudParams.half && m_cloudHalf && m_cloudHalfPipeline && m_cloudUpPipeline;
+    const bool half = m_cloudParams.half && m_cloudHalf && m_cloudHalfPipeline && m_cloudUpPipeline &&
+                      m_cloudUpScenePipeline;
     const bool shadow = m_cloudParams.shadow > 0.0f && m_cloudShadowPipeline;
-    if (half || shadow) {
+    const bool own = (half || shadow) && f.split && m_prepassArmed && f.clouds && !f.cloudsRecorded;
+    const bool skipCovered = own && half && m_prepassFullClear;   // (else what the pre-pass didn't clear isn't sky)
+    ProfileFrame& prof = m_profile[m_frameIndex];
+    VkCommandBuffer work = cmd;                  // the shadow map's and the half-size march's commands
+    if (own) {
+        VkCommandBufferBeginInfo b{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        b.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(f.clouds, &b);
+        work = f.clouds;
+        if (prof.pool)
+            vkCmdWriteTimestamp2(work, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, prof.pool, kProfileMarks);
+    } else if (half || shadow) {
         m_renderEndCause = kEndOther;
         EndRendering();
     }
+    auto endOwn = [&] {
+        if (prof.pool) {
+            vkCmdWriteTimestamp2(work, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, prof.pool, kProfileMarks + 1);
+            prof.cloudsTimed = true;
+        }
+        vkEndCommandBuffer(work);
+        f.cloudsRecorded = true;
+    };
     if (shadow) {
-        MakeCloudShadow(cmd);
+        MakeCloudShadow(work);
         m_frameLightsDirty = true;                // (the scene's draws after the sky read it through the frame lights)
-        if (!half)
-            BeginRenderingOn(m_target);           // the puffs into the scene's rendering
     }
-    if (half) {
-        Transition(cmd, m_cloudHalf, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    if (!half) {
+        if (own)
+            endOwn();
+        else if (shadow)
+            BeginRenderingOn(m_target);           // the puffs into the scene's rendering
+        float lo[2], hi[2];
+        MarchCloudPuffs(cmd, order, false, false, lo, hi);
+    } else {
+        const VkPipelineStageFlags2 tests =
+            VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        if (skipCovered)                          // the pre-pass's depth, read (its layout put back after)
+            ImageBarrier(work, m_depth, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, tests, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        Transition(work, m_cloudHalf, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
         color.imageView = m_cloudHalf->m_view;
         color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -494,15 +536,85 @@ void Device::DrawClouds(VkCommandBuffer cmd)
         ri.layerCount = 1;
         ri.colorAttachmentCount = 1;
         ri.pColorAttachments = &color;
-        vkCmdBeginRendering(cmd, &ri);
+        vkCmdBeginRendering(work, &ri);
+        float lo[2], hi[2];
+        MarchCloudPuffs(work, order, true, skipCovered, lo, hi);
+        vkCmdEndRendering(work);
+        Transition(work, m_cloudHalf, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        if (skipCovered)
+            ImageBarrier(work, m_depth, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                         VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, 0, tests,
+                         VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+        if (own)
+            endOwn();
+        // Filtered up over the scene's targets where the puffs are: inside the scene's rendering (own commands), or
+        // in one of its own and the scene's begun again. (The box's thickness was widened in the draw; a margin covers
+        // it and the filter.)
+        const float margin = 0.25f * std::max(hi[0] - lo[0], hi[1] - lo[1]) + 4.0f;
+        const int x0 = std::max(int(lo[0] - margin), 0), y0 = std::max(int(lo[1] - margin), 0);
+        const int x1 = std::min(int(hi[0] + margin), int(fw)), y1 = std::min(int(hi[1] + margin), int(fh));
+        if (x1 > x0 && y1 > y0) {
+            if (!own) {
+                Texture* targets[5] = {m_scene, m_glow, m_localFraction, m_motionVectors, m_albedo};
+                VkRenderingAttachmentInfo colors[5] = {};
+                for (int i = 0; i < 5; ++i) {
+                    Transition(cmd, targets[i], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                    colors[i].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                    colors[i].imageView = targets[i]->m_view;
+                    colors[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    colors[i].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+                    colors[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                }
+                VkRenderingInfo sri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+                sri.renderArea = {{0, 0}, {fw, fh}};
+                sri.layerCount = 1;
+                sri.colorAttachmentCount = 5;
+                sri.pColorAttachments = colors;
+                vkCmdBeginRendering(cmd, &sri);
+            }
+            VkViewport full{0.0f, 0.0f, float(fw), float(fh), 0.0f, 1.0f};
+            VkRect2D area{{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}};
+            vkCmdSetViewport(cmd, 0, 1, &full);
+            vkCmdSetScissor(cmd, 0, 1, &area);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, own ? m_cloudUpScenePipeline : m_cloudUpPipeline);
+            VkDescriptorImageInfo image{m_cloudClampSampler, m_cloudHalf->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            w.dstBinding = 0;
+            w.descriptorCount = 1;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w.pImageInfo = &image;
+            vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudUpLayout, 0, 1, &w);
+            const float size[4] = {float(fw), float(fh), 0.0f, 0.0f};
+            vkCmdPushConstants(cmd, m_cloudUpLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(size), size);
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+            if (!own)
+                vkCmdEndRendering(cmd);
+        }
+        if (!own)
+            BeginRenderingOn(m_target);          // the scene's rendering again, for its draws after the sky
     }
+    m_cache = StateCache{};                      // this pipeline is not the scene's
+    m_arenaBound = m_bindlessBound = false;      // ... and its pushed set 0 replaced the scene's
+    ProfileMark("clouds");
+}
+
+// The puffs (far ones first) marched: into the scene's rendering (full size) or the half-size target's (half), its
+// viewport and pipeline set here. skipCovered: not where the pre-pass's depth (readable) found an opaque surface.
+// lo / hi: where the puffs are on the scene's screen (pixels).
+void Device::MarchCloudPuffs(VkCommandBuffer cmd, const std::vector<std::pair<float, const CloudPuff*>>& order,
+                             bool half, bool skipCovered, float lo[2], float hi[2])
+{
+    Frame& f = m_frames[m_frameIndex];
+    const uint32_t fw = m_scene->m_width, fh = m_scene->m_height, hw = (fw + 1) / 2, hh = (fh + 1) / 2;
     const float sw = float(fw), sh = float(fh), k = half ? 0.5f : 1.0f;
     VkViewport viewport{0.5f * k, (sh + 0.5f) * k, sw * k, -sh * k, 0.0f, 1.0f};   // the scene's flipped viewport (halved)
     VkRect2D scissor{{0, 0}, {half ? hw : fw, half ? hh : fh}};
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, half ? m_cloudHalfPipeline : m_cloudPipeline);
-    float screenLo[2] = {sw, sh}, screenHi[2] = {0.0f, 0.0f};   // where the puffs are on screen (the upsampling's)
+    lo[0] = sw, lo[1] = sh, hi[0] = hi[1] = 0.0f;
+    float* screenLo = lo;
+    float* screenHi = hi;
     // Towards the sun (the frame's), its colour.
     float sun[3] = {-m_frameSunDir[0], -m_frameSunDir[1], -m_frameSunDir[2]};
     const float sl = std::max(std::sqrt(sun[0] * sun[0] + sun[1] * sun[1] + sun[2] * sun[2]), 1e-6f);
@@ -553,9 +665,9 @@ void Device::DrawClouds(VkCommandBuffer cmd)
         const int a = p.thin == 0 ? 1 : 0, b = p.thin == 2 ? 1 : 2;
         const float width = std::min(high[a] - low[a], high[b] - low[b]);
         const float mid = 0.5f * (low[p.thin] + high[p.thin]);
-        const float half = std::max(0.5f * (high[p.thin] - low[p.thin]), 0.25f * width);
-        low[p.thin] = mid - half;
-        high[p.thin] = mid + half;
+        const float thick = std::max(0.5f * (high[p.thin] - low[p.thin]), 0.25f * width);
+        low[p.thin] = mid - thick;
+        high[p.thin] = mid + thick;
         std::memcpy(cf.low, low, sizeof(low));
         std::memcpy(cf.high, high, sizeof(high));
         cf.low[3] = float(p.thin);
@@ -588,6 +700,8 @@ void Device::DrawClouds(VkCommandBuffer cmd)
         std::memcpy(cf.fogColour, p.fogColour, sizeof(cf.fogColour));
         std::memcpy(cf.fogParams, p.fogParams, sizeof(cf.fogParams));
         cf.distance[0] = z;
+        cf.distance[1] = m_prepassClearZ;
+        cf.distance[2] = skipCovered ? 1.0f : 0.0f;
         void* cpu = nullptr;
         const VkDeviceSize offset = Allocate(sizeof(CloudFrame), 256, &cpu);
         std::memcpy(cpu, &cf, sizeof(cf));
@@ -595,8 +709,10 @@ void Device::DrawClouds(VkCommandBuffer cmd)
         VkDescriptorBufferInfo lightsInfo{f.ring, m_frameLightsOffset, sizeof(FrameLights)};
         VkDescriptorImageInfo texInfo{m_cloudClampSampler, p.texture->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkDescriptorImageInfo noiseInfo{m_cloudRepeatSampler, m_cloudNoiseView, VK_IMAGE_LAYOUT_GENERAL};
-        VkWriteDescriptorSet w[4] = {};
-        for (uint32_t i = 0; i < 4; ++i) {
+        VkDescriptorImageInfo depthInfo{m_pointSampler, skipCovered ? m_depthView : m_blackTexture->m_view,
+                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet w[5] = {};
+        for (uint32_t i = 0; i < 5; ++i) {
             w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w[i].descriptorCount = 1;
         }
@@ -612,55 +728,12 @@ void Device::DrawClouds(VkCommandBuffer cmd)
         w[3].dstBinding = 4;
         w[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         w[3].pBufferInfo = &lightsInfo;
-        vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudLayout, 0, 4, w);
+        w[4].dstBinding = 3;                     // (half size: the pre-pass's depth)
+        w[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w[4].pImageInfo = &depthInfo;
+        vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudLayout, 0, half ? 5 : 4, w);
         vkCmdDraw(cmd, 36, 1, 0, 0);
     }
-    if (half) {
-        vkCmdEndRendering(cmd);
-        Transition(cmd, m_cloudHalf, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        // (The box's thickness was widened in the draw; a margin covers it and the filter.)
-        const float margin = 0.25f * std::max(screenHi[0] - screenLo[0], screenHi[1] - screenLo[1]) + 4.0f;
-        const int x0 = std::max(int(screenLo[0] - margin), 0), y0 = std::max(int(screenLo[1] - margin), 0);
-        const int x1 = std::min(int(screenHi[0] + margin), int(fw)), y1 = std::min(int(screenHi[1] + margin), int(fh));
-        if (x1 > x0 && y1 > y0) {
-            Texture* targets[5] = {m_scene, m_glow, m_localFraction, m_motionVectors, m_albedo};
-            VkRenderingAttachmentInfo colors[5] = {};
-            for (int i = 0; i < 5; ++i) {
-                Transition(cmd, targets[i], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-                colors[i].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-                colors[i].imageView = targets[i]->m_view;
-                colors[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                colors[i].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-                colors[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-            }
-            VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
-            ri.renderArea = {{0, 0}, {fw, fh}};
-            ri.layerCount = 1;
-            ri.colorAttachmentCount = 5;
-            ri.pColorAttachments = colors;
-            vkCmdBeginRendering(cmd, &ri);
-            VkViewport full{0.0f, 0.0f, sw, sh, 0.0f, 1.0f};
-            VkRect2D area{{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}};
-            vkCmdSetViewport(cmd, 0, 1, &full);
-            vkCmdSetScissor(cmd, 0, 1, &area);
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudUpPipeline);
-            VkDescriptorImageInfo image{m_cloudClampSampler, m_cloudHalf->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-            VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-            w.dstBinding = 0;
-            w.descriptorCount = 1;
-            w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            w.pImageInfo = &image;
-            vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudUpLayout, 0, 1, &w);
-            const float size[4] = {sw, sh, 0.0f, 0.0f};
-            vkCmdPushConstants(cmd, m_cloudUpLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(size), size);
-            vkCmdDraw(cmd, 3, 1, 0, 0);
-            vkCmdEndRendering(cmd);
-        }
-        BeginRenderingOn(m_target);              // the scene's rendering again, for its draws after the sky
-    }
-    m_cache = StateCache{};                      // this pipeline is not the scene's
-    m_arenaBound = m_bindlessBound = false;      // ... and its pushed set 0 replaced the scene's
-    ProfileMark("clouds");
 }
 
 // The clouds' shadow map: each puff where it would be in the world - out along the camera's line to it, as far as the

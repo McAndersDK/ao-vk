@@ -2062,9 +2062,11 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     // blended draw of the frame. The game's grass and foliage blend without writing depth; drawn after them (as at the
     // end of the scene), our grass would pass the depth test against the ground behind them and cover them however far
     // away it is. Before their pass, their fragments depth-test against ours and blend over us only where they are
-    // nearer - the right order.
+    // nearer - the right order. (Not at the sky's blended draws - its stars, layers: the sky is drawn first, and what
+    // is drawn where it ends, RVK_CloudsOn's clouds, would cover the blades.)
     if (m_grassOn && !m_grassDrawnThisFrame && m_scenePhase && m_target == m_scene && !m_external && vertexCount &&
-        (fvf & d3d::FVF_POSITION_MASK) == d3d::FVF_XYZ && m_rs[d3d::RS_ALPHABLENDENABLE] && !IsTerrain(fvf))
+        (fvf & d3d::FVF_POSITION_MASK) == d3d::FVF_XYZ && m_rs[d3d::RS_ALPHABLENDENABLE] && !IsTerrain(fvf) &&
+        VisualKind(m_drawVisualKind) != VisualKind::Sky)
         DrawGrassTiles(cmd);
     FvfLayout layout = DecodeFvf(fvf);
     // RVK_GrassOn: the terrain's ground heights feed the procedural grass (grass.cpp CaptureTerrain / RenderGrassField).

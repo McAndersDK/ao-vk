@@ -447,16 +447,20 @@ uint32_t Device::FrameCommands(Frame& f, VkCommandBuffer out[4])
         out[0] = f.main;
         return 1;
     }
-    out[0] = f.mainA;
-    out[1] = f.prepass;
-    out[2] = f.mainB;
-    return 3;
+    uint32_t n = 0;
+    out[n++] = f.mainA;
+    out[n++] = f.prepass;
+    if (f.cloudsRecorded)
+        out[n++] = f.clouds;                     // (clouds.cpp: after the pre-pass's depth, before the scene's draws)
+    out[n++] = f.mainB;
+    return n;
 }
 
 // After the submission: one main command buffer again. The one being recorded stays the main one (mainA from now on),
 // so a caller that holds f.main across a flush keeps recording into the right buffer.
 void Device::FrameCommandsSubmitted(Frame& f)
 {
+    f.cloudsRecorded = false;
     if (!f.split)
         return;
     std::swap(f.mainA, f.mainB);

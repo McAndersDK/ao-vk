@@ -658,6 +658,10 @@ private:
         // one being recorded (mainA unless split). Submitted in that order.
         VkCommandBuffer mainA = VK_NULL_HANDLE, prepass = VK_NULL_HANDLE, mainB = VK_NULL_HANDLE;
         bool split = false;
+        // Clouds (clouds.cpp DrawClouds): their shadow map and half-size march, recorded where the sky ends but run
+        // between the pre-pass and mainB - outside the scene's rendering, which goes on unbroken (its pre-pass too).
+        VkCommandBuffer clouds = VK_NULL_HANDLE;
+        bool cloudsRecorded = false;
         VkFence fence = VK_NULL_HANDLE;
         VkSemaphore imageAvailable = VK_NULL_HANDLE;
         VkBuffer ring = VK_NULL_HANDLE;
@@ -1604,6 +1608,7 @@ private:
     VkPipelineLayout m_cloudLayout = VK_NULL_HANDLE, m_cloudNoiseLayout = VK_NULL_HANDLE;
     VkPipeline m_cloudPipeline = VK_NULL_HANDLE, m_cloudNoisePipeline = VK_NULL_HANDLE;
     VkPipeline m_cloudHalfPipeline = VK_NULL_HANDLE, m_cloudUpPipeline = VK_NULL_HANDLE;   // RVK_CloudHalf
+    VkPipeline m_cloudUpScenePipeline = VK_NULL_HANDLE;   // ... the filtering up inside the scene's rendering (its depth)
     VkDescriptorSetLayout m_cloudUpSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_cloudUpLayout = VK_NULL_HANDLE;
     Texture* m_cloudHalf = nullptr;              // RVK_CloudHalf: the clouds at half size (premultiplied)
@@ -1621,6 +1626,8 @@ private:
     bool CaptureCloudPuff(uint32_t fvf, const void* vertices, uint32_t vertexCount, const uint16_t* indices,
                           uint32_t indexCount);
     void DrawClouds(VkCommandBuffer cmd);
+    void MarchCloudPuffs(VkCommandBuffer cmd, const std::vector<std::pair<float, const CloudPuff*>>& order, bool half,
+                         bool skipCovered, float lo[2], float hi[2]);
     void MakeCloudNoise(VkCommandBuffer cmd);
     std::vector<SmokeVolume> m_smokeVolumes;
     SmokeImage m_smokeCurl, m_smokeDiv, m_smokePressure[2];
@@ -2143,6 +2150,7 @@ private:
         uint8_t shadeClass[kShadeQueries] = {};
         uint64_t shadePixels = 0;                 // the scene target's pixels (what the counts are divided by)
         bool shadeOverflow = false;               // ran out of queries: the rest of the frame went uncounted
+        bool cloudsTimed = false;                 // the clouds' own commands (Frame::clouds) timed: the pool's last two
     };
     bool m_shadeQueries = false;                  // pipelineStatisticsQuery enabled
     uint64_t m_shadeSum[kSceneClasses] = {};      // fragment shader invocations by class since the last log

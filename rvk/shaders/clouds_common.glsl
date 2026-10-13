@@ -17,5 +17,6 @@ layout(set = 0, binding = 0) uniform CloudFrame {
     vec4 noise;         // xyz: the noise's drift; w: how much it frays the puff (RVK_CloudDetail)
     vec4 fogColour;     // rgb; w: 1 = the game drew it fogged
     vec4 fogParams;     // start, end, density, table mode (D3DFOG_*)
-    vec4 distance;      // x: its middle's view depth
+    vec4 distance;      // x: its middle's view depth; y: the pre-pass's clear depth; z: 1 = skip where the pre-pass's
+                        // depth isn't that (half size: an opaque surface is drawn there later)
 } C;

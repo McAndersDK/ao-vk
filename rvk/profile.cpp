@@ -48,7 +48,7 @@ bool Device::CreateProfiler(std::string* error)
     Log("profiling: a clock read costs %.0f ns", m_timerCost * 1e6);
     VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
     qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
-    qi.queryCount = kProfileMarks;
+    qi.queryCount = kProfileMarks + 2;          // (the last two: the clouds' own pass, ProfileFrame::cloudsTimed)
     for (ProfileFrame& p : m_profile)
         if (!Check(vkCreateQueryPool(m_device, &qi, nullptr, &p.pool), "timestamp query pool", error))
             return false;
@@ -90,10 +90,20 @@ void Device::ProfileBeginFrame(VkCommandBuffer cmd)
                 ProfileAdd(m_profileGpu, p.names[i], double(t[i] - t[i - 1]) * m_timestampPeriod * 1e-6);
             ProfileAdd(m_profileGpu, "total", double(t[p.count - 1] - t[0]) * m_timestampPeriod * 1e-6);
             ++m_profileFrames;
+            // The clouds' own pass (clouds.cpp) runs between the pre-pass and the scene's draws: inside the interval
+            // the pre-pass's mark closes - taken out of it.
+            uint64_t c[2];
+            if (p.cloudsTimed && vkGetQueryPoolResults(m_device, p.pool, kProfileMarks, 2, sizeof(c), c, sizeof(uint64_t),
+                                                       VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+                const double ms = double(c[1] - c[0]) * m_timestampPeriod * 1e-6;
+                ProfileAdd(m_profileGpu, "clouds (own pass)", ms);
+                ProfileAdd(m_profileGpu, "depth pre-pass", -ms);
+            }
         }
     }
     p.count = 0;
-    vkCmdResetQueryPool(cmd, p.pool, 0, kProfileMarks);
+    p.cloudsTimed = false;
+    vkCmdResetQueryPool(cmd, p.pool, 0, kProfileMarks + 2);
     if (p.shadePool) {
         if (p.shadeCount) {
             uint64_t v[kShadeQueries];

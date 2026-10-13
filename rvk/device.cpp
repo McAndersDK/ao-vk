@@ -209,6 +209,7 @@ Device::~Device()
     DestroySmokeResources();
     DestroyCloudResources();
     DestroyStaticGeometry();
+    CollectGarbage();                            // (what those let go of: DestroyTexture defers - the device is idle)
     SavePipelineCache("at exit");
     if (m_pipelineCache) vkDestroyPipelineCache(m_device, m_pipelineCache, nullptr);
     if (m_pipelineLayout) vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
@@ -1083,14 +1084,15 @@ bool Device::CreateFrames(std::string* error)
         VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
         ai.commandPool = m_pool;
         ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        ai.commandBufferCount = 4;
-        VkCommandBuffer cmds[4];
+        ai.commandBufferCount = 5;
+        VkCommandBuffer cmds[5];
         if (!Check(vkAllocateCommandBuffers(m_device, &ai, cmds), "vkAllocateCommandBuffers", error))
             return false;
         f.upload = cmds[0];
         f.main = f.mainA = cmds[1];
         f.prepass = cmds[2];                     // the depth pre-pass (prepass.cpp)
         f.mainB = cmds[3];
+        f.clouds = cmds[4];                      // the clouds' own pass (clouds.cpp)
         VkFenceCreateInfo fi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
         fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
         VkSemaphoreCreateInfo si{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
