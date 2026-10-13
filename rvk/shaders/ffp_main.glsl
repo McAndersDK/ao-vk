@@ -733,7 +733,8 @@ void main()
         albedo *= (1.0 - gPbrMetal) * gPbrAo;
 #endif
     // The game's cloud sheets: coloured as the cloud layer's clouds, hazed by its air (not the game's fog).
-    bool cloudSheet = (D.mat.z & MAT_CLOUDSHEET) != 0u && FL.cloudSky.w > 0.0;
+    // (Strength 0 - a clear sky's (rvk sky.cpp) - they vanish; not drawn as the game draws them.)
+    bool cloudSheet = (D.mat.z & MAT_CLOUDSHEET) != 0u;
     if (cloudSheet) {
         current.rgb = CloudSheet(Sample(0u));
         current.a = clamp(current.a * FL.cloudSky.w, 0.0, 1.0);

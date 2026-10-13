@@ -1174,12 +1174,20 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
     // about the world - they stay round the eye.)
     const float present = 1.0f - std::exp(-0.5f * cover);   // (the puffs drawn: ~1 for any sky the game has clouds in)
     // (With the game's sheets drawn behind (RVK_CloudSheet): the heaps sparser - the sheets the veil, as the game's.)
-    const float sheets = CloudSheetsOn() ? std::min(m_cloudParams.sheet, 1.0f) : 0.0f;
-    const float cloudy = std::clamp(present * (0.42f + 0.05f * flatShare - 0.09f * sheets) +
-                                    smoothstep01(0.0f, 0.2f, rain) * 0.55f, 0.0f, 1.0f);
+    // The sky's own weather (sky.cpp, RVK_SkyVary): clear .. overcast from the clock - the game's sheets fading with it
+    // (none on a clear day: user), the layer's cloudiness following it; the game's rain overcast as before.
+    const float vary = std::clamp(m_cloudParams.vary, 0.0f, 1.0f);
+    const float sky = SkyCloudiness();
+    const float rainy = smoothstep01(0.0f, 0.2f, rain);
+    m_skySheets = std::max(1.0f + (smoothstep01(0.08f, 0.4f, sky) - 1.0f) * vary, rainy);
+    const float sheets = CloudSheetsOn() ? std::min(m_cloudParams.sheet, 1.0f) * m_skySheets : 0.0f;
+    const float fixedSky = 0.42f + 0.05f * flatShare - 0.09f * sheets;   // (as the game's puffs say: always scattered)
+    const float ownSky = 0.95f * sky - 0.06f * sheets;   // (overcast: hardly a gap)
+    const float cloudy = std::clamp(present * (fixedSky + (ownSky - fixedSky) * vary) + rainy * 0.55f, 0.0f, 1.0f);
     // (Flat sheets: lumpy layered cloud - stratocumulus - not a thin stratus band, which seen from below at a low
     // angle smears into waves and streaks.)
-    const float type = std::clamp(0.5f + 0.5f * rain - 0.12f * flatShare * (1.0f - rain), 0.0f, 1.0f);
+    const float type = std::clamp(0.5f + 0.5f * rain - 0.12f * flatShare * (1.0f - rain) +
+                                  0.25f * vary * smoothstep01(0.6f, 0.95f, sky), 0.0f, 1.0f);   // (broken, overcast: layered)
     {
         const double gap = m_cloudWeatherClock < 0.0 ? 1e9 : m_frameClock - m_cloudWeatherClock;
         const float k = gap > 5.0 ? 1.0f : 1.0f - std::exp(-float(gap) / 8.0f);
@@ -1203,9 +1211,10 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
     wf.drift[2] = 9000.0f;
     wf.drift[3] = std::clamp(m_cloudParams.cover, -1.0f, 1.0f);
     if (m_frameNumber % 600 == 1)
-        Log("clouds: weather map: cloudy %.2f (now %.2f: puffs %.2f, rain %.2f), type %.2f (flat sheets %.0f%%), base %.0f "
-            "(eye %.0f); low deck %.2f; wispy puffs %.0f%% (%u of %zu puffs' textures known)", double(wf.info[1]),
-            double(cloudy), double(cover), double(rain), double(wf.info[2]), double(flatShare * 100.0f),
+        Log("clouds: sky %s (%.2f, RVK_SkyVary %.2f; the game's sheets x%.2f); weather map: cloudy %.2f (now %.2f: puffs "
+            "%.2f, rain %.2f), type %.2f (flat sheets %.0f%%), base %.0f (eye %.0f); low deck %.2f; wispy puffs %.0f%% "
+            "(%u of %zu puffs' textures known)", SkyName(sky), double(sky), double(vary), double(m_skySheets),
+            double(wf.info[1]), double(cloudy), double(cover), double(rain), double(wf.info[2]), double(flatShare * 100.0f),
             double(m_cloudBase), double(eye[1]), double(m_cloudDeck), double(m_cloudWispy * 100.0f), known,
             m_cloudPuffs.size());
     m_cloudWeatherArea[0] = wf.area[0];
@@ -1388,7 +1397,8 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     lf.deck[1] = m_cloudBase - 0.55f * m_cloudParams.height;   // (between the ground and the layer's base)
     lf.deck[2] = lf.deck[1] + kDeckThickness;
     // The game's sheets' faint shadow (the shadow map), while it draws them.
-    lf.deck[3] = CloudSheetsOn() && !m_cloudPuffs.empty() ? 0.25f * std::min(m_cloudParams.sheet, 1.0f) : 0.0f;
+    lf.deck[3] = CloudSheetsOn() && !m_cloudPuffs.empty() ? 0.25f * std::min(m_cloudParams.sheet, 1.0f) * m_skySheets
+                                                          : 0.0f;
     void* cpu = nullptr;
     const VkDeviceSize offset = Allocate(sizeof(LayerFrame), 256, &cpu);
     std::memcpy(cpu, &lf, sizeof(lf));

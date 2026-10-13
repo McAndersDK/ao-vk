@@ -428,6 +428,8 @@ public:
     void SetMoonLight(float s) { m_moonLight = s; m_frameLightsDirty = true; m_constantsDirty = true; }
     // How dark nights get (tonemap.frag; 0 = as the game, 1 = moonlit blue, 2 = dark).
     void SetNightDark(float s) { m_nightDark = s; }
+    // Tests: the sky weather's clock (seconds, as UTC; < 0 the wall clock).
+    void SetSkyTime(double t) { m_skyTime = t; }
     void SetContactShadows(float s) { m_contact = s; m_constantsDirty = true; }
     void SetEffectGlow(float gain) { if (m_effectGlow != gain) { m_effectGlow = gain; m_constantsDirty = true; } }
     float EffectGlow() const { return m_effectGlow; }
@@ -576,6 +578,8 @@ public:
         float density = 1.0f;                    // RVK_CloudThick: how thick, x
         float brightness = 1.0f;                 // RVK_CloudBright: their colour, x
         float night = 0.8f;                      // RVK_CloudNight: ... at night, x more (eased in as the sun goes down)
+        float vary = 1.0f;                       // RVK_SkyVary: how much the sky changes, clear .. overcast (0: always
+                                                 // scattered, as the game's puffs say; sky.cpp)
         float detail = 1.0f;                     // RVK_CloudDetail: how much the noise frays them (0: smooth)
         uint32_t steps = 32;                     // RVK_CloudSteps: the march's steps through a puff
         bool half = true;                        // RVK_CloudHalf: marched at half resolution
@@ -966,6 +970,12 @@ private:
     float m_moonFade = 0.0f;                     // 0..1: how much the moon lights (night x its height x the setting)
     float m_shadowLightDir[3] = {0.0f, -1.0f, 0.0f};   // what the shadow map is drawn from: the sun, or the moon
     float m_trueSunDir[3] = {0.0f, -1.0f, 0.0f};   // the sun's light's way, below the horizon too (last seen)
+    // Sky weather (sky.cpp): how cloudy, from the clock.
+    double m_skyTime = -1.0;                     // a test's sky clock (SetSkyTime; < 0: the wall clock)
+    float m_skySheets = 1.0f;                    // the game's sheets' strength by the sky (none when clear)
+    double SkyClock() const;
+    float SkyCloudiness() const;
+    static const char* SkyName(float cloudiness);
     bool m_shadowIsMoon = false;                 // ... the moon (FrameLights moon.w)
     bool m_drawIsSkyMesh = false;                // the current visual is a mesh in the sky (a moon?)
     void NoteSkyMesh(uint32_t fvf, const void* vertices, uint32_t vertexCount);

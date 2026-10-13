@@ -357,7 +357,7 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
     std::memcpy(fl->cloudTint, m_sheetTint, sizeof(fl->cloudTint));
     std::memcpy(fl->cloudSky, m_sheetSky, sizeof(fl->cloudSky));
     std::memcpy(fl->cloudAir, m_sheetAir, sizeof(fl->cloudAir));
-    fl->cloudSky[3] = CloudSheetsOn() && m_sheetTint[3] > 0.0f ? std::min(m_cloudParams.sheet, 2.0f) : 0.0f;
+    fl->cloudSky[3] = CloudSheetsOn() && m_sheetTint[3] > 0.0f ? std::min(m_cloudParams.sheet, 2.0f) * m_skySheets : 0.0f;
     fl->prevView = m_prevView;                   // the world camera last frame (motion vectors)
     fl->prevProj = m_prevProj;
     m_frameLightIndices.clear();
