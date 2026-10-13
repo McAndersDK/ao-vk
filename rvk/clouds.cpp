@@ -1239,8 +1239,13 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     lf.weather[3] = skipCovered ? 1.0f : 0.0f;
     lf.shape[0] = 1.0f / 4500.0f;                // (4 cells a tile: cloud cells about a kilometre)
     lf.shape[1] = 1.0f / 900.0f;                 // (a tile of 4 .. 16 detail cells: ~225 .. 56 units each)
-    lf.shape[2] = 0.65f * m_cloudParams.detail;
-    lf.shape[3] = 0.02f * m_cloudParams.density;
+    // Detail and density by the weather (RVK_CloudDetail / RVK_CloudThick scale them): storms smooth, heavy masses -
+    // 30% less erosion at full rain, 20% denser; clearer skies crisper, more ragged edges (up to +20%). (Eased: rain
+    // and cloudiness are.)
+    const float stormNow = std::clamp(m_rain, 0.0f, 1.0f);
+    const float weatherDetail = (1.0f - 0.3f * stormNow) * (1.0f + 0.2f * (1.0f - std::clamp(m_cloudCloudy, 0.0f, 1.0f)));
+    lf.shape[2] = 0.65f * m_cloudParams.detail * weatherDetail;
+    lf.shape[3] = 0.02f * m_cloudParams.density * (1.0f + 0.2f * stormNow);
     // The wind carries the shapes (and they evolve: up through the noise) - UpdateCloudDrift.
     lf.wind[0] = m_cloudDrift[0];
     lf.wind[1] = m_cloudDrift[2];

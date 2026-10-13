@@ -95,7 +95,8 @@ float Density(vec3 p, bool detail)
     // Billows: the body bumped by its own cells three times finer (cauliflower tops rather than smooth blobs) - more
     // towards the top, where cumulus heap up.
     float billow = textureLod(shapeNoise, q * 3.1 + 0.17, 0.0).g;
-    body = Remap(body, (1.0 - billow) * mix(0.15, 0.35, clamp(h * 2.0, 0.0, 1.0)), 1.0, 0.0, 1.0);
+    // (As much as the edges' erosion: the weather's detail - storms smoother.)
+    body = Remap(body, (1.0 - billow) * mix(0.15, 0.35, clamp(h * 2.0, 0.0, 1.0)) * clamp(L.shape.z / 0.65, 0.3, 1.5), 1.0, 0.0, 1.0);
     d = clamp(Remap(body, 1.0 - cover, 1.0, 0.0, 1.0), 0.0, 1.0) * cover;
     if (d <= 0.0)
         return 0.0;
