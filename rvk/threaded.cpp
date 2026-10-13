@@ -873,6 +873,11 @@ void ThreadedDevice::SetMist(float s)
     Enqueue([this, s](const uint8_t*) { m_device.SetMist(s); });
 }
 
+void ThreadedDevice::SetSun(float s)
+{
+    Enqueue([this, s](const uint8_t*) { m_device.SetSun(s); });
+}
+
 void ThreadedDevice::SetContactShadows(float s)
 {
     Enqueue([this, s](const uint8_t*) { m_device.SetContactShadows(s); });

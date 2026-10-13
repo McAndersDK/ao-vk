@@ -432,6 +432,8 @@ public:
     void SetAtmos(bool on) { m_atmos = on; }
     // Valley mist's amount (mist.cpp; 0 none, 1 as planned).
     void SetMist(float s) { m_mist = s; }
+    // The sun's disc (sun.cpp; 0 none, 1 as planned: its brightness).
+    void SetSun(float s) { m_sun = s; }
     // Tests: the sky weather's clock (seconds, as UTC; < 0 the wall clock).
     void SetSkyTime(double t) { m_skyTime = t; }
     void SetContactShadows(float s) { m_contact = s; m_constantsDirty = true; }
@@ -969,6 +971,9 @@ private:
     bool m_atmos = true;                         // RVK_Atmos
     // Valley mist (mist.cpp, RVK_Mist).
     float m_mist = 1.0f;                         // RVK_Mist, x (0: none)
+    float m_sun = 1.0f;                          // RVK_Sun: the sun's disc, x (0: none; sun.cpp)
+    uint64_t m_sunDrawnFrame = ~0ull;            // ... drawn this frame (once: the first of the game's sun sprites)
+    void DrawSun();
     std::vector<float> m_mistSamples;            // this frame's terrain heights near the eye
     float m_mistFloor = 0.0f, m_mistAmount = 0.0f, m_mistWet = 0.0f, m_mistSunPrev = 0.0f, m_mistSunTrend = 0.0f;
     bool m_mistFloorSet = false;
@@ -1688,6 +1693,8 @@ private:
     VkPipelineLayout m_cloudLayout = VK_NULL_HANDLE, m_cloudNoiseLayout = VK_NULL_HANDLE;
     VkPipeline m_cloudPipeline = VK_NULL_HANDLE, m_cloudNoisePipeline = VK_NULL_HANDLE;
     VkPipeline m_cloudHalfPipeline = VK_NULL_HANDLE, m_cloudUpPipeline = VK_NULL_HANDLE;   // RVK_CloudHalf
+    VkPipeline m_sunPipeline = VK_NULL_HANDLE;   // the sun's disc (sun.cpp)
+    VkPipelineLayout m_sunLayout = VK_NULL_HANDLE;
     VkPipeline m_cloudUpScenePipeline = VK_NULL_HANDLE;   // ... the filtering up inside the scene's rendering (its depth)
     VkDescriptorSetLayout m_cloudUpSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_cloudUpLayout = VK_NULL_HANDLE;

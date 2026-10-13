@@ -38,6 +38,9 @@ const uint32_t kFullscreenVertSpirv[] = {
 const uint32_t kCloudUpFragSpirv[] = {
 #include "cloud_up.frag.inc"
 };
+const uint32_t kSunFragSpirv[] = {             // the sun's disc (sun.cpp)
+#include "sun.frag.inc"
+};
 const uint32_t kCloudShadowFragSpirv[] = {
 #include "cloud_shadow.frag.inc"
 };
@@ -343,6 +346,16 @@ bool Device::CreateCloudResources(std::string* error)
                     m_cloudShadowLayout, &shadowFormat, 1, VK_FORMAT_UNDEFINED, &m_cloudShadowPipeline);
     if (!v1)
         return false;
+    {   // The sun's disc (sun.cpp): in the scene's rendering, added (over with alpha 0); a push-only layout.
+        VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 112};
+        VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        pl.pushConstantRangeCount = 1;
+        pl.pPushConstantRanges = &push;
+        if (!Check(vkCreatePipelineLayout(m_device, &pl, nullptr, &m_sunLayout), "sun layout", error) ||
+            !pipeline(kFullscreenVertSpirv, sizeof(kFullscreenVertSpirv), kSunFragSpirv, sizeof(kSunFragSpirv), m_sunLayout,
+                      sceneFormats, 5, kDepthFormat, &m_sunPipeline))
+            return false;
+    }
 
     // RVK_CloudLayer: its noise (two 3D images, one compute pipeline: push mode, size), the weather map's pass (0 its
     // block, 1 v1's noise), the march (0 its block, 1 the weather map, 2 the shape noise, 3 the pre-pass's depth,
@@ -435,6 +448,8 @@ bool Device::CreateCloudResources(std::string* error)
 
 void Device::DestroyCloudResources()
 {
+    if (m_sunPipeline) { vkDestroyPipeline(m_device, m_sunPipeline, nullptr); m_sunPipeline = VK_NULL_HANDLE; }
+    if (m_sunLayout) { vkDestroyPipelineLayout(m_device, m_sunLayout, nullptr); m_sunLayout = VK_NULL_HANDLE; }
     for (VkPipeline* p : {&m_cloudPipeline, &m_cloudHalfPipeline, &m_cloudUpPipeline, &m_cloudUpScenePipeline,
                           &m_cloudShadowPipeline, &m_cloudLayerNoisePipeline, &m_cloudWeatherPipeline, &m_cloudLayerPipeline,
                           &m_cloudResolvePipeline, &m_cloudLayerShadowPipeline})

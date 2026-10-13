@@ -2107,6 +2107,10 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
         return;                                  // replaced by a volume (DrawClouds)
     if (m_drawIsSkyMesh && !m_external && !m_drawGpu)
         NoteSkyMesh(fvf, vertices, vertexCount);   // the moons (night.cpp)
+    // The sun's disc (sun.cpp): where the game draws its sun's ray sprites - in the sky, before its cloud sheets.
+    if (VisualKind(m_drawVisualKind) == VisualKind::Sky && std::strncmp(m_drawVisualName, "VisualSunRays_t", 15) == 0 &&
+        m_scenePhase)
+        DrawSun();
     if (IsTerrain(fvf) && IsMultiplyPass())
         m_terrainLitPassCur = true;
     // (The terrain's base pass: its light pass multiplies, its fog white - not the scene's fog colour.)

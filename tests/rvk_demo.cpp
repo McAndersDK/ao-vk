@@ -1510,6 +1510,10 @@ template <typename D>
 void DrawDemoPuffs(D& dev, Vector eye, float yaw, Texture* const* puffTex, const std::vector<VtxMesh>& puffMesh,
                    const std::vector<uint16_t>& puffIdx, float scale)
 {
+    // (The game's sun sprites, as a stand-in: a draw of nothing - where the renderer draws its sun's disc, sun.cpp.)
+    dev.SetDrawVisual(uint32_t(VisualKind::Sky), "VisualSunRays_t");
+    dev.SetTransform(World, Matrix{{{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {eye.x, eye.y, eye.z, 1}}});
+    dev.DrawIndexedPrimitive(TriangleList, kFvfMesh, puffMesh.data(), uint32_t(puffMesh.size()), puffIdx.data(), 3);
     dev.SetDrawVisual(uint32_t(VisualKind::Sky), "VisualSingleCloud_t");
     dev.SetRenderState(RS_LIGHTING, 1);
     dev.SetRenderState(RS_ALPHABLENDENABLE, 1);
