@@ -40,6 +40,20 @@ const float kPi = 3.14159265;
 
 float Remap(float v, float lo, float hi, float a, float b) { return a + (v - lo) * (b - a) / max(hi - lo, 1e-5); }
 
+// The air between the eye and a cloud dist away (premultiplied light, alpha): its colour goes towards the game's
+// distance colour (the more the farther, and low in the sky the more the game fogs its clouds), and far off it thins
+// out into the game's own sky - whose horizon is its fog band - as the stock sky's clouds do (no crisp clouds down to
+// the hills; the march's reach no edge).
+vec4 Aerial(vec3 light, float alpha, float dist, vec3 dir)
+{
+    float air = 1.0 - exp(-dist / L.haze.w);
+    float low = 1.0 - smoothstep(0.0, 0.5, dir.y);
+    float haze = max(air * 0.85, L.horizon.x * low * low * (3.0 - 2.0 * low));
+    light = mix(light, L.haze.rgb * alpha, haze);
+    float keep = (1.0 - 0.95 * smoothstep(0.35, 0.9, air)) * (1.0 - smoothstep(0.7 * L.layer.w, L.layer.w, dist));
+    return vec4(light, alpha) * keep;
+}
+
 // Where a ray from o along unit d is inside the sphere at c of radius r: t0 <= t1 (t1 < 0: never).
 vec2 Sphere(vec3 o, vec3 d, vec3 c, float r)
 {
@@ -176,11 +190,7 @@ vec4 Deck(vec3 eye, vec3 dir, float jitter)
     float alpha = 1.0 - transmit;
     if (alpha <= 0.0)
         return vec4(0.0);
-    float low = 1.0 - smoothstep(0.0, 0.5, dir.y);
-    float haze = max((1.0 - exp(-t0 / L.haze.w)) * 0.8, L.horizon.x * low * low * (3.0 - 2.0 * low));
-    light = mix(light, L.haze.rgb * alpha, haze);
-    alpha *= 1.0 - smoothstep(0.7 * L.layer.w, L.layer.w, t0);
-    return vec4(light * (1.0 - smoothstep(0.7 * L.layer.w, L.layer.w, t0)), alpha);
+    return Aerial(light, alpha, t0, dir);
 }
 
 
@@ -340,17 +350,8 @@ void main()
         outScene = deck;
         return;
     }
-    // Haze: the cloud's distance (where along the ray it is) blends it into the game's distance colour; the very
-    // far fades out (the march's reach is no horizon).
-    float dist = depthSum / max(weightSum, 1e-6);
-    float haze = (1.0 - exp(-dist / L.haze.w)) * 0.8;
-    // Low in the sky, the far distance's haze (as the game's sky has it), the more the more the game fogs its clouds:
-    // most at the horizon (where the fogged ground meets the sky), fading out up to ~30 degrees.
-    float low = 1.0 - smoothstep(0.0, 0.5, dir.y);
-    haze = max(haze, L.horizon.x * low * low * (3.0 - 2.0 * low));
-    light = mix(light, L.haze.rgb * alpha, haze);
-    float fade = 1.0 - smoothstep(0.7 * L.layer.w, L.layer.w, dist);
-    vec4 layer = vec4(light, alpha) * fade;
+    // The air: by where along the ray the cloud is.
+    vec4 layer = Aerial(light, alpha, depthSum / max(weightSum, 1e-6), dir);
     outScene = deck + (1.0 - deck.a) * layer;
 }
 #endif

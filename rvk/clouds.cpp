@@ -77,7 +77,8 @@ constexpr float kLayerShadowArea = 12000.0f;    // RVK_CloudLayer's shadow map: 
 constexpr uint32_t kCloudTexWispy = 121214;
 constexpr float kWeatherArea = 24000.0f;        // ... over this much of the world round the camera
 constexpr float kLayerThickness = 1300.0f;      // the layer's base to its top (world)
-constexpr float kLayerRadius = 60000.0f;        // the sphere it bends round (the horizon's curve)
+constexpr float kLayerRadius = 400000.0f;       // the sphere it bends round (the horizon's curve; 60 km sank the
+                                                // far clouds below the eye's level, onto the hills)
 constexpr float kLayerReach = 16000.0f;         // the march's farthest (world)
 struct WeatherFrame {
     float area[4], info[4], drift[4];
