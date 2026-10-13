@@ -26,6 +26,8 @@ layout(set = 0, binding = 0, std140) uniform LayerFrame {
                         // as the game's do - the fogged ground meets them seamlessly); y: contrast (RVK_CloudShade)
     vec4 shadowArea;    // the shadow map (RVK_CLOUD_SHADOW): its corner x, z (world), its size, the plane it lies in
                         // (world y)
+    vec4 deck;          // the low deck (stratus: the game's flat sheets and dull overcast): x how much (0..1), y its
+                        // base, z its top (world y)
 } L;
 layout(set = 0, binding = 1) uniform sampler2D weatherMap;
 layout(set = 0, binding = 2) uniform sampler3D shapeNoise;
@@ -116,6 +118,71 @@ float Density(vec3 p, bool detail)
 
 float HG(float c, float g) { return (1.0 - g * g) / (4.0 * kPi * pow(1.0 + g * g - 2.0 * g * c, 1.5)); }
 
+// The low deck (stratus): a thin, nearly even sheet below the layer where the game's sky is flat sheets and overcast -
+// soft, fibrous (its noise drawn out along the wind ~3:1, as the game's fibrous puff textures on its sheets), a little
+// thicker in the middle of its height, broken here and there (fewer breaks the more of it).
+float DeckDensity(vec3 p)
+{
+    float r = length(p - gCentre) - (L.layer.z - L.eye.y);   // (its height, world y, over the curved ground)
+    float h = (r - L.deck.y) / max(L.deck.z - L.deck.y, 1.0);
+    if (h <= 0.0 || h >= 1.0)
+        return 0.0;
+    vec2 q = p.xz + L.wind.xz;
+    float broad = clamp((textureLod(shapeNoise, vec3(q / 14000.0, 0.47), 0.0).r - 0.54) / 0.26, 0.0, 1.0);
+    float cover = smoothstep(1.0 - L.deck.x, 1.25 - L.deck.x * 0.6, broad * 0.5 + 0.5 * L.deck.x);
+    if (cover <= 0.0)
+        return 0.0;
+    vec2 along = normalize(L.wind.xz + vec2(1e-3, 0.0)), across = vec2(-along.y, along.x);
+    vec2 f = vec2(dot(q, along), dot(q, across));
+    // (Worley fbm: values bunched in ~0.4..0.85 - spread, or the texture disappears.)
+    float fib = clamp((textureLod(detailNoise, vec3(f.x / 3000.0, h * 0.35, f.y / 1000.0), 0.0).r - 0.42) / 0.4, 0.0, 1.0);
+    float fine = clamp((textureLod(detailNoise, vec3(f.x / 1100.0, 0.5 + h * 0.5, f.y / 380.0), 0.0).g - 0.42) / 0.4, 0.0, 1.0);
+    float body = smoothstep(0.0, 0.35, h) * (1.0 - smoothstep(0.55, 1.0, h));
+    float d = cover * body * (fib * 0.85 + fine * 0.45) - 0.2;
+    return clamp(d, 0.0, 1.0);
+}
+
+// The deck along the view ray (below it, looking up through it): a few steps, lit mostly by the sky - lighter at its
+// top, darker beneath - a little sun through it; hazed as the layer. Premultiplied.
+vec4 Deck(vec3 eye, vec3 dir, float jitter)
+{
+    if (L.deck.x <= 0.0 || eye.y >= L.deck.y)
+        return vec4(0.0);
+    float R = L.layer.z;
+    vec2 a = Sphere(eye, dir, gCentre, R + (L.deck.y - eye.y)), b = Sphere(eye, dir, gCentre, R + (L.deck.z - eye.y));
+    float t0 = a.y, t1 = min(b.y, L.layer.w);
+    if (t1 <= t0 || t0 <= 0.0)
+        return vec4(0.0);
+    const int kSteps = 8;
+    float dt = (t1 - t0) / float(kSteps);
+    float sigma = L.shape.w * 0.9, transmit = 1.0;
+    vec3 sunL = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
+    vec3 sun = FL.sunColor.rgb * smoothstep(-0.08, 0.12, sunL.y) * 0.35;
+    vec3 light = vec3(0.0);
+    for (int i = 0; i < kSteps && transmit > 0.02; ++i) {
+        vec3 p = eye + dir * (t0 + (float(i) + jitter) * dt);
+        float d = DeckDensity(p);
+        if (d <= 0.001)
+            continue;
+        float h = (float(i) + 0.5) / float(kSteps);
+        // (Seen from below: mostly its underside - darker than the layer's sunlit tops; thick parts darker still.)
+        vec3 S = (L.ambient.rgb * mix(0.38, 0.8, h) * mix(0.55, 1.0, exp(-d * 2.0)) + sun) * L.tint.rgb * L.tint.w;
+        const vec3 luma = vec3(0.3, 0.59, 0.11);   // (contrast, as the layer: RVK_CloudShade)
+        S *= clamp(pow(max(dot(S, luma) / max(dot(L.tint.rgb, luma) * L.tint.w, 1e-3), 1e-3), L.horizon.y - 1.0), 0.15, 3.0);
+        float st = exp(-d * sigma * dt);
+        light += transmit * (1.0 - st) * S;
+        transmit *= st;
+    }
+    float alpha = 1.0 - transmit;
+    if (alpha <= 0.0)
+        return vec4(0.0);
+    float low = 1.0 - smoothstep(0.0, 0.5, dir.y);
+    float haze = max((1.0 - exp(-t0 / L.haze.w)) * 0.8, L.horizon.x * low * low * (3.0 - 2.0 * low));
+    light = mix(light, L.haze.rgb * alpha, haze);
+    alpha *= 1.0 - smoothstep(0.7 * L.layer.w, L.layer.w, t0);
+    return vec4(light * (1.0 - smoothstep(0.7 * L.layer.w, L.layer.w, t0)), alpha);
+}
+
 
 #ifdef RVK_CLOUD_SHADOW
 // The clouds' shadow map (rvk/clouds.cpp MakeCloudLayerShadow): top down, in a plane through the layer - for each
@@ -142,6 +209,14 @@ void main()
         od += Density(p + sunL * ((y - p.y) / sunL.y), false);
     }
     od *= span / sunL.y * L.shape.w;
+    if (L.deck.x > 0.0) {                         // (and the low deck's)
+        float ds = 0.0, dspan = (L.deck.z - L.deck.y) / 4.0;
+        for (int k = 0; k < 4; ++k) {
+            float y = L.deck.y + dspan * (float(k) + 0.5);
+            ds += DeckDensity(p + sunL * ((y - p.y) / sunL.y));
+        }
+        od += ds * dspan / sunL.y * L.shape.w * 0.9;
+    }
     float light = exp(-od * 0.25);                // (softened: thin cloud a light shade, thick cloud dark)
     outScene = vec4(light, light, light, 1.0);
 }
@@ -170,6 +245,8 @@ void main()
     gInner = R + (L.layer.x - eye.y);
     float outer = R + (L.layer.y - eye.y);
     gThick = outer - gInner;
+    float jitter = fract(52.9829189 * fract(dot(hp, vec2(0.06711056, 0.00583715))) + FL.taa.z);
+    vec4 deck = Deck(eye, dir, jitter);          // (below the layer: in front of it, looking up)
     vec2 si = Sphere(eye, dir, gCentre, gInner), so = Sphere(eye, dir, gCentre, outer);
     float r0 = length(eye - gCentre);
     float t0, t1;
@@ -180,18 +257,17 @@ void main()
         t0 = 0.0;
         t1 = si.y > 0.0 && si.x > 0.0 ? si.x : so.y;
     } else {                                     // above it
-        if (so.y < 0.0 || so.x > so.y) { outScene = vec4(0.0); return; }
+        if (so.y < 0.0 || so.x > so.y) { outScene = deck; return; }
         t0 = max(so.x, 0.0);
         t1 = si.x > 0.0 && si.y > si.x ? si.x : so.y;
     }
     t1 = min(t1, L.layer.w);
     if (t1 <= t0) {
-        outScene = vec4(0.0);
+        outScene = deck;
         return;
     }
     // Steps growing with the distance (short near the eye: the near clouds' detail; long far off), at most L.view.z.
     int steps = int(L.view.z);
-    float jitter = fract(52.9829189 * fract(dot(hp, vec2(0.06711056, 0.00583715))) + FL.taa.z);
     vec3 sunL = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
     float sunUp = smoothstep(-0.08, 0.12, sunL.y);
     float cosT = dot(dir, sunL);
@@ -261,7 +337,7 @@ void main()
     }
     float alpha = 1.0 - transmit;
     if (alpha <= 0.0) {
-        outScene = vec4(0.0);
+        outScene = deck;
         return;
     }
     // Haze: the cloud's distance (where along the ray it is) blends it into the game's distance colour; the very
@@ -274,6 +350,7 @@ void main()
     haze = max(haze, L.horizon.x * low * low * (3.0 - 2.0 * low));
     light = mix(light, L.haze.rgb * alpha, haze);
     float fade = 1.0 - smoothstep(0.7 * L.layer.w, L.layer.w, dist);
-    outScene = vec4(light, alpha) * fade;
+    vec4 layer = vec4(light, alpha) * fade;
+    outScene = deck + (1.0 - deck.a) * layer;
 }
 #endif

@@ -71,6 +71,7 @@ constexpr uint32_t kNoiseSize = 64;             // the clouds' noise image (cell
 // RVK_CloudLayer.
 constexpr uint32_t kShapeSize = 128, kDetailSize = 64;   // the layer's noise images (cells a side; tiling)
 constexpr uint32_t kWeatherSize = 256;          // the weather map (pixels a side)
+constexpr float kDeckThickness = 300.0f;        // the low deck (stratus): its thickness (world)
 constexpr float kLayerShadowArea = 12000.0f;    // RVK_CloudLayer's shadow map: over this much (world) round the camera
 // The game's puff textures (RDB 1010004): single_cloud01..03 (121213, 121212, 121211) fibrous puffs, 04 streaky wisps.
 constexpr uint32_t kCloudTexWispy = 121214;
@@ -85,7 +86,7 @@ struct WeatherFrame {
 struct LayerFrame {
     d3d::Matrix invViewProj;
     float eye[4], layer[4], weather[4], shape[4], wind[4], tint[4], ambient[4], haze[4], view[4], sub[4], horizon[4],
-        shadowArea[4];
+        shadowArea[4], deck[4];
 };
 
 struct ResolveFrame {
@@ -94,6 +95,12 @@ struct ResolveFrame {
 };
 
 // The view-projection of the camera's rotation alone (its translation dropped): directions to clip space.
+float smoothstep01(float a, float b, float x)
+{
+    const float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
 d3d::Matrix RotationViewProj(const d3d::Matrix& view, const d3d::Matrix& proj)
 {
     d3d::Matrix v = view;
@@ -1170,6 +1177,10 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
         m_cloudCloudy += (cloudy - m_cloudCloudy) * k;
         m_cloudType += (type - m_cloudType) * k;
         m_cloudWispy += ((weight > 0.0f ? wispy / weight : 0.0f) - m_cloudWispy) * k;   // (the game's wispy puffs' share)
+        // The low deck (stratus): where the game's sky is its flat sheets and overcast - more in rain.
+        const float deck = std::clamp(smoothstep01(0.4f, 1.0f, flatShare) * smoothstep01(0.6f, 0.95f, cloudy) +
+                                      0.4f * rain * smoothstep01(0.4f, 1.0f, flatShare), 0.0f, 1.0f);
+        m_cloudDeck += (deck - m_cloudDeck) * k;
         m_cloudWeatherClock = m_frameClock;
     }
     wf.info[1] = m_cloudCloudy;
@@ -1184,9 +1195,9 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
     wf.drift[3] = std::clamp(m_cloudParams.cover, -1.0f, 1.0f);
     if (m_frameNumber % 600 == 1)
         Log("clouds: weather map: cloudy %.2f (now %.2f: puffs %.2f, rain %.2f), type %.2f (flat sheets %.0f%%), base %.0f "
-            "(eye %.0f); wispy puffs %.0f%% (%u of %zu puffs' textures known)", double(wf.info[1]),
+            "(eye %.0f); low deck %.2f; wispy puffs %.0f%% (%u of %zu puffs' textures known)", double(wf.info[1]),
             double(cloudy), double(cover), double(rain), double(wf.info[2]), double(flatShare * 100.0f),
-            double(m_cloudBase), double(eye[1]), double(m_cloudWispy * 100.0f), known,
+            double(m_cloudBase), double(eye[1]), double(m_cloudDeck), double(m_cloudWispy * 100.0f), known,
             m_cloudPuffs.size());
     m_cloudWeatherArea[0] = wf.area[0];
     m_cloudWeatherArea[1] = wf.area[1];
@@ -1344,6 +1355,10 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     std::memcpy(lf.sub, sub, sizeof(lf.sub));
     if (shadowArea)
         std::memcpy(lf.shadowArea, shadowArea, sizeof(lf.shadowArea));
+    static const float deckOverride = getenv("RANDYVK_CLOUD_DECK") ? float(atof(getenv("RANDYVK_CLOUD_DECK"))) : -1.0f;
+    lf.deck[0] = std::clamp((deckOverride >= 0.0f ? deckOverride : m_cloudDeck) * m_cloudParams.low, 0.0f, 1.0f);
+    lf.deck[1] = m_cloudBase - 0.55f * m_cloudParams.height;   // (between the ground and the layer's base)
+    lf.deck[2] = lf.deck[1] + kDeckThickness;
     void* cpu = nullptr;
     const VkDeviceSize offset = Allocate(sizeof(LayerFrame), 256, &cpu);
     std::memcpy(cpu, &lf, sizeof(lf));
