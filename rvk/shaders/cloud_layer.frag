@@ -233,20 +233,22 @@ void main()
     }
     float light = exp(-od * 0.25);                // (softened: thin cloud a light shade, thick cloud dark)
     // Shadow patches finer than the clouds (user's choice, 2026-10-13): the layer's cells are about a kilometre, so
-    // the land in view - a few hundred units - lay wholly in one cloud's shadow or none. Patches of ~100-250 units,
-    // fixed in the world and drifting with the layer's wind (a noise tile of ~560 units, 4 cells a tile), as many as the sky is cloudy (L.sub.w; the weather map's
+    // the land in view - a few hundred units - lay wholly in one cloud's shadow or none. Patches of ~60-150 units,
+    // fixed in the world and drifting with the layer's wind (a noise tile of ~320 units, 4 cells a tile), as many as the sky is cloudy (L.sub.w; the weather map's
     // cover is near all or nothing at a point), soft-edged.
     {
         vec3 c = p + sunL * ((L.layer.x + 0.35 * (L.layer.y - L.layer.x) - p.y) / sunL.y);
         float cover = 0.8 * L.sub.w;
-        vec3 q = vec3((c.x + L.wind.x) * L.shape.x * 8.0, 0.43, (c.z + L.wind.z) * L.shape.x * 8.0);
+        vec3 q = vec3((c.x + L.wind.x) * L.shape.x * 14.0, 0.43, (c.z + L.wind.z) * L.shape.x * 14.0);
         vec4 n = textureLod(shapeNoise, q, 0.0);
         // (Worley fbm at 4 and 8 cells a tile: values bunched in ~0.45..0.63 - the threshold that leaves `cover` of
         // the ground above it, fitted to their spread.)
         float v = n.g * 0.7 + n.b * 0.3;
         float t = 0.61 - 0.27 * cover;
         float patchy = smoothstep(t - 0.012, t + 0.018, v);
-        light *= 1.0 - 0.85 * patchy;
+        // (The layer's own shadow only a gentle dimming: dense, it lay over all the land in view - the patches hidden
+        // in it, the setting dimming everything (user, 2026-10-13). The patches carry the shadows' shape.)
+        light = mix(1.0, light, 0.35) * (1.0 - 0.85 * patchy);
     }
     // The game's sheets (RVK_CloudSheet, L.deck.w): a faint veil's shadow - fixed in the world, drifting with the wind
     // (the sheets themselves are kept round the eye: their own shadow would slide with the player), high up, fibrous.
