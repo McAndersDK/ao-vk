@@ -265,12 +265,7 @@ void Device::RenderRain(VkCommandBuffer cmd)
         std::memcpy(rf.ambient, m_terrainAmbient, 16);
     else
         ArgbTo4(m_rs[d3d::RS_AMBIENT], rf.ambient);
-    ArgbTo4(m_rs[d3d::RS_FOGCOLOR], rf.fogColour);
-    rf.fogColour[3] = m_rs[d3d::RS_FOGENABLE] ? 1.0f : 0.0f;
-    rf.fogParams[0] = AsFloatBits(m_rs[d3d::RS_FOGSTART]);
-    rf.fogParams[1] = AsFloatBits(m_rs[d3d::RS_FOGEND]);
-    rf.fogParams[2] = AsFloatBits(m_rs[d3d::RS_FOGDENSITY]);
-    rf.fogParams[3] = float(m_rs[d3d::RS_FOGTABLEMODE] ? m_rs[d3d::RS_FOGTABLEMODE] : m_rs[d3d::RS_FOGVERTEXMODE]);
+    SceneFog(rf.fogColour, rf.fogParams);   // (the scene's: the render states hold the interface's by now)
     rf.viewport[0] = float(m_scene->m_width);
     rf.viewport[1] = float(m_scene->m_height);
     rf.viewport[2] = 1.0f / rf.viewport[0];

@@ -1372,7 +1372,7 @@ uint32_t Device::CarriedLight(uint32_t fvf, const void* vertices, uint32_t verte
     }
     for (uint32_t k = 0; k < m_frameLightIndices.size(); ++k) {
         const CapturedLight& c = m_lightsPrev[m_frameLightIndices[k]];
-        if (m_drawOwner && (c.owner || m_sceneLightsFrame + 1 >= m_frameNumber)) {   // known: exactly
+        if (m_drawOwner && c.owner) {            // known: exactly (else found by where it stands: FindCarriers)
             if (c.owner == m_drawOwner)
                 return k + 1;
             continue;
@@ -1392,6 +1392,30 @@ void Device::SetDrawVisual(uint32_t kind, const char* className, uint32_t owner,
                         (className[19] == 0 || className[19] == '<');
     m_drawOwner = owner;
     m_drawVisual = visual;
+}
+
+// The fog for a draw after the scene's: the ground's this frame (or lately), else the render states'.
+void Device::SceneFog(float colour[4], float params[4]) const
+{
+    if (m_sceneFogFrame != ~0ull && m_sceneFogFrame + 30 >= m_frameNumber) {
+        std::memcpy(colour, m_sceneFogColour, sizeof(m_sceneFogColour));
+        std::memcpy(params, m_sceneFogParams, sizeof(m_sceneFogParams));
+        return;
+    }
+    RenderStateFog(colour, params);
+}
+
+// The render states' fog: colour (w: on); start, end, density, mode.
+void Device::RenderStateFog(float colour[4], float params[4]) const
+{
+    const uint32_t c = m_rs[d3d::RS_FOGCOLOR];
+    colour[0] = float((c >> 16) & 0xFF) / 255.0f;
+    colour[1] = float((c >> 8) & 0xFF) / 255.0f;
+    colour[2] = float(c & 0xFF) / 255.0f;
+    colour[3] = m_rs[d3d::RS_FOGENABLE] ? 1.0f : 0.0f;
+    uint32_t bits[3] = {m_rs[d3d::RS_FOGSTART], m_rs[d3d::RS_FOGEND], m_rs[d3d::RS_FOGDENSITY]};
+    std::memcpy(params, bits, sizeof(bits));
+    params[3] = float(m_rs[d3d::RS_FOGTABLEMODE] ? m_rs[d3d::RS_FOGTABLEMODE] : m_rs[d3d::RS_FOGVERTEXMODE]);
 }
 
 void Device::SetSceneLights(const SceneLight* lights, uint32_t count)
@@ -2056,6 +2080,10 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
         return;                                  // replaced by a volume (DrawClouds)
     if (IsTerrain(fvf) && IsMultiplyPass())
         m_terrainLitPassCur = true;
+    if (IsTerrain(fvf) && m_scenePhase && m_target == m_scene && !m_external) {
+        RenderStateFog(m_sceneFogColour, m_sceneFogParams);
+        m_sceneFogFrame = m_frameNumber;
+    }
     Frame& f = m_frames[m_frameIndex];
     VkCommandBuffer cmd = f.main;
     // Ground grass (RVK_GrassOn): the blades are opaque and write depth, so they must go in before the game's first

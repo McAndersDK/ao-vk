@@ -1417,6 +1417,12 @@ private:
     std::vector<const void*> m_lightmapsUploaded;   // terrain lightmaps re-uploaded since the last grass frame
     std::vector<const void*> m_groundTexUploaded;   // terrain base textures re-uploaded (or made unreadable) since then
     float m_terrainAmbient[4] = {};              // the terrain light pass's global ambient this frame (w: seen)
+    // The scene's fog (the ground's draws: the game's weather and time of day), for what is drawn after the scene's draws
+    // - smoke, rain - when the render states hold the interface's. SceneFog: colour (w: on), start, end, density, mode.
+    float m_sceneFogColour[4] = {}, m_sceneFogParams[4] = {};
+    uint64_t m_sceneFogFrame = ~0ull;
+    void SceneFog(float colour[4], float params[4]) const;
+    void RenderStateFog(float colour[4], float params[4]) const;
     float m_terrainSun[8] = {};                  // ... the directional light it takes: colour, direction
     struct GrassTrash { uint64_t alloc; VkBuffer buffer; VmaAllocation_T* allocation; uint64_t frame; };
     std::vector<GrassTrash> m_grassTrash;        // pool ranges and buffers freed once no frame in flight reads them

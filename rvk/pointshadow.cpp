@@ -265,23 +265,27 @@ void Device::FindCarriers()
                 if (d2 < bestD2) { bestD2 = d2; owner = s.owner; }
             }
             c.owner = owner;
-            if (!owner)
-                continue;
-            std::vector<uint8_t> linked(groups, 0);
-            for (const ShadowItem& it : m_shadowItems) {
-                if (it.cached || it.owner != owner) continue;
-                linked[it.group] = 1;
-                if (!c.hasCarrier || it.world.m[3][1] < c.carrier[1]) {   // its feet: the lowest origin
-                    c.carrier[0] = it.world.m[3][0];
-                    c.carrier[1] = it.world.m[3][1];
-                    c.carrier[2] = it.world.m[3][2];
-                    c.carrierGroup = it.group;
+            if (owner) {
+                std::vector<uint8_t> linked(groups, 0);
+                for (const ShadowItem& it : m_shadowItems) {
+                    if (it.cached || it.owner != owner) continue;
+                    linked[it.group] = 1;
+                    if (!c.hasCarrier || it.world.m[3][1] < c.carrier[1]) {   // its feet: the lowest origin
+                        c.carrier[0] = it.world.m[3][0];
+                        c.carrier[1] = it.world.m[3][1];
+                        c.carrier[2] = it.world.m[3][2];
+                        c.carrierGroup = it.group;
+                    }
+                    c.hasCarrier = true;
                 }
-                c.hasCarrier = true;
+                for (uint32_t g = 0; g < groups; ++g)
+                    if (linked[g]) c.carrierGroups.push_back(g);
+                if (c.hasCarrier)
+                    continue;
             }
-            for (uint32_t g = 0; g < groups; ++g)
-                if (linked[g]) c.carrierGroups.push_back(g);
-            continue;
+            // (Not one of the game's lights this frame, or none of its owner's pieces cast: found as below, by
+            // where the character stands under it - the player's own light, seen without a carrier in a dump.)
+            c.owner = 0;
         }
         // The same light last frame (it moves with its character, a little per frame) and who carried it.
         const CapturedLight* prev = nullptr;

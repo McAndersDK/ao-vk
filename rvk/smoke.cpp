@@ -1163,12 +1163,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         sf.viewport[1] = sh;
         sf.viewport[2] = 1.0f / sw;
         sf.viewport[3] = 1.0f / sh;
-        ArgbTo4(m_rs[d3d::RS_FOGCOLOR], sf.fogColour);
-        sf.fogColour[3] = m_rs[d3d::RS_FOGENABLE] ? 1.0f : 0.0f;
-        sf.fogParams[0] = AsFloatBits(m_rs[d3d::RS_FOGSTART]);
-        sf.fogParams[1] = AsFloatBits(m_rs[d3d::RS_FOGEND]);
-        sf.fogParams[2] = AsFloatBits(m_rs[d3d::RS_FOGDENSITY]);
-        sf.fogParams[3] = float(m_rs[d3d::RS_FOGTABLEMODE] ? m_rs[d3d::RS_FOGTABLEMODE] : m_rs[d3d::RS_FOGVERTEXMODE]);
+        SceneFog(sf.fogColour, sf.fogParams);   // (the scene's: the render states hold the interface's by now)
         void* cpu = nullptr;
         const VkDeviceSize offset = Allocate(sizeof(SmokeFrame), 256, &cpu);
         std::memcpy(cpu, &sf, sizeof(sf));
