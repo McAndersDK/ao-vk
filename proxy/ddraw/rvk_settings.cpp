@@ -206,7 +206,7 @@ Setting g_settings[] = {
     {"RVK_Atmos",      "Air: haze by height, bluer far off, the sun's glow (off: flat haze)", "HDR and effects", Bool, 0, 1, 1, 1, nullptr, 0},
     {"RVK_Mist",       "Air: valley mist at night and dawn, x (0 none; needs the above)", "HDR and effects", Float, 0, 2, 0.1f, 1, nullptr, 0},
     {"RVK_Sun",        "The sun's disc in the sky, how bright (0 none: the game's glow only)", "HDR and effects", Float, 0, 2, 0.1f, 1, nullptr, 0, "RVK_Hdr"},
-    {"RVK_GameSun",    "The game's own sun glow sprites (off: only the disc above)", "HDR and effects", Bool, 0, 1, 1, 1, nullptr, 0},
+    {"RVK_GameSun",    "The game's own sun glow sprites (off: only the suns above)", "HDR and effects", Bool, 0, 1, 1, 0, nullptr, 0},
     {"RVK_SsrOn",      "Reflections (screen-space)",                               "HDR and effects",  Bool,  0, 1, 1, 1, nullptr, 0},
     {"RVK_Ssr",        "Strength",                                                 "HDR and effects",  Float, 0.25f, 2, 0.25f, 1, nullptr, 0, "RVK_SsrOn"},
     {"RVK_SsrWater",   "Water",                                                    "HDR and effects",  Float, 0, 1, 0.05f, 0.25f, nullptr, 0, "RVK_SsrOn"},

@@ -2110,7 +2110,8 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     // The sun's disc (sun.cpp): where the game draws its sun's ray sprites - in the sky, before its cloud sheets.
     if (VisualKind(m_drawVisualKind) == VisualKind::Sky && std::strncmp(m_drawVisualName, "VisualSunRays_t", 15) == 0 &&
         m_scenePhase && !m_external) {
-        DrawSun(fvf, m_drawGpu ? nullptr : vertices, vertexCount);
+        DrawSun();                               // (once: the suns as the game drew them last frame)
+        NoteSunSprite(fvf, m_drawGpu ? nullptr : vertices, vertexCount);
         if (!m_gameSun)
             return;                              // (RVK_GameSun off: our disc alone)
     }

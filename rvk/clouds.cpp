@@ -347,7 +347,7 @@ bool Device::CreateCloudResources(std::string* error)
     if (!v1)
         return false;
     {   // The sun's disc (sun.cpp): in the scene's rendering, added (over with alpha 0); a push-only layout.
-        VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 112};
+        VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 128};
         VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         pl.pushConstantRangeCount = 1;
         pl.pPushConstantRanges = &push;
