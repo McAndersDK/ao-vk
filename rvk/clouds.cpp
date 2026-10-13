@@ -1177,9 +1177,11 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
         m_cloudCloudy += (cloudy - m_cloudCloudy) * k;
         m_cloudType += (type - m_cloudType) * k;
         m_cloudWispy += ((weight > 0.0f ? wispy / weight : 0.0f) - m_cloudWispy) * k;   // (the game's wispy puffs' share)
-        // The low deck (stratus): where the game's sky is its flat sheets and overcast - more in rain.
-        const float deck = std::clamp(smoothstep01(0.4f, 1.0f, flatShare) * smoothstep01(0.6f, 0.95f, cloudy) +
-                                      0.4f * rain * smoothstep01(0.4f, 1.0f, flatShare), 0.0f, 1.0f);
+        // The low deck (stratus): where the game's sky is its flat sheets and dull - its clouds fogged heavily (its
+        // storms: 73-77%; a clear desert sky: ~40% - its puffs' cloudiness and flat sheets say little: both near full
+        // in every sky seen) - more in rain.
+        const float deck = std::clamp(smoothstep01(0.4f, 1.0f, flatShare) *
+                                      (smoothstep01(0.5f, 0.8f, m_cloudFogged) + 0.5f * rain), 0.0f, 1.0f);
         m_cloudDeck += (deck - m_cloudDeck) * k;
         m_cloudWeatherClock = m_frameClock;
     }
