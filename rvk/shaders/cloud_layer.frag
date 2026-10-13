@@ -59,17 +59,16 @@ vec3 Afterglow(vec3 sunL)
 }
 
 // The air between the eye and a cloud dist away (premultiplied light, alpha): its colour goes towards the game's
-// distance colour (the more the farther, and low in the sky the more the game fogs its clouds), and far off it thins
-// out into the game's own sky - whose horizon is its fog band - as the stock sky's clouds do (no crisp clouds down to
-// the hills; the march's reach no edge).
+// distance colour (the more the farther - wholly far off - and low in the sky the more the game fogs its clouds). The
+// cloud stays as opaque as it is: the air in front of it hides what's behind as well (thinning far clouds instead
+// showed the game's moon through them - user); only at the march's reach do they fade out (a band at the horizon).
 vec4 Aerial(vec3 light, float alpha, float dist, vec3 dir)
 {
     float air = 1.0 - exp(-dist / L.haze.w);
     float low = 1.0 - smoothstep(0.0, 0.5, dir.y);
-    float haze = max(air * 0.85, L.horizon.x * low * low * (3.0 - 2.0 * low));
+    float haze = max(min(air * 1.2, 1.0), L.horizon.x * low * low * (3.0 - 2.0 * low));
     light = mix(light, L.haze.rgb * alpha, haze);
-    float keep = (1.0 - 0.95 * smoothstep(0.35, 0.9, air)) * (1.0 - smoothstep(0.7 * L.layer.w, L.layer.w, dist));
-    return vec4(light, alpha) * keep;
+    return vec4(light, alpha) * (1.0 - smoothstep(0.6 * L.layer.w, L.layer.w, dist));
 }
 
 // Where a ray from o along unit d is inside the sphere at c of radius r: t0 <= t1 (t1 < 0: never).
