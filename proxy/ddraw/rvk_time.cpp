@@ -1,9 +1,9 @@
-// RVK_TimeOfDay (testing): the game's time of day held at a chosen hour, so its sky, suns, light and ours with them
-// can be looked at any time. The game keeps its clock in Gamecode's GameTime_t (one, exported m_pcInstance): the
+// RVK_TimeOfDay, RVK_TimeSpeed (testing): the game's time of day set to a chosen hour and run at a chosen speed (x the
+// game's own; 0 still), so its sky, suns, light and ours with them can be looked at any time, or a dawn watched go by. The game keeps its clock in Gamecode's GameTime_t (one, exported m_pcInstance): the
 // seconds into the day as a double at +0x50, the hours in a day at +0x80 (27 on Rubi-Ka), the seconds in an hour at
 // +0x8c; SetCurrentRealTime(seconds) sets all of it (its day period too). The server sets the clock now and then
-// (GameTime_t::Update); held, it is set again each presented frame. Let go (-1), the clock goes on from where it would
-// be by now (the time it was held at's wall clock, at the game's own speed) until the server's next word.
+// (GameTime_t::Update); ours, it is set again each presented frame. Let go (-1 and speed 1), the clock goes on from
+// where the game's would be by now (its time when taken, at its own speed) until the server's next word.
 #include "rvk_backend.h"
 #include "rvk_settings.h"
 
@@ -29,6 +29,9 @@ bool g_gaveUp = false;
 bool g_held = false;
 float g_heldAt = 0.0f;                          // the game's own time when first held (seconds into its day)
 std::chrono::steady_clock::time_point g_heldSince;
+double g_base = 0.0;                            // our clock: its time (seconds into the day) at g_baseSince
+std::chrono::steady_clock::time_point g_baseSince;
+float g_baseSpeed = 1.0f, g_lastHour = -1.0f;   // ... its speed (RVK_TimeSpeed), the hour last set
 
 bool Resolve()
 {
@@ -58,7 +61,9 @@ void TimeFrame()
     if (g_gaveUp)
         return;
     const float hour = rvk_settings::Get("RVK_TimeOfDay");
-    if (hour < 0.0f && !g_held)
+    const float speed = rvk_settings::Get("RVK_TimeSpeed");
+    const bool own = hour >= 0.0f || std::fabs(speed - 1.0f) > 1e-4f;   // (the defaults: the game's own clock)
+    if (!own && !g_held)
         return;
     if (!Resolve())
         return;
@@ -74,23 +79,45 @@ void TimeFrame()
         return;
     }
     void* edx = nullptr;
-    const float day = float(hoursPerDay) * float(secondsPerHour);
-    if (hour < 0.0f) {                          // let go: on from where the game's clock would be by now
-        const double gone = std::chrono::duration<double>(std::chrono::steady_clock::now() - g_heldSince).count();
-        const float now = float(std::fmod(double(g_heldAt) + gone * double(g_speed(self, edx)), double(day)));
-        g_setRealTime(const_cast<uint8_t*>(self), edx, now);
+    const double day = double(hoursPerDay) * double(secondsPerHour);
+    const auto now = std::chrono::steady_clock::now();
+    const double rate = double(g_speed(self, edx));   // (the game's seconds a second)
+    if (!own) {                                 // let go: on from where the game's clock would be by now
+        const double gone = std::chrono::duration<double>(now - g_heldSince).count();
+        const float at = float(std::fmod(double(g_heldAt) + gone * rate, day));
+        g_setRealTime(const_cast<uint8_t*>(self), edx, at);
         g_held = false;
-        RvkLog("time: the game's own time of day again (%.2f h)", double(now / float(secondsPerHour)));
+        RvkLog("time: the game's own time of day again (%.2f h)", double(at / float(secondsPerHour)));
         return;
     }
+    // Ours: from a base time at a base moment, at the game's speed x RVK_TimeSpeed (0: still). A new hour set starts
+    // there; a new speed goes on from where the clock is.
+    auto current = [&] {
+        const double gone = std::chrono::duration<double>(now - g_baseSince).count();
+        return std::fmod(std::fmod(g_base + gone * rate * double(g_baseSpeed), day) + day, day);
+    };
     if (!g_held) {
         g_heldAt = g_getRealTime(self, edx);
-        g_heldSince = std::chrono::steady_clock::now();
+        g_heldSince = now;
         g_held = true;
-        RvkLog("time: held at %.2f h (the game's was %.2f h; %d hours a day)", double(hour),
-               double(g_heldAt / float(secondsPerHour)), hoursPerDay);
+        g_base = hour >= 0.0f ? double(hour) * secondsPerHour : double(g_heldAt);
+        g_baseSince = now;
+        g_baseSpeed = speed;
+        g_lastHour = hour;
+        RvkLog("time: ours from %.2f h at %.2f x the game's speed (%.0f game seconds a second; the game's was %.2f h; %d "
+               "hours a day)", g_base / secondsPerHour, double(speed), rate, double(g_heldAt / float(secondsPerHour)),
+               hoursPerDay);
+    } else if (hour != g_lastHour) {
+        g_base = hour >= 0.0f ? double(hour) * secondsPerHour : current();
+        g_baseSince = now;
+        g_lastHour = hour;
     }
-    g_setRealTime(const_cast<uint8_t*>(self), edx, std::fmod(hour * float(secondsPerHour), day));
+    if (speed != g_baseSpeed) {
+        g_base = current();
+        g_baseSince = now;
+        g_baseSpeed = speed;
+    }
+    g_setRealTime(const_cast<uint8_t*>(self), edx, float(current()));
 }
 
 }  // namespace rvkproxy
