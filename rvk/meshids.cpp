@@ -19,6 +19,10 @@ namespace rvk {
 using namespace detail;
 
 namespace {
+// The sky's scenery: meshes the game flies far out over the cities (kilometres off, past the fog's end and the far
+// plane) - drawn whole and hazed as the far sky rather than cut off and fogged into flat shapes.
+const char* const kSkyScenery[] = {"scenery_spaceship"};
+
 #pragma pack(push, 1)
 struct FileEntry {
     uint64_t geo, raw;
@@ -91,8 +95,16 @@ void Device::HashMeshId(MeshInfo& info, uint32_t fvf, uint32_t stride, const voi
     auto [first, last] = MeshIdsOf(info.geo);
     info.idCandidates = uint32_t(last - first);
     info.rawSame = false;
-    for (const MeshIdEntry* e = first; e != last; ++e)
+    info.skyScenery = false;
+    for (const MeshIdEntry* e = first; e != last; ++e) {
         if (e->raw == info.raw) info.rawSame = true;
+        for (const char* prefix : kSkyScenery)
+            if (std::strncmp(MeshIdName(*e), prefix, std::strlen(prefix)) == 0) info.skyScenery = true;
+    }
+    if (info.skyScenery && m_meshIdStats.loggedSky < 8) {
+        ++m_meshIdStats.loggedSky;
+        Log("mesh id: '%s' is sky scenery: kept inside the far plane, fogged as the far sky", MeshIdName(*first));
+    }
     ++m_meshIdStats.pieces;
     if (first != last) ++m_meshIdStats.known;
     if (info.rawSame) ++m_meshIdStats.rawSame;

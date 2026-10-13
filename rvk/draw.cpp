@@ -2373,12 +2373,13 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     // The foliage level of detail depends on the draw's distance, not the render state: part of the block's key, or
     // a run of plants with the same state would all get the first one's (flickering as the camera moves).
     uint32_t foliageLod = FoliageFar() ? (m_drawSway[3] > 0.5f ? 2u : 1u) : 0u;
+    const bool skyScenery = m_drawMesh && m_drawMesh->skyScenery;   // (mesh ids: the ships over the cities)
     bool rewrite = m_constantsDirty || m_constantsGeneration != m_ringGeneration || m_constantsFvf != fvf ||
                    m_constantsTexMask != texMask || m_constantsTerrain != terrain || m_constantsLabel != m_drawIsLabel ||
                    m_constantsCarrier != carrier || m_constantsBumpBase != m_drawBumpBase ||
                    m_constantsFoliageLod != foliageLod || m_constantsNormalMap != normalMap ||
                    m_constantsCharacter != m_drawIsCharacter || m_constantsOpaque != cutoutTexture ||
-                   m_constantsHoles != textureHoles;
+                   m_constantsHoles != textureHoles || m_constantsSkyScenery != skyScenery;
     uint32_t constIndex = m_constIndex;
     bool sameArena = m_constantsGeneration == m_ringGeneration && m_constIndex < m_constCount;   // m_constIndex valid
     if (rewrite) {
@@ -2391,6 +2392,7 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     m_constantsCarrier = carrier;
     m_constantsBumpBase = m_drawBumpBase;
     m_constantsFoliageLod = foliageLod;
+    m_constantsSkyScenery = skyScenery;
     m_constantsCharacter = m_drawIsCharacter;
     m_constantsOpaque = cutoutTexture;
     m_constantsHoles = textureHoles;
@@ -2414,6 +2416,11 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     c.fogParams[1] = AsFloat(m_rs[d3d::RS_FOGEND]);
     c.fogParams[2] = AsFloat(m_rs[d3d::RS_FOGDENSITY]);
     c.fogParams[3] = 0.0f;
+    if (skyScenery) {                            // (the far sky's haze: kilometres, not the ground's fog - a ship 9 km
+        c.fogParams[0] = std::max(c.fogParams[0] * 6.0f, 1500.0f);   // out keeps its shape, hazed)
+        c.fogParams[1] = std::max(c.fogParams[1] * 12.0f, 20000.0f);
+        c.fogParams[2] *= 0.1f;
+    }
     ArgbToFloat(m_rs[d3d::RS_TEXTUREFACTOR], c.tfactor);
     c.misc[0] = m_material.power;
     c.misc[1] = float(m_rs[d3d::RS_ALPHAREF] & 0xFF);
@@ -2782,8 +2789,8 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     if (m_textures[0] && texStage0 == m_textures[0]->m_albedoMap) dt.mat[2] |= kMatAlbedo;   // (debug view 7)
     if (m_pickHighlight && m_textures[0] == m_pickHighlight)
         dt.mat[2] |= kMatPicked;                 // (texture picking: flashes)
-    if (VisualKind(m_drawVisualKind) == VisualKind::Sky)
-        dt.mat[2] |= kMatSky;                    // (the sky: kept inside the far plane, ffp.vert)
+    if (VisualKind(m_drawVisualKind) == VisualKind::Sky || (m_drawMesh && m_drawMesh->skyScenery))
+        dt.mat[2] |= kMatSky;                    // (the sky and its scenery: kept inside the far plane, ffp.vert)
     if (m_drawEmissive) {                        // (sampled with the ORM map's sampler, set either way)
         dt.mat[3] = BindlessImage(m_drawEmissive);
         dt.mat[2] |= kMatEmissive;

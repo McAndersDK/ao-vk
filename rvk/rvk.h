@@ -756,6 +756,7 @@ private:
     Texture* m_flatNormal = nullptr;             // binding 9 when the draw has no normal map
     VkSampler m_normalSampler = VK_NULL_HANDLE;
     Texture* m_constantsNormalMap = nullptr;
+    bool m_constantsSkyScenery = false;
     PbrSettings m_pbr;
     uint32_t m_anisotropy = 1;
     float m_maxAnisotropy = 1.0f;               // GPU limit (0 without the feature)
@@ -1202,6 +1203,8 @@ private:
         uint64_t geo = 0, raw = 0;               // mesh ids (meshids.cpp): its geometry's hashes (0: not a static piece)
         uint32_t idCandidates = 0;               // ... the pieces in the table with its geometry
         bool rawSame = false;                    // ... one of them has its vertex bytes too
+        bool skyScenery = false;                 // ... a mesh of the sky's scenery (the ships over the cities: mesh_id.h
+                                                 // kSkyScenery): kept inside the far plane, fogged as the far sky
     };
     std::unordered_map<uint64_t, MeshInfo> m_meshInfo;
     // Mesh ids (meshids.cpp).
@@ -1224,6 +1227,7 @@ private:
     std::unordered_map<uint32_t, MeshIdResult> m_meshIdObjects;   // by visual
     struct MeshIdStats {
         uint64_t pieces = 0, known = 0, rawSame = 0, objects = 0, named = 0, ambiguous = 0;
+        uint32_t loggedSky = 0;
         uint32_t loggedPieces = 0, loggedObjects = 0;
     } m_meshIdStats;
     const char* MeshIdName(const MeshIdEntry& e) const;

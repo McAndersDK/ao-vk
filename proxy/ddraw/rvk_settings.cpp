@@ -731,7 +731,7 @@ void LoadLuts(rvk::ThreadedDevice* device)
     for (uint32_t i = 0; i < 2; ++i)
         device->SetColorLut(i, size[i], size[i] ? data[i].data() : nullptr);
     // The static meshes' ids (ao-assets: python -m aoassets mesh-ids), from the same folder.
-    device->LoadMeshIds((dir + "mesh-ids.bin").c_str());
+    device->LoadMeshIds((dir + "randy-vk\\mesh-ids.bin").c_str());   // (with the material maps: ao-assets writes it there)
 }
 
 const char* IniPath()
