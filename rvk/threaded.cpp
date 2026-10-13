@@ -893,6 +893,16 @@ void ThreadedDevice::SetSunBleed(float s)
     Enqueue([this, s](const uint8_t*) { m_device.SetSunBleed(s); });
 }
 
+void ThreadedDevice::SetShadowMemory(bool on)
+{
+    Enqueue([this, on](const uint8_t*) { m_device.SetShadowMemory(on); });
+}
+
+void ThreadedDevice::SetHillShade(bool on)
+{
+    Enqueue([this, on](const uint8_t*) { m_device.SetHillShade(on); });
+}
+
 void ThreadedDevice::SetContactShadows(float s)
 {
     Enqueue([this, s](const uint8_t*) { m_device.SetContactShadows(s); });

@@ -132,6 +132,8 @@ public:
     void SetGameSun(bool on);
     void SetSunSize(float s);
     void SetSunBleed(float s);
+    void SetShadowMemory(bool on);
+    void SetHillShade(bool on);
     void SetContactShadows(float s);
     void SetAo(float strength, float radius);
     void SetGi(float strength, float radius);

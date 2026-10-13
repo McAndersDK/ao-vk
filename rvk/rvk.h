@@ -437,6 +437,9 @@ public:
     // Their size (x the game's sun sprites) and the share of their glow over the clouds (sun.cpp).
     void SetSunSize(float s) { m_sunSize = s; }
     void SetSunBleed(float s) { m_sunBleed = s; }
+    // Remembered shadow casters (things out of view still casting) and the terrain's shade from a low sun, on / off.
+    void SetShadowMemory(bool on) { m_shadowMemory = on; }
+    void SetHillShade(bool on) { m_hillShade = on; }
     // The game's own sun sprites (its glow, VisualSunRays_t), shown or not.
     void SetGameSun(bool on) { m_gameSun = on; }
     // Tests: the sky weather's clock (seconds, as UTC; < 0 the wall clock).
@@ -1048,6 +1051,8 @@ private:
     uint32_t m_cacheStreakStarts = 0, m_cacheRefusedFar = 0, m_cacheRefusedFull = 0, m_cacheRefusedNoVertices = 0;
     float m_cacheRefusedFarD = 0.0f;
     uint32_t m_cacheKeptSolid = 0;               // (since start)
+    bool m_shadowMemory = true;                  // RVK_ShadowMem: remembered casters drawn into the sun's shadows
+    bool m_hillShade = true;                     // RVK_HillShade: the terrain's shade from a low sun (terrain_sun.cpp)
     struct ArenaChunk;
     struct CachedCaster {
         // Its vertices then indices in a slot of the caster arena (shared buffers: casters batch together).

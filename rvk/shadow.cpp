@@ -853,6 +853,8 @@ void Device::CollectShadowItems()
     }
     GroupShadowItems(drawOf);
     for (auto& [key, e] : m_casterCache) {
+        if (!m_shadowMemory)
+            break;                               // (RVK_ShadowMem off: only what the game drew this frame)
         if (e.lastSeen == m_frameNumber && std::find(staleKeys.begin(), staleKeys.end(), key) == staleKeys.end())
             continue;                            // drawn this frame: in the list above
         ShadowItem it;

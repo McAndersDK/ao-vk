@@ -78,7 +78,7 @@ void Device::UpdateTerrainSun(VkCommandBuffer cmd)
     if (m_frameNumber % 600 == 40)
         Log("terrain sun: grid %s, pipeline %s, made %s", m_tsHeights.empty() ? "empty" : "kept",
             m_terrainSunPipeline ? "yes" : "no", m_tsMadeFrame == ~0ull ? "never" : "yes");
-    if (m_tsHeights.empty() || !m_terrainSunPipeline)
+    if (m_tsHeights.empty() || !m_terrainSunPipeline || !m_hillShade)
         return;
     RecentreTerrainSun();
     float to[3] = {-m_trueSunDir[0], -m_trueSunDir[1], -m_trueSunDir[2]};

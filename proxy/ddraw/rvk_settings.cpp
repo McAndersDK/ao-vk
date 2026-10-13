@@ -149,6 +149,8 @@ Setting g_settings[] = {
     {"RVK_CloudThick", "Clouds: how thick",                                        "Experimental",     Float, 0.1f, 4, 0.1f, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudBright", "Clouds: how light",                                       "Experimental",     Float, 0.25f, 3, 0.05f, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudNight",  "Clouds: how light at night (x the above)",                 "Experimental",     Float, 0.25f, 2, 0.05f, 0.8f, nullptr, 0, "RVK_CloudsOn"},
+    {"RVK_ShadowMem",   "Shadows of things out of view (remembered: off, only what's drawn casts)", "Experimental", Bool, 0, 1, 1, 1, nullptr, 0},
+    {"RVK_HillShade",   "The terrain's shade from a low sun (valleys under mountains)", "Experimental", Bool, 0, 1, 1, 1, nullptr, 0},
     {"RVK_TimeOfDay",   "Testing: the game's time of day set to this hour (-1: the game's own; a day is 27 h)", "Experimental", Float, -1, 27, 0.25f, -1, nullptr, 0},
     {"RVK_TimeSpeed",   "Testing: how fast the time of day runs, x the game's (0 still; 1 and the hour -1: the game's own)", "Experimental", Float, 0, 500, 0.5f, 1, nullptr, 0},
     {"RVK_SkyVary",     "Clouds: the sky changes, clear to overcast (0: always some cloud)", "Experimental", Float, 0, 1, 0.1f, 1, nullptr, 0, "RVK_CloudsOn"},
@@ -468,6 +470,8 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
     else if (is("RVK_GameSun")) d->SetGameSun(V(n) != 0.0f);
     else if (is("RVK_SunSize")) d->SetSunSize(V(n));
     else if (is("RVK_SunBleed")) d->SetSunBleed(V(n));
+    else if (is("RVK_ShadowMem")) d->SetShadowMemory(V(n) != 0.0f);
+    else if (is("RVK_HillShade")) d->SetHillShade(V(n) != 0.0f);
     else if (is("RVK_Contact")) d->SetContactShadows(V(n));
     else if (is("RVK_Ao") || is("RVK_AoRadius")) d->SetAo(V("RVK_Ao"), V("RVK_AoRadius"));
     else if (is("RVK_Gi") || is("RVK_GiRadius")) d->SetGi(V("RVK_Gi"), V("RVK_GiRadius"));
