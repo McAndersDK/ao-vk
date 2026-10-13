@@ -101,6 +101,32 @@ void Device::EndFrameDump()
     std::fprintf(m_dumpFile, "# end: %u draws; %zu casters this frame, %zu remembered (%u drawn out of view last frame);"
                              " forgotten since start: %u in view but not drawn, %u far away\n",
                  m_dumpDraw, m_casters.size(), m_casterCache.size(), m_cachedCastersDrawn, m_forgottenInView, m_forgottenFar);
+    {
+        // The remembered casters the shadow passes draw though the game didn't this frame (out of view), biggest first:
+        // where, how big, what mesh, how long since the game drew it, its recorded sway (a remembered wall's shadow
+        // changing while the camera looked away - user, 2026-10-13).
+        std::vector<std::pair<float, std::pair<uint64_t, const CachedCaster*>>> out;
+        for (const auto& [key, e] : m_casterCache) {
+            if (e.lastSeen == m_frameNumber)
+                continue;
+            float size = 0.0f;
+            for (int j = 0; j < 3; ++j) size = std::max(size, e.boundsMax[j] - e.boundsMin[j]);
+            out.push_back({size, {key, &e}});
+        }
+        std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+        std::fprintf(m_dumpFile, "# remembered casters out of view: %zu (biggest first)\n", out.size());
+        for (size_t i = 0; i < out.size() && i < 300; ++i) {
+            const CachedCaster& e = *out[i].second.second;
+            std::fprintf(m_dumpFile,
+                         "R %016llx: size %.1f box (%.1f %.1f %.1f)..(%.1f %.1f %.1f) at (%.2f %.2f %.2f) v %u i %u kind %u "
+                         "unseen %llu frames, sway %zu%s\n",
+                         (unsigned long long)out[i].second.first, double(out[i].first), double(e.boundsMin[0]),
+                         double(e.boundsMin[1]), double(e.boundsMin[2]), double(e.boundsMax[0]), double(e.boundsMax[1]),
+                         double(e.boundsMax[2]), double(e.world.m[3][0]), double(e.world.m[3][1]), double(e.world.m[3][2]),
+                         e.vertexCount, e.indexCount, e.kind, (unsigned long long)(m_frameNumber - e.lastSeen),
+                         e.sway.size(), e.texture ? " cut-out" : "");
+        }
+    }
     std::fprintf(m_dumpFile, "# sun shadow pass: %u items (%u static, %u animated); drew %u item-cascades (%u static,"
                              " %u animated), culled %u; %.2f ms collect, %.2f cull, %.2f draw; M4 %u calls\n",
                  m_shadowItemsCount, m_shadowStaticItems, m_shadowAnimatedItems, m_shadowDrawn, m_shadowStaticDrawn,
