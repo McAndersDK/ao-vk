@@ -2416,11 +2416,8 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     c.fogParams[1] = AsFloat(m_rs[d3d::RS_FOGEND]);
     c.fogParams[2] = AsFloat(m_rs[d3d::RS_FOGDENSITY]);
     c.fogParams[3] = 0.0f;
-    if (skyScenery) {                            // (the far sky's haze: kilometres, not the ground's fog - a ship 9 km
-        c.fogParams[0] = std::max(c.fogParams[0] * 6.0f, 1500.0f);   // out keeps its shape, hazed)
-        c.fogParams[1] = std::max(c.fogParams[1] * 12.0f, 20000.0f);
-        c.fogParams[2] *= 0.1f;
-    }
+    if (skyScenery)                              // (the far sky's haze: exponential below)
+        c.fogParams[2] = 1.0f / kSkySceneryHaze;
     ArgbToFloat(m_rs[d3d::RS_TEXTUREFACTOR], c.tfactor);
     c.misc[0] = m_material.power;
     c.misc[1] = float(m_rs[d3d::RS_ALPHAREF] & 0xFF);
@@ -2527,6 +2524,13 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     c.flags[0] = flags;
     c.flags[1] = m_rs[d3d::RS_FOGVERTEXMODE];
     c.flags[2] = m_rs[d3d::RS_FOGTABLEMODE];
+    // The sky's scenery (mesh ids: the ships over the cities, kilometres out): hazed as the far sky - exponentially, in
+    // the fog's colour, never wholly (the ground's linear fog made them flat fog-coloured shapes; none at all left
+    // them hard and dark against a hazy sky): ~45% of their colour left at 2 km, 20% at 4 km, a trace at 9 km.
+    if (skyScenery && m_rs[d3d::RS_FOGENABLE]) {
+        c.flags[1] = 1;                          // D3DFOG_EXP
+        c.flags[2] = 0;
+    }
     // (Bit 8: in the interface layer, a draw replacing what is there - blended ONE, ZERO - covers it fully, whatever
     // its alpha: on the frame it would. The PF map's light-map tiles have alpha 0; as coverage they left the map's
     // black parts see-through.)
