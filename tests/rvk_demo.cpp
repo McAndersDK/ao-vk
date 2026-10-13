@@ -1426,7 +1426,8 @@ bool g_waterWall = false;         // --water-wall: a steep sheet of the water me
 bool g_waterShelf = false;        // --water-shelf: the mesh terraced - the surface with a lower shore shelf in front
                                   // (as Anarchy Online hangs its aprons), which used to render as a "mountain of water"
 bool g_clouds = false;            // --clouds: cloud puffs in the sky, as the game's (VisualSingleCloud_t)
-bool g_cloudsGame = false;        // --clouds-game: ... drawn as the game draws them (RVK_CloudsOn off)
+bool g_cloudsGame = false;
+bool g_cloudsHalf = true;         // --clouds-full: RVK_CloudHalf off        // --clouds-game: ... drawn as the game draws them (RVK_CloudsOn off)
 bool g_fixedClock = false;        // --fixed-clock MS: the renderer's clock steps MS a frame (no sleeping: benchmarks)
 bool g_waterWalker = false;       // --water-walker: a "character" standing in the lake with its feet under the surface,
                                   // bobbing along: the surface ripples around it (RVK_WaterSwim)
@@ -2932,6 +2933,7 @@ int main(int argc, char** argv)
         else if (a == "--size" && i + 2 < argc) { g_width = uint32_t(std::atoi(argv[++i])); g_height = uint32_t(std::atoi(argv[++i])); }
         else if (a == "--clouds") { g_clouds = true; hdr = true; }
         else if (a == "--clouds-game") { g_clouds = g_cloudsGame = true; hdr = true; }
+        else if (a == "--clouds-full") g_cloudsHalf = false;
         else if (a == "--fixed-clock" && i + 1 < argc) { g_fixedClock = true; Device::SetFixedClock(std::atof(argv[++i]) * 1e-3); }
         else if (a == "--cache-test" && i + 1 < argc) { cacheTest = std::atoi(argv[++i]); shadowTest = shadows = true; }
         else if (a == "--dump" && i + 1 < argc) dump = argv[++i];
@@ -3133,6 +3135,7 @@ int main(int argc, char** argv)
     {
         Device::CloudParams clouds;
         clouds.enable = g_clouds && !g_cloudsGame;
+        clouds.half = g_cloudsHalf;
         dev.SetCloudParams(clouds);
     }
     if (g_smoke) {

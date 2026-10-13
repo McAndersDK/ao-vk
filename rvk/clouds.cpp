@@ -28,6 +28,15 @@ const uint32_t kCloudFragSpirv[] = {
 const uint32_t kCloudNoiseSpirv[] = {
 #include "cloud_noise.comp.inc"
 };
+const uint32_t kCloudHalfFragSpirv[] = {        // cloud.frag built with RVK_CLOUD_HALF
+#include "cloud_half.frag.inc"
+};
+const uint32_t kFullscreenVertSpirv[] = {
+#include "fullscreen.vert.inc"
+};
+const uint32_t kCloudUpFragSpirv[] = {
+#include "cloud_up.frag.inc"
+};
 
 constexpr uint32_t kNoiseSize = 64;             // the clouds' noise image (cells a side; tiling)
 constexpr uint32_t kMaxPuffs = 256;             // drawn a frame at most
@@ -141,78 +150,111 @@ bool Device::CreateCloudResources(std::string* error)
     pl.pSetLayouts = &m_cloudSetLayout;
     if (!Check(vkCreatePipelineLayout(m_device, &pl, nullptr, &m_cloudLayout), "cloud layout", error))
         return false;
+    // The half size's upsampling: 0 the clouds (linear); push: the scene's size.
+    {
+        VkDescriptorSetLayoutBinding u{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        VkDescriptorSetLayoutCreateInfo ul{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        ul.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+        ul.bindingCount = 1;
+        ul.pBindings = &u;
+        if (!Check(vkCreateDescriptorSetLayout(m_device, &ul, nullptr, &m_cloudUpSetLayout), "cloud up set", error))
+            return false;
+        VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16};
+        VkPipelineLayoutCreateInfo upl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        upl.setLayoutCount = 1;
+        upl.pSetLayouts = &m_cloudUpSetLayout;
+        upl.pushConstantRangeCount = 1;
+        upl.pPushConstantRanges = &push;
+        if (!Check(vkCreatePipelineLayout(m_device, &upl, nullptr, &m_cloudUpLayout), "cloud up layout", error))
+            return false;
+    }
     auto module = [&](const uint32_t* code, size_t size, VkShaderModule* out) {
         VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
         ci.codeSize = size;
         ci.pCode = code;
         return Check(vkCreateShaderModule(m_device, &ci, nullptr, out), "cloud module", error);
     };
-    VkShaderModule vert = VK_NULL_HANDLE, frag = VK_NULL_HANDLE;
-    bool ok = module(kCloudVertSpirv, sizeof(kCloudVertSpirv), &vert) && module(kCloudFragSpirv, sizeof(kCloudFragSpirv), &frag);
-    if (ok) {
-        VkPipelineShaderStageCreateInfo stages[2] = {
-            {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vert, "main", nullptr},
-            {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, frag, "main", nullptr},
-        };
-        VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-        VkPipelineDynamicStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-        ds.dynamicStateCount = 2;
-        ds.pDynamicStates = dyn;
-        VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-        VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
-        vp.viewportCount = vp.scissorCount = 1;
-        VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-        rs.polygonMode = VK_POLYGON_MODE_FILL;
-        rs.cullMode = VK_CULL_MODE_NONE;         // (cloud.frag keeps the far faces)
-        rs.lineWidth = 1.0f;
-        VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-        VkPipelineDepthStencilStateCreateInfo dss{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-        // In the scene's rendering (the sky's place in it): no depth test - the sky is behind everything drawn after.
-        VkPipelineColorBlendAttachmentState att[5] = {};
-        for (auto& a : att) {
-            a.colorWriteMask = 0xF;
-            a.blendEnable = VK_TRUE;
-            a.srcColorBlendFactor = a.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-            a.dstColorBlendFactor = a.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-            a.colorBlendOp = a.alphaBlendOp = VK_BLEND_OP_ADD;
+    // Premultiplied over its targets; in the scene's rendering (its depth format) or its own (none).
+    auto pipeline = [&](const uint32_t* vertCode, size_t vertSize, const uint32_t* fragCode, size_t fragSize,
+                        VkPipelineLayout layout, const VkFormat* formats, uint32_t count, VkFormat depth, VkPipeline* out) {
+        VkShaderModule vert = VK_NULL_HANDLE, frag = VK_NULL_HANDLE;
+        bool ok = module(vertCode, vertSize, &vert) && module(fragCode, fragSize, &frag);
+        if (ok) {
+            VkPipelineShaderStageCreateInfo stages[2] = {
+                {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vert, "main", nullptr},
+                {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, frag, "main", nullptr},
+            };
+            VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+            VkPipelineDynamicStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+            ds.dynamicStateCount = 2;
+            ds.pDynamicStates = dyn;
+            VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+            VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+            vp.viewportCount = vp.scissorCount = 1;
+            VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+            rs.polygonMode = VK_POLYGON_MODE_FILL;
+            rs.cullMode = VK_CULL_MODE_NONE;     // (cloud.frag keeps the far faces)
+            rs.lineWidth = 1.0f;
+            VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+            ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+            VkPipelineDepthStencilStateCreateInfo dss{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+            // (No depth test: the sky is behind everything drawn after it.)
+            VkPipelineColorBlendAttachmentState att[5] = {};
+            for (auto& a : att) {
+                a.colorWriteMask = 0xF;
+                a.blendEnable = VK_TRUE;
+                a.srcColorBlendFactor = a.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                a.dstColorBlendFactor = a.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+                a.colorBlendOp = a.alphaBlendOp = VK_BLEND_OP_ADD;
+            }
+            VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+            cb.attachmentCount = count;
+            cb.pAttachments = att;
+            VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+            rendering.colorAttachmentCount = count;
+            rendering.pColorAttachmentFormats = formats;
+            rendering.depthAttachmentFormat = depth;
+            VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+            ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+            ci.pNext = &rendering;
+            ci.stageCount = 2;
+            ci.pStages = stages;
+            ci.pVertexInputState = &vi;
+            ci.pInputAssemblyState = &ia;
+            ci.pViewportState = &vp;
+            ci.pRasterizationState = &rs;
+            ci.pMultisampleState = &ms;
+            ci.pDepthStencilState = &dss;
+            ci.pColorBlendState = &cb;
+            ci.pDynamicState = &ds;
+            ci.layout = layout;
+            ok = Check(vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &ci, nullptr, out),
+                       "vkCreateGraphicsPipelines (clouds)", error);
         }
-        VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-        cb.attachmentCount = 5;
-        cb.pAttachments = att;
-        VkFormat colorFormats[5] = {GetFormatInfo(Format::RGBA16F).vk, GetFormatInfo(Format::RGBA16F).vk,
-                                    GetFormatInfo(Format::RGBA8).vk, GetFormatInfo(Format::RGBA16F).vk,
-                                    GetFormatInfo(Format::A8R8G8B8).vk};
-        VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-        rendering.colorAttachmentCount = 5;
-        rendering.pColorAttachmentFormats = colorFormats;
-        rendering.depthAttachmentFormat = kDepthFormat;
-        VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-        VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-        ci.pNext = &rendering;
-        ci.stageCount = 2;
-        ci.pStages = stages;
-        ci.pVertexInputState = &vi;
-        ci.pInputAssemblyState = &ia;
-        ci.pViewportState = &vp;
-        ci.pRasterizationState = &rs;
-        ci.pMultisampleState = &ms;
-        ci.pDepthStencilState = &dss;
-        ci.pColorBlendState = &cb;
-        ci.pDynamicState = &ds;
-        ci.layout = m_cloudLayout;
-        ok = Check(vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &ci, nullptr, &m_cloudPipeline),
-                   "vkCreateGraphicsPipelines (clouds)", error);
-    }
-    if (vert) vkDestroyShaderModule(m_device, vert, nullptr);
-    if (frag) vkDestroyShaderModule(m_device, frag, nullptr);
-    return ok;
+        if (vert) vkDestroyShaderModule(m_device, vert, nullptr);
+        if (frag) vkDestroyShaderModule(m_device, frag, nullptr);
+        return ok;
+    };
+    const VkFormat sceneFormats[5] = {GetFormatInfo(Format::RGBA16F).vk, GetFormatInfo(Format::RGBA16F).vk,
+                                      GetFormatInfo(Format::RGBA8).vk, GetFormatInfo(Format::RGBA16F).vk,
+                                      GetFormatInfo(Format::A8R8G8B8).vk};
+    const VkFormat halfFormat = GetFormatInfo(Format::RGBA16F).vk;
+    return pipeline(kCloudVertSpirv, sizeof(kCloudVertSpirv), kCloudFragSpirv, sizeof(kCloudFragSpirv), m_cloudLayout,
+                    sceneFormats, 5, kDepthFormat, &m_cloudPipeline) &&
+           pipeline(kCloudVertSpirv, sizeof(kCloudVertSpirv), kCloudHalfFragSpirv, sizeof(kCloudHalfFragSpirv),
+                    m_cloudLayout, &halfFormat, 1, VK_FORMAT_UNDEFINED, &m_cloudHalfPipeline) &&
+           pipeline(kFullscreenVertSpirv, sizeof(kFullscreenVertSpirv), kCloudUpFragSpirv, sizeof(kCloudUpFragSpirv),
+                    m_cloudUpLayout, sceneFormats, 5, VK_FORMAT_UNDEFINED, &m_cloudUpPipeline);
 }
 
 void Device::DestroyCloudResources()
 {
-    if (m_cloudPipeline) { vkDestroyPipeline(m_device, m_cloudPipeline, nullptr); m_cloudPipeline = VK_NULL_HANDLE; }
+    for (VkPipeline* p : {&m_cloudPipeline, &m_cloudHalfPipeline, &m_cloudUpPipeline})
+        if (*p) { vkDestroyPipeline(m_device, *p, nullptr); *p = VK_NULL_HANDLE; }
+    if (m_cloudUpLayout) { vkDestroyPipelineLayout(m_device, m_cloudUpLayout, nullptr); m_cloudUpLayout = VK_NULL_HANDLE; }
+    if (m_cloudUpSetLayout) { vkDestroyDescriptorSetLayout(m_device, m_cloudUpSetLayout, nullptr); m_cloudUpSetLayout = VK_NULL_HANDLE; }
+    if (m_cloudHalf) { DestroyTexture(m_cloudHalf); m_cloudHalf = nullptr; }
     if (m_cloudNoisePipeline) { vkDestroyPipeline(m_device, m_cloudNoisePipeline, nullptr); m_cloudNoisePipeline = VK_NULL_HANDLE; }
     if (m_cloudLayout) { vkDestroyPipelineLayout(m_device, m_cloudLayout, nullptr); m_cloudLayout = VK_NULL_HANDLE; }
     if (m_cloudNoiseLayout) { vkDestroyPipelineLayout(m_device, m_cloudNoiseLayout, nullptr); m_cloudNoiseLayout = VK_NULL_HANDLE; }
@@ -384,12 +426,37 @@ void Device::DrawClouds(VkCommandBuffer cmd)
         order.emplace_back(z, &p);   // (the view depth: the fog's distance too, as the game's per-vertex fog about)
     }
     std::sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
-    const float sw = float(m_scene->m_width), sh = float(m_scene->m_height);
-    VkViewport viewport{0.5f, sh + 0.5f, sw, -sh, 0.0f, 1.0f};   // the scene draws into a flipped viewport
-    VkRect2D scissor{{0, 0}, {m_scene->m_width, m_scene->m_height}};
+    // RVK_CloudHalf: the scene's rendering closed (reopened after), the clouds marched into a half-size target (cleared),
+    // then filtered up over the scene's targets where the puffs are.
+    const uint32_t fw = m_scene->m_width, fh = m_scene->m_height, hw = (fw + 1) / 2, hh = (fh + 1) / 2;
+    if (m_cloudParams.half && (!m_cloudHalf || m_cloudHalf->m_width != hw || m_cloudHalf->m_height != hh)) {
+        if (m_cloudHalf) DestroyTexture(m_cloudHalf);
+        m_cloudHalf = CreateImage(hw, hh, Format::RGBA16F, 1, true);
+    }
+    const bool half = m_cloudParams.half && m_cloudHalf && m_cloudHalfPipeline && m_cloudUpPipeline;
+    if (half) {
+        m_renderEndCause = kEndOther;
+        EndRendering();
+        Transition(cmd, m_cloudHalf, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        color.imageView = m_cloudHalf->m_view;
+        color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+        ri.renderArea = {{0, 0}, {hw, hh}};
+        ri.layerCount = 1;
+        ri.colorAttachmentCount = 1;
+        ri.pColorAttachments = &color;
+        vkCmdBeginRendering(cmd, &ri);
+    }
+    const float sw = float(fw), sh = float(fh), k = half ? 0.5f : 1.0f;
+    VkViewport viewport{0.5f * k, (sh + 0.5f) * k, sw * k, -sh * k, 0.0f, 1.0f};   // the scene's flipped viewport (halved)
+    VkRect2D scissor{{0, 0}, {half ? hw : fw, half ? hh : fh}};
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudPipeline);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, half ? m_cloudHalfPipeline : m_cloudPipeline);
+    float screenLo[2] = {sw, sh}, screenHi[2] = {0.0f, 0.0f};   // where the puffs are on screen (the upsampling's)
     // Towards the sun (the frame's), its colour.
     float sun[3] = {-m_frameSunDir[0], -m_frameSunDir[1], -m_frameSunDir[2]};
     const float sl = std::max(std::sqrt(sun[0] * sun[0] + sun[1] * sun[1] + sun[2] * sun[2]), 1e-6f);
@@ -402,6 +469,27 @@ void Device::DrawClouds(VkCommandBuffer cmd)
             continue;                            // (its silhouette is its texture)
         CloudFrame cf{};
         cf.viewProj = MulMatrix(p.view, p.proj);
+        {
+            const d3d::Matrix wvp = MulMatrix(p.world, cf.viewProj);
+            for (int c = 0; c < 8; ++c) {
+                const float q[3] = {c & 1 ? p.high[0] : p.low[0], c & 2 ? p.high[1] : p.low[1], c & 4 ? p.high[2] : p.low[2]};
+                float clip[4];
+                for (int j = 0; j < 4; ++j)
+                    clip[j] = q[0] * wvp.m[0][j] + q[1] * wvp.m[1][j] + q[2] * wvp.m[2][j] + wvp.m[3][j];
+                if (clip[3] < 1e-3f) {           // (round the camera: anywhere)
+                    screenLo[0] = screenLo[1] = 0.0f;
+                    screenHi[0] = sw;
+                    screenHi[1] = sh;
+                    continue;
+                }
+                const float x = 0.5f + (clip[0] / clip[3] + 1.0f) * 0.5f * sw;
+                const float y = sh + 0.5f - (clip[1] / clip[3] + 1.0f) * 0.5f * sh;
+                screenLo[0] = std::min(screenLo[0], x);
+                screenLo[1] = std::min(screenLo[1], y);
+                screenHi[0] = std::max(screenHi[0], x);
+                screenHi[1] = std::max(screenHi[1], y);
+            }
+        }
         cf.world = p.world;
         cf.invWorld = inv;
         // The eye: the view's inverse translation, into mesh space.
@@ -476,6 +564,49 @@ void Device::DrawClouds(VkCommandBuffer cmd)
         w[3].pBufferInfo = &lightsInfo;
         vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudLayout, 0, 4, w);
         vkCmdDraw(cmd, 36, 1, 0, 0);
+    }
+    if (half) {
+        vkCmdEndRendering(cmd);
+        Transition(cmd, m_cloudHalf, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        // (The box's thickness was widened in the draw; a margin covers it and the filter.)
+        const float margin = 0.25f * std::max(screenHi[0] - screenLo[0], screenHi[1] - screenLo[1]) + 4.0f;
+        const int x0 = std::max(int(screenLo[0] - margin), 0), y0 = std::max(int(screenLo[1] - margin), 0);
+        const int x1 = std::min(int(screenHi[0] + margin), int(fw)), y1 = std::min(int(screenHi[1] + margin), int(fh));
+        if (x1 > x0 && y1 > y0) {
+            Texture* targets[5] = {m_scene, m_glow, m_localFraction, m_motionVectors, m_albedo};
+            VkRenderingAttachmentInfo colors[5] = {};
+            for (int i = 0; i < 5; ++i) {
+                Transition(cmd, targets[i], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                colors[i].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                colors[i].imageView = targets[i]->m_view;
+                colors[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                colors[i].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+                colors[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            }
+            VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+            ri.renderArea = {{0, 0}, {fw, fh}};
+            ri.layerCount = 1;
+            ri.colorAttachmentCount = 5;
+            ri.pColorAttachments = colors;
+            vkCmdBeginRendering(cmd, &ri);
+            VkViewport full{0.0f, 0.0f, sw, sh, 0.0f, 1.0f};
+            VkRect2D area{{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}};
+            vkCmdSetViewport(cmd, 0, 1, &full);
+            vkCmdSetScissor(cmd, 0, 1, &area);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudUpPipeline);
+            VkDescriptorImageInfo image{m_cloudClampSampler, m_cloudHalf->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            w.dstBinding = 0;
+            w.descriptorCount = 1;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w.pImageInfo = &image;
+            vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudUpLayout, 0, 1, &w);
+            const float size[4] = {sw, sh, 0.0f, 0.0f};
+            vkCmdPushConstants(cmd, m_cloudUpLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(size), size);
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+            vkCmdEndRendering(cmd);
+        }
+        BeginRenderingOn(m_target);              // the scene's rendering again, for its draws after the sky
     }
     m_cache = StateCache{};                      // this pipeline is not the scene's
     m_arenaBound = m_bindlessBound = false;      // ... and its pushed set 0 replaced the scene's

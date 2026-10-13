@@ -565,6 +565,7 @@ public:
         float brightness = 1.0f;                 // RVK_CloudBright: their colour, x
         float detail = 1.0f;                     // RVK_CloudDetail: how much the noise frays them (0: smooth)
         uint32_t steps = 32;                     // RVK_CloudSteps: the march's steps through a puff
+        bool half = true;                        // RVK_CloudHalf: marched at half resolution
     };
     void SetCloudParams(const CloudParams& params);
     void SmokeSourceFrame(uint64_t key, const SmokeSource& source);
@@ -1566,6 +1567,10 @@ private:
     VkDescriptorSetLayout m_cloudSetLayout = VK_NULL_HANDLE, m_cloudNoiseSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_cloudLayout = VK_NULL_HANDLE, m_cloudNoiseLayout = VK_NULL_HANDLE;
     VkPipeline m_cloudPipeline = VK_NULL_HANDLE, m_cloudNoisePipeline = VK_NULL_HANDLE;
+    VkPipeline m_cloudHalfPipeline = VK_NULL_HANDLE, m_cloudUpPipeline = VK_NULL_HANDLE;   // RVK_CloudHalf
+    VkDescriptorSetLayout m_cloudUpSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout m_cloudUpLayout = VK_NULL_HANDLE;
+    Texture* m_cloudHalf = nullptr;              // RVK_CloudHalf: the clouds at half size (premultiplied)
     bool CreateCloudResources(std::string* error);
     void DestroyCloudResources();
     bool CaptureCloudPuff(uint32_t fvf, const void* vertices, uint32_t vertexCount, const uint16_t* indices,

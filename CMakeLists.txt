@@ -33,7 +33,7 @@ find_program(GLSLC glslc HINTS "${VULKAN_SDK_DIR}/bin" REQUIRED)
 
 set(RVK_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/rvk-shaders")
 set(RVK_SHADER_INCS)
-foreach(shader ffp.vert ffp.tesc ffp.tese ffp.frag ffp_glow.frag ffp_nocut.frag ffp_glow_nocut.frag prepass_cutout.frag shadow.vert shadow.frag fullscreen.vert tonemap.frag bloom_down.frag bloom_up.frag ao.frag ao_blur.frag gi.frag gi_blur.frag volume.frag volume_blur.frag ssr.frag contact.frag taa.frag sharpen.frag motion_blur.frag motion_tilemax.frag motion_neighbourmax.frag motion_object.frag dof_composite.frag dof_focus.frag dof_prefilter.frag dof_tiles.frag dof_gather.frag dof_final.frag ui_composite.frag grass.vert grass.frag grass_shadow.vert particles.comp skin.comp water.vert water.frag water_spray.vert water_spray.frag water_sim.comp rain.vert rain.frag splash.vert splash.frag smoke_sim.comp smoke.vert smoke.frag smoke_up.frag cloud.vert cloud.frag cloud_noise.comp env_accum.frag env_filter.frag)
+foreach(shader ffp.vert ffp.tesc ffp.tese ffp.frag ffp_glow.frag ffp_nocut.frag ffp_glow_nocut.frag prepass_cutout.frag shadow.vert shadow.frag fullscreen.vert tonemap.frag bloom_down.frag bloom_up.frag ao.frag ao_blur.frag gi.frag gi_blur.frag volume.frag volume_blur.frag ssr.frag contact.frag taa.frag sharpen.frag motion_blur.frag motion_tilemax.frag motion_neighbourmax.frag motion_object.frag dof_composite.frag dof_focus.frag dof_prefilter.frag dof_tiles.frag dof_gather.frag dof_final.frag ui_composite.frag grass.vert grass.frag grass_shadow.vert particles.comp skin.comp water.vert water.frag water_spray.vert water_spray.frag water_sim.comp rain.vert rain.frag splash.vert splash.frag smoke_sim.comp smoke.vert smoke.frag smoke_up.frag cloud.vert cloud.frag cloud_up.frag cloud_noise.comp env_accum.frag env_filter.frag)
     set(src "${CMAKE_CURRENT_SOURCE_DIR}/rvk/shaders/${shader}")
     set(out "${RVK_SHADER_OUT}/${shader}.inc")
     add_custom_command(OUTPUT "${out}"
@@ -59,7 +59,7 @@ foreach(shader ffp.vert ffp.tesc ffp.tese ffp.frag ffp_glow.frag ffp_nocut.frag 
 endforeach()
 
 # Variants built from another shader with a define: output name, source, define.
-foreach(entry "leaf.vert|ffp.vert|RVK_LEAF" "leaf_shadow.vert|shadow.vert|RVK_LEAF" "smoke_half.frag|smoke.frag|RVK_SMOKE_HALF")
+foreach(entry "leaf.vert|ffp.vert|RVK_LEAF" "leaf_shadow.vert|shadow.vert|RVK_LEAF" "smoke_half.frag|smoke.frag|RVK_SMOKE_HALF" "cloud_half.frag|cloud.frag|RVK_CLOUD_HALF")
     string(REPLACE "|" ";" variant "${entry}")
     list(GET variant 0 name)
     list(GET variant 1 shader)
@@ -77,6 +77,7 @@ foreach(entry "leaf.vert|ffp.vert|RVK_LEAF" "leaf_shadow.vert|shadow.vert|RVK_LE
                 "${CMAKE_CURRENT_SOURCE_DIR}/rvk/shaders/sway.glsl"
                 "${CMAKE_CURRENT_SOURCE_DIR}/rvk/shaders/wind.glsl"
                 "${CMAKE_CURRENT_SOURCE_DIR}/rvk/shaders/smoke_common.glsl"
+                "${CMAKE_CURRENT_SOURCE_DIR}/rvk/shaders/clouds_common.glsl"
         COMMENT "glslc ${name}")
     list(APPEND RVK_SHADER_INCS "${out}")
 endforeach()

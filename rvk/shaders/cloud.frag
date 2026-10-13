@@ -12,10 +12,12 @@ layout(set = 0, binding = 2) uniform sampler3D noiseTexture; // r: billowy (valu
 layout(location = 0) in vec3 vLocal;
 
 layout(location = 0) out vec4 outScene;
+#ifndef RVK_CLOUD_HALF                          // (half size, RVK_CloudHalf: the smoke only; cloud_up.frag the rest)
 layout(location = 1) out vec4 outGlow;
 layout(location = 2) out vec4 outLocal;
 layout(location = 3) out vec4 outMotion;
 layout(location = 4) out vec4 outAlbedo;
+#endif
 
 int gThin;
 float gMid, gHalf, gNoiseScale;
@@ -41,7 +43,9 @@ float Density(vec3 p)
 
 void main()
 {
+#ifndef RVK_CLOUD_HALF
     outGlow = outLocal = outMotion = outAlbedo = vec4(0.0);
+#endif
     vec3 lo = C.low.xyz, hi = C.high.xyz;
     vec3 eye = C.eye.xyz;
     vec3 dir = vLocal - eye;                                         // t = 1 at this face
@@ -89,9 +93,8 @@ void main()
         if (d < 0.01)
             continue;
         // The sun through the puff.
-        float toSun = 0.0;
-        for (int j = 1; j <= 4; ++j)
-            toSun += Density(p + towardSun * (sunStep * float(j)));
+        // (Two samples, the second further: what lies towards the sun, near and deeper.)
+        float toSun = Density(p + towardSun * (sunStep * 1.2)) * 1.6 + Density(p + towardSun * (sunStep * 3.2)) * 2.4;
         float sunT = exp(-toSun * sigma * sunStep * 2.5);              // (the sun's way through it: shadowed inside)
         // The sky's light, more towards the puff's top (its belly darker), and the sun's.
         vec2 uv = Uv(p);
@@ -115,5 +118,7 @@ void main()
         light = mix(C.fogColour.rgb * alpha, light, fog);
     }
     outScene = vec4(light, alpha);
+#ifndef RVK_CLOUD_HALF
     outLocal = vec4(alpha, 0.0, 0.0, alpha);                         // (the ambient occlusion spares it, as smoke)
+#endif
 }
