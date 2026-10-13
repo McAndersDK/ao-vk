@@ -975,6 +975,8 @@ private:
     float m_skySheets = 1.0f;                    // the game's sheets' strength by the sky (none when clear)
     double SkyClock() const;
     float SkyCloudiness() const;
+    void SkyWind(float out[2]) const;
+    float m_cloudWindSpeed = 8.0f;               // the clouds' drift (world units a second), eased (UpdateCloudDrift)
     static const char* SkyName(float cloudiness);
     bool m_shadowIsMoon = false;                 // ... the moon (FrameLights moon.w)
     bool m_drawIsSkyMesh = false;                // the current visual is a mesh in the sky (a moon?)

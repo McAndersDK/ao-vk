@@ -1108,15 +1108,28 @@ void Device::UpdateCloudDrift()
     const double now = m_frameClock;
     const float dt = m_cloudDriftClock < 0.0 ? 0.0f : float(std::clamp(now - m_cloudDriftClock, 0.0, 0.25));
     m_cloudDriftClock = now;
+    // The way: the game's rain's wind when it rains, else the sky's (sky.cpp: turning over hours; RVK_SkyVary 0: fixed).
+    // The speed by the sky (sky weather phase 2): calm when clear, ~8 scattered, ~14 overcast, more in rain.
+    const float vary = std::clamp(m_cloudParams.vary, 0.0f, 1.0f);
     float wx = m_rainWind[0], wz = m_rainWind[2];
     const float wl = std::sqrt(wx * wx + wz * wz);
-    if (wl < 0.1f) { wx = 0.8f; wz = 0.6f; } else { wx /= wl; wz /= wl; }
+    if (wl >= 0.1f) {
+        wx /= wl; wz /= wl;
+    } else if (vary > 0.0f) {
+        float sw[2];
+        SkyWind(sw);
+        wx = 0.8f + (sw[0] - 0.8f) * vary; wz = 0.6f + (sw[1] - 0.6f) * vary;
+    } else {
+        wx = 0.8f; wz = 0.6f;
+    }
     const float k = 1.0f - std::exp(-dt / 10.0f);
     m_cloudWindDir[0] += (wx - m_cloudWindDir[0]) * k;
     m_cloudWindDir[1] += (wz - m_cloudWindDir[1]) * k;
+    const float speed = 8.0f + ((4.0f + 10.0f * SkyCloudiness()) - 8.0f) * vary + 6.0f * std::clamp(m_rain, 0.0f, 1.0f) * vary;
+    m_cloudWindSpeed += (speed - m_cloudWindSpeed) * (1.0f - std::exp(-dt / 30.0f));
     const float dl = std::max(std::sqrt(m_cloudWindDir[0] * m_cloudWindDir[0] + m_cloudWindDir[1] * m_cloudWindDir[1]), 1e-3f);
-    m_cloudDrift[0] -= m_cloudWindDir[0] / dl * 8.0f * dt;
-    m_cloudDrift[1] -= m_cloudWindDir[1] / dl * 8.0f * dt;
+    m_cloudDrift[0] -= m_cloudWindDir[0] / dl * m_cloudWindSpeed * dt;
+    m_cloudDrift[1] -= m_cloudWindDir[1] / dl * m_cloudWindSpeed * dt;
     m_cloudDrift[2] += 1.5f * dt;
 }
 
@@ -1211,9 +1224,10 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
     wf.drift[2] = 9000.0f;
     wf.drift[3] = std::clamp(m_cloudParams.cover, -1.0f, 1.0f);
     if (m_frameNumber % 600 == 1)
-        Log("clouds: sky %s (%.2f, RVK_SkyVary %.2f; the game's sheets x%.2f); weather map: cloudy %.2f (now %.2f: puffs "
+        Log("clouds: sky %s (%.2f, RVK_SkyVary %.2f; the game's sheets x%.2f; wind %.1f towards %.2f %.2f); weather map: cloudy %.2f (now %.2f: puffs "
             "%.2f, rain %.2f), type %.2f (flat sheets %.0f%%), base %.0f (eye %.0f); low deck %.2f; wispy puffs %.0f%% "
             "(%u of %zu puffs' textures known)", SkyName(sky), double(sky), double(vary), double(m_skySheets),
+            double(m_cloudWindSpeed), double(m_cloudWindDir[0]), double(m_cloudWindDir[1]),
             double(wf.info[1]), double(cloudy), double(cover), double(rain), double(wf.info[2]), double(flatShare * 100.0f),
             double(m_cloudBase), double(eye[1]), double(m_cloudDeck), double(m_cloudWispy * 100.0f), known,
             m_cloudPuffs.size());

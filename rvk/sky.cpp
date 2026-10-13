@@ -50,6 +50,16 @@ float Device::SkyCloudiness() const
     return std::clamp((v - 0.25f) / 0.6f, 0.0f, 1.0f);
 }
 
+// The wind's way when the game gives none (its rain's wind gives one): turning slowly over hours, from the clock -
+// x, z unit vector.
+void Device::SkyWind(float out[2]) const
+{
+    const double t = SkyClock();
+    const float a = 6.2831853f * (Noise(t, 14400.0, 41u) * 1.6f + Noise(t, 3600.0, 53u) * 0.4f);
+    out[0] = std::cos(a);
+    out[1] = std::sin(a);
+}
+
 // The sky's state by name (the log).
 const char* Device::SkyName(float c)
 {
