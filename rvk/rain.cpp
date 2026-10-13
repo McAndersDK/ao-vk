@@ -52,6 +52,7 @@ constexpr uint32_t kRainMaxDrops = 24000;       // at full rain, RVK_RainAmount 
 constexpr float kRainBox = 16.0f;               // half size of the box round the camera (units)
 constexpr float kRainSpeed = 9.0f;              // a raindrop's fall (units / s; about a metre)
 constexpr float kGameRainMax = 0.45f;           // the game's rain weather: process(intensity^3 x this)
+constexpr float kGameRainFrom = 0.25f;          // ... intensity where its rain shows (rain from 0 here)
 constexpr uint32_t kSplashMax = 2500;           // splash slots at full rain (splash.vert: most find no surface)
 
 void ArgbTo4(uint32_t c, float out[4])
@@ -196,8 +197,13 @@ void Device::RenderRain(VkCommandBuffer cmd)
     if (P.enable) {
         if (P.force > 0.0f)
             target = std::min(P.force, 1.0f);
-        else if (now - m_weatherGameTime < 0.5)
-            target = std::clamp(std::cbrt(std::max(m_weatherGame.precipitation, 0.0f) / kGameRainMax), 0.0f, 1.0f);
+        else if (now - m_weatherGameTime < 0.5) {
+            // The game's weather (0..1: its rain is intensity^3 x kGameRainMax) - from where its own rain shows: below
+            // ~0.25 it draws next to nothing (a lingering 0.13 left a constant drizzle here, its drops long streaks
+            // across the sky).
+            const float weather = std::cbrt(std::max(m_weatherGame.precipitation, 0.0f) / kGameRainMax);
+            target = std::clamp((weather - kGameRainFrom) / (1.0f - kGameRainFrom), 0.0f, 1.0f);
+        }
     }
     m_rain += (target - m_rain) * (1.0f - std::exp(-dt / 2.5f));
     if (target == 0.0f && m_rain < 0.003f)
