@@ -2080,6 +2080,13 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     }
     // RVK_CloudsOn: the game's cloud puffs taken instead of drawn; drawn as volumes where the sky ends - before the
     // frame's first 3D draw after them that isn't the sky's.
+    // Looking down or away the game draws no puffs: with the layer, the last ones seen (a few seconds), so its shadows
+    // on the ground stay (they had gone, and the weather with them).
+    if (m_cloudPuffs.empty() && !m_cloudsDrawn && !m_cloudPuffsLast.empty() && m_cloudParams.enable &&
+        m_cloudParams.layer && m_cloudPuffsLastFrame + 300 >= m_frameNumber && m_scenePhase && m_target == m_scene &&
+        !m_external && VisualKind(m_drawVisualKind) != VisualKind::Sky &&
+        (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZRHW)
+        m_cloudPuffs = m_cloudPuffsLast;
     if (!m_cloudPuffs.empty() && !m_cloudsDrawn && m_scenePhase && m_target == m_scene && !m_external &&
         VisualKind(m_drawVisualKind) != VisualKind::Sky && (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZRHW)
         DrawClouds(m_frames[m_frameIndex].main);

@@ -1641,6 +1641,10 @@ private:
     };
     CloudParams m_cloudParams;
     std::vector<CloudPuff> m_cloudPuffs;         // this frame's, taken from the sky's draws
+    // The last frame's that had any (RVK_CloudLayer: looking down or away the game draws none - the shadows on the
+    // ground and the weather go on from these for a few seconds).
+    std::vector<CloudPuff> m_cloudPuffsLast;
+    uint64_t m_cloudPuffsLastFrame = 0;
     // The game's sheets drawn behind the layer (RVK_CloudSheet; FrameLights cloudTint/Sky/Air), with the layer's
     // colours (last frame's: MarchCloudLayer).
     bool CloudSheetsOn() const { return m_cloudParams.enable && m_cloudParams.layer && m_cloudParams.sheet > 0.0f; }

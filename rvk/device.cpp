@@ -1595,6 +1595,10 @@ void Device::BeginFrame()
     ProfileBeginFrame(f.main);
     ProfileCpuAddMs("wait for the GPU (frame slot)", waitMs);
     MakeCloudNoise(f.main);                      // (once: before any rendering opens)
+    if (!m_cloudPuffs.empty()) {
+        m_cloudPuffsLast.swap(m_cloudPuffs);
+        m_cloudPuffsLastFrame = m_frameNumber - 1;
+    }
     m_cloudPuffs.clear();
     m_cloudsDrawn = false;
     UpdatePushTrail();

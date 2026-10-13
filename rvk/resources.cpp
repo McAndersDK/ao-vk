@@ -543,6 +543,8 @@ void Device::DestroyTexture(Texture* texture)
     if (m_target == texture)
         SetRenderTarget(nullptr);
     ForgetCasterTexture(texture);
+    for (const CloudPuff& p : m_cloudPuffsLast)
+        if (p.texture == texture) { m_cloudPuffsLast.clear(); break; }   // (kept for frames without the sky's puffs)
     for (Texture** map : {&texture->m_normalMap, &texture->m_ormMap, &texture->m_albedoMap, &texture->m_emissiveMap})
         if (*map) {
             DestroyTexture(*map);

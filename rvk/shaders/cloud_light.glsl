@@ -19,19 +19,20 @@ vec3 Afterglow(vec3 sunL)
     return vec3(1.0, 0.5, 0.55) * g;
 }
 
-// How much the sky's light is raised with the sun gone (night; 1 by day): lit only by the sky, cloud dimmed inside
-// to 0.4 came out a third as light as the game's own night clouds (user: brightness 3 to look right) - the sky's
-// light then carries the game's colour on its own.
-float NightSky()
-{
-    float sun = dot(FL.sunColor.rgb, vec3(0.3, 0.59, 0.11));
-    return mix(3.4, 1.0, smoothstep(0.0, 0.25, sun));   // (user: 1.7 x the first 2.0 in game)
-}
-
-// How much it is night for the clouds' light: 0 with the sun up .. 1 with it gone.
+// How much it is night for the clouds' light: 0 with the sun up .. 1 with it ~11 degrees down - by the sun's true
+// height (FL.sunTrue), not its light: that goes out with the sun still 3 degrees up (where its shadows end), and the
+// night's brightening then came on at once under a dusk sky still near daylight - clouds blown out white (user).
 float Night()
 {
-    return 1.0 - smoothstep(0.0, 0.25, dot(FL.sunColor.rgb, vec3(0.3, 0.59, 0.11)));
+    return 1.0 - smoothstep(-0.2, 0.03, normalize(FL.sunTrue.xyz + vec3(0.0, 1e-6, 0.0)).y);
+}
+
+// How much the sky's light is raised at night (1 by day): lit only by the sky, cloud dimmed inside to 0.4 came out a
+// third as light as the game's own night clouds (user: brightness 3 to look right) - the sky's light then carries the
+// game's colour on its own.
+float NightSky()
+{
+    return mix(1.0, 3.4, Night());               // (user: 1.7 x the first 2.0 in game)
 }
 
 // Low in the sky, the horizon's band (up to ~12 degrees), as much as the game fogs its clouds (amount): 0 .. amount.
