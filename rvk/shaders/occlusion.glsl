@@ -15,7 +15,7 @@ layout(push_constant) uniform Push {
     vec4 params;        // knee, exposure, bloom strength, bloom left on objects nearer than its light (-1: no depth)
     vec4 proj;          // D3D projection m[2][2], m[3][2] (view depth from the depth buffer), indirect light strength,
                         // volumetric light on (bit 1), reflections on (bit 2), ambient occlusion on (bit 4),
-                        // contact shadows on (bit 8)
+                        // contact shadows on (bit 8), the depth is the scene's (bit 16)
     vec4 grade;         // saturation, contrast, warmth (-1 cool .. 1 warm), lookup table amount
     vec4 grade2;        // night (0 day .. 1 night), night tint, vignette, unused
 } P;

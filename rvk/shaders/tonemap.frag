@@ -6,11 +6,13 @@
 layout(location = 0) out vec4 outColor;
 
 // Colour grading of the tone mapped colour (0..1): white balance, a cooler, paler night, contrast (in a perceptual
-// square-root space, around its middle), saturation, the day / night lookup tables, vignette.
-vec3 Grade(vec3 c)
+// square-root space, around its middle), saturation, the day / night lookup tables, vignette. far: 0 near .. 1 at
+// the far clip and the sky - the warmth is for what's near; the distance and the sky lean cool, as the air makes
+// them (a warmed teal sky turned green-grey: user).
+vec3 Grade(vec3 c, float far)
 {
     const vec3 kLuma = vec3(0.3, 0.59, 0.11);
-    float warmth = P.grade.z;
+    float warmth = P.grade.z * mix(1.0, -0.5, smoothstep(0.3, 1.0, far));
     c *= vec3(1.0 + 0.12 * warmth, 1.0 + 0.02 * warmth, 1.0 - 0.12 * warmth);
     float nightTint = P.grade2.x * P.grade2.y;
     c = mix(c, dot(c, kLuma) * vec3(0.78, 0.9, 1.18), 0.6 * nightTint);
@@ -45,5 +47,16 @@ void main()
         float white = m > 1.0 ? 1.0 - 1.0 / (1.0 + 0.25 * (m - 1.0)) : 0.0;   // 0 at 1, 0.2 at 2, 0.5 at 5
         c = mix(c * (shown / m), vec3(shown), white);
     }
-    outColor = vec4(Grade(min(c, vec3(1.0))), clamp(s.a, 0.0, 1.0));
+    // How far the pixel is: its view depth over the far clip's (the sky: wholly).
+    float d = texelFetch(depthTex, ivec2(gl_FragCoord.xy), 0).r;
+    float far = 1.0;
+    if ((int(P.proj.w) & 16) == 0) {
+        far = 0.0;                               // (no depth readable: warmth everywhere)
+    } else if (d < 1.0) {
+        // (Over the far clip - the game's fog end; with no far clip to speak of, over 3 km.)
+        float z = P.proj.y / max(d - P.proj.x, 1e-9);
+        float zFar = P.proj.x < 0.99999 ? P.proj.y / (1.0 - P.proj.x) : 3000.0;
+        far = clamp(z / zFar, 0.0, 1.0);
+    }
+    outColor = vec4(Grade(min(c, vec3(1.0)), far), clamp(s.a, 0.0, 1.0));
 }
