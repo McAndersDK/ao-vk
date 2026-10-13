@@ -207,6 +207,7 @@ Device::~Device()
     DestroyWaterResources();
     DestroyRainResources();
     DestroySmokeResources();
+    DestroyCloudResources();
     DestroyStaticGeometry();
     SavePipelineCache("at exit");
     if (m_pipelineCache) vkDestroyPipelineCache(m_device, m_pipelineCache, nullptr);
@@ -1043,6 +1044,11 @@ bool Device::CreatePipelines(std::string* error)
             Log("smoke: unavailable (%s)", smokeError.c_str());
             DestroySmokeResources();
         }
+        std::string cloudError;                  // nor this: the game's clouds then
+        if (!CreateCloudResources(&cloudError)) {
+            Log("clouds: unavailable (%s)", cloudError.c_str());
+            DestroyCloudResources();
+        }
     }
     char gpuSkin[8] = "";
     if (GetEnvironmentVariableA("RANDYVK_GPU_SKIN", gpuSkin, sizeof(gpuSkin)) && gpuSkin[0] == '0')
@@ -1586,6 +1592,9 @@ void Device::BeginFrame()
     ++m_frameNumber;
     ProfileBeginFrame(f.main);
     ProfileCpuAddMs("wait for the GPU (frame slot)", waitMs);
+    MakeCloudNoise(f.main);                      // (once: before any rendering opens)
+    m_cloudPuffs.clear();
+    m_cloudsDrawn = false;
     UpdatePushTrail();
     UpdateLeaves();
     m_tessCharsPrev.swap(m_tessChars);           // characters drawn last frame (their rigid parts: TessellateDraw)

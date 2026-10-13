@@ -137,6 +137,44 @@ std::vector<uint32_t> SoftDot(uint32_t size)        // white, alpha falls off fr
     return p;
 }
 
+// A cloud puff's texture, as the game's single_cloud*.png: white, a cumulus silhouette in the alpha - a few round
+// lumps on a flatter base, their edges broken up.
+std::vector<uint32_t> CloudPuff(uint32_t size, uint32_t seed)
+{
+    auto hash = [](int x, int y, uint32_t s) {
+        uint32_t h = uint32_t(x) * 73856093u ^ uint32_t(y) * 19349663u ^ s * 83492791u;
+        h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+        return float(h & 0xFFFF) / 65535.0f;
+    };
+    auto value = [&](float x, float y, uint32_t s) {
+        int ix = int(std::floor(x)), iy = int(std::floor(y));
+        float fx = x - ix, fy = y - iy;
+        fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+        float a = hash(ix, iy, s), b = hash(ix + 1, iy, s), c = hash(ix, iy + 1, s), d = hash(ix + 1, iy + 1, s);
+        return (a + (b - a) * fx) + ((c + (d - c) * fx) - (a + (b - a) * fx)) * fy;
+    };
+    struct Lump { float x, y, r; };
+    Lump lumps[5];
+    for (int i = 0; i < 5; ++i)
+        lumps[i] = {-0.55f + 0.27f * i + 0.1f * (hash(i, 1, seed) - 0.5f), -0.1f + 0.25f * hash(i, 2, seed),
+                    0.22f + 0.18f * hash(i, 3, seed) * (i == 1 || i == 2 ? 1.6f : 1.0f)};
+    std::vector<uint32_t> p(size * size);
+    for (uint32_t y = 0; y < size; ++y)
+        for (uint32_t x = 0; x < size; ++x) {
+            float u = (x + 0.5f) / size * 2 - 1, v = 1 - (y + 0.5f) / size * 2;   // v up
+            float cover = 0.0f;
+            for (const Lump& l : lumps) {
+                float d = std::sqrt((u - l.x) * (u - l.x) + (v - l.y) * (v - l.y) * 1.3f) / l.r;
+                cover = std::max(cover, 1.0f - d);
+            }
+            cover = std::min(cover, (v + 0.45f) * 3.0f);                        // a flat base
+            float n = value(u * 6 + 11, v * 6 + 7, seed) * 0.6f + value(u * 14, v * 14, seed + 1) * 0.4f;
+            float a = std::clamp((cover + (n - 0.5f) * 0.35f) * 3.0f, 0.0f, 1.0f);
+            p[y * size + x] = (uint32_t(a * 255) << 24) | 0xFFFFFF;
+        }
+    return p;
+}
+
 std::vector<uint32_t> Stripes(uint32_t size)        // horizontal colour stripes
 {
     static const uint32_t colors[4] = {0xFFFF4040, 0xFF40FF40, 0xFF4040FF, 0xFFFFFF40};
@@ -1387,6 +1425,8 @@ bool g_waterPool = false;         // --water-pool: the lake's water only a 6 x 6
 bool g_waterWall = false;         // --water-wall: a steep sheet of the water mesh standing in the lake (a fall)
 bool g_waterShelf = false;        // --water-shelf: the mesh terraced - the surface with a lower shore shelf in front
                                   // (as Anarchy Online hangs its aprons), which used to render as a "mountain of water"
+bool g_clouds = false;            // --clouds: cloud puffs in the sky, as the game's (VisualSingleCloud_t)
+bool g_cloudsGame = false;        // --clouds-game: ... drawn as the game draws them (RVK_CloudsOn off)
 bool g_fixedClock = false;        // --fixed-clock MS: the renderer's clock steps MS a frame (no sleeping: benchmarks)
 bool g_waterWalker = false;       // --water-walker: a "character" standing in the lake with its feet under the surface,
                                   // bobbing along: the surface ripples around it (RVK_WaterSwim)
@@ -1438,6 +1478,26 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
             waterPixels[y * 64 + x] = 0xFF000000u | r << 16 | g << 8 | b;
         }
     Texture* waterTex = dev.CreateTexture(64, 64, waterPixels.data());
+    Texture* puffTex[2] = {nullptr, nullptr};
+    std::vector<VtxMesh> puffMesh;
+    std::vector<uint16_t> puffIdx;
+    if (g_clouds) {
+        for (int k = 0; k < 2; ++k) {
+            auto px = CloudPuff(256, 7u + uint32_t(k) * 31u);
+            puffTex[k] = dev.CreateTexture(256, 256, px.data());
+        }
+        // The puff: a 10 x 10 sheet bulging towards the viewer (+z here, turned to face the camera), 2 x 1 across.
+        for (int j = 0; j < 10; ++j)
+            for (int i = 0; i < 10; ++i) {
+                const float u = i / 9.0f, v = j / 9.0f, x = u * 2 - 1, y = v * 2 - 1;
+                puffMesh.push_back({x, y * 0.5f, -0.25f * (1 - x * x) * (1 - y * y), 0, 0, -1, 0xFFFFFFFF, u, 1 - v});
+            }
+        for (int j = 0; j < 9; ++j)
+            for (int i = 0; i < 9; ++i) {
+                const uint16_t a = uint16_t(j * 10 + i);
+                puffIdx.insert(puffIdx.end(), {a, uint16_t(a + 1), uint16_t(a + 11), a, uint16_t(a + 11), uint16_t(a + 10)});
+            }
+    }
     struct VtxTerrain { float x, y, z, nx, ny, nz, u0, v0, u1, v1; };
     const uint32_t kFvfTerrain = FVF_XYZ | FVF_NORMAL | (2 << 8);
     auto height = [&](float x, float z) {
@@ -1639,6 +1699,41 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
         dev.SetTextureStageState(0, TSS_COLORARG2, TA_DIFFUSE);
         dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG1);
         dev.SetTextureStageState(0, TSS_ALPHAARG1, TA_TEXTURE);
+        // --clouds: the sky's puffs first (as the game: the sky, then the scene), each a sheet turned to the camera.
+        if (g_clouds) {
+            dev.SetDrawVisual(uint32_t(VisualKind::Sky), "VisualSingleCloud_t");
+            dev.SetRenderState(RS_LIGHTING, 1);
+            dev.SetRenderState(RS_ALPHABLENDENABLE, 1);
+            dev.SetRenderState(RS_SRCBLEND, BLEND_SRCALPHA);
+            dev.SetRenderState(RS_DESTBLEND, BLEND_INVSRCALPHA);
+            dev.SetRenderState(RS_ZWRITEENABLE, 0);
+            dev.SetTextureStageState(0, TSS_COLOROP, TOP_MODULATE);
+            dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_MODULATE);
+            dev.SetTextureStageState(0, TSS_ALPHAARG2, TA_DIFFUSE);
+            Material cloudMat{{1, 1, 1, 1}, {1, 1, 1, 1}, {0, 0, 0, 0}, {0.72f, 0.72f, 0.75f, 1}, 0.0f};
+            dev.SetMaterial(cloudMat);
+            struct Place { float yaw, dist, height, width; };
+            const Place places[] = {{-0.55f, 520, 150, 150}, {-0.2f, 700, 210, 220}, {0.12f, 450, 120, 120},
+                                    {0.45f, 620, 180, 190}, {0.75f, 400, 140, 110}, {-0.85f, 380, 110, 100},
+                                    {0.3f, 900, 260, 260}, {-0.4f, 950, 300, 240}};
+            int k = 0;
+            for (const Place& pl : places) {
+                const float a = kPi * 0.5f + g_waterYaw + pl.yaw;
+                const float px = eye.x + std::cos(a) * pl.dist, pz = eye.z + std::sin(a) * pl.dist;
+                const float face = std::atan2(eye.x - px, eye.z - pz);   // its -z towards the camera
+                Matrix m = Mul(Mul(Matrix{{{pl.width, 0, 0, 0}, {0, pl.width, 0, 0}, {0, 0, pl.width, 0}, {0, 0, 0, 1}}},
+                                   RotateY(face + kPi)), Translate(px, eye.y + pl.height, pz));
+                dev.SetTransform(World, m);
+                dev.SetTexture(0, puffTex[k++ & 1]);
+                dev.DrawIndexedPrimitive(TriangleList, kFvfMesh, puffMesh.data(), uint32_t(puffMesh.size()),
+                                         puffIdx.data(), uint32_t(puffIdx.size()));
+            }
+            dev.SetTransform(World, Identity());
+            dev.SetMaterial(mat);
+            dev.SetRenderState(RS_ZWRITEENABLE, 1);
+            dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG1);
+            dev.SetDrawVisual(0, nullptr);
+        }
         // The ground: base pass, then the light pass (lightmap + ambient, multiplied).
         dev.SetRenderState(RS_LIGHTING, 0);
         dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
@@ -2835,6 +2930,8 @@ int main(int argc, char** argv)
         else if (a == "--point-shadow-sun") pointShadowTest = pointShadowSun = shadows = true;
         else if (a == "--frame-ms" && i + 1 < argc) frameMs = std::atoi(argv[++i]);
         else if (a == "--size" && i + 2 < argc) { g_width = uint32_t(std::atoi(argv[++i])); g_height = uint32_t(std::atoi(argv[++i])); }
+        else if (a == "--clouds") { g_clouds = true; hdr = true; }
+        else if (a == "--clouds-game") { g_clouds = g_cloudsGame = true; hdr = true; }
         else if (a == "--fixed-clock" && i + 1 < argc) { g_fixedClock = true; Device::SetFixedClock(std::atof(argv[++i]) * 1e-3); }
         else if (a == "--cache-test" && i + 1 < argc) { cacheTest = std::atoi(argv[++i]); shadowTest = shadows = true; }
         else if (a == "--dump" && i + 1 < argc) dump = argv[++i];
@@ -3033,6 +3130,11 @@ int main(int argc, char** argv)
     dev.SetShadows(shadows);
     dev.SetLightHeadroom(headroom);
     dev.SetHdr(hdr);
+    {
+        Device::CloudParams clouds;
+        clouds.enable = g_clouds && !g_cloudsGame;
+        dev.SetCloudParams(clouds);
+    }
     if (g_smoke) {
         Device::SmokeParams smoke;
         smoke.enable = true;

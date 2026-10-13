@@ -1371,6 +1371,7 @@ void Device::SetDrawVisual(uint32_t kind, const char* className, uint32_t owner,
 {
     m_drawVisualKind = kind;
     m_drawVisualName = className ? className : "";
+    m_drawIsCloudPuff = className && std::strcmp(className, "VisualSingleCloud_t") == 0;
     m_drawOwner = owner;
     m_drawVisual = visual;
 }
@@ -2016,6 +2017,11 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
             EndScene();
         }
     }
+    // RVK_CloudsOn: the game's cloud puffs taken instead of drawn; drawn as volumes where the sky ends - before the
+    // frame's first 3D draw after them that isn't the sky's.
+    if (!m_cloudPuffs.empty() && !m_cloudsDrawn && m_scenePhase && m_target == m_scene && !m_external &&
+        VisualKind(m_drawVisualKind) != VisualKind::Sky && (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZRHW)
+        DrawClouds(m_frames[m_frameIndex].main);
     double since = (m_frameNumber & 15) == 0 ? ProfileCpu() : 0.0;   // per-draw CPU sections (profiling)
     m_drawIsLabel = !m_external && IsLabel(primitive, fvf, vertexCount);
     // The interface hidden (screenshots): its draws - pre-transformed, onto the frame or into the interface layer,
@@ -2028,6 +2034,8 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
         DumpDraw(primitive, fvf, m_drawGpu ? nullptr : vertices, vertexCount, indices, indexCount);
     if (!m_external && !m_drawGpu && IsBlobShadow(primitive, fvf, vertices, vertexCount, indexCount))
         return;                                  // replaced by sun shadows
+    if (m_drawIsCloudPuff && CaptureCloudPuff(fvf, vertices, vertexCount, indices, indexCount))
+        return;                                  // replaced by a volume (DrawClouds)
     if (IsTerrain(fvf) && IsMultiplyPass())
         m_terrainLitPassCur = true;
     Frame& f = m_frames[m_frameIndex];

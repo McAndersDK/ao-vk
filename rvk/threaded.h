@@ -162,6 +162,7 @@ public:
     void SetWeatherParams(const Device::WeatherParams& params);
     void SetWeather(const Device::WeatherState& state);
     void SetSmokeParams(const Device::SmokeParams& params);
+    void SetCloudParams(const Device::CloudParams& params);
     void SmokeSourceFrame(uint64_t key, const Device::SmokeSource& source);
     void DrawWater(const Device::WaterVertex* vertices, uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount);
     bool WaterReady() const { return m_device.WaterReady(); }

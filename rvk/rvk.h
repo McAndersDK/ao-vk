@@ -558,6 +558,15 @@ public:
         float wind[3] = {0, 0, 0};               // the wind carrying it (world / s; the game's effects' wind)
     };
     void SetSmokeParams(const SmokeParams& params) { m_smokeParams = params; }
+    // Volumetric clouds (clouds.cpp): the game's cloud puffs (VisualSingleCloud_t) drawn as volumes in their place.
+    struct CloudParams {
+        bool enable = false;                     // RVK_CloudsOn
+        float density = 1.0f;                    // RVK_CloudThick: how thick, x
+        float brightness = 1.0f;                 // RVK_CloudBright: their colour, x
+        float detail = 1.0f;                     // RVK_CloudDetail: how much the noise frays them (0: smooth)
+        uint32_t steps = 32;                     // RVK_CloudSteps: the march's steps through a puff
+    };
+    void SetCloudParams(const CloudParams& params);
     void SmokeSourceFrame(uint64_t key, const SmokeSource& source);
 
     void SetTexture(uint32_t stage, Texture* texture);
@@ -1535,6 +1544,34 @@ private:
                                                  // (/ kFlowMax)
     };
     SmokeParams m_smokeParams;
+    // Clouds (clouds.cpp).
+    struct CloudPuff {
+        d3d::Matrix world, view, proj;           // as the game drew it
+        float low[3], high[3];                   // its mesh's extent (mesh space)
+        int thin = 0;                            // ... its least extent's axis (the sheet's thickness)
+        float uvU[4], uvV[4];                    // its texture over mesh space (u, v = dot(xyz, p) + w)
+        float colour[4];                         // as the game lit it; a: its opacity
+        float fogColour[4], fogParams[4];        // the fog it was drawn with (w: on), start, end, density, mode
+        Texture* texture = nullptr;
+    };
+    CloudParams m_cloudParams;
+    std::vector<CloudPuff> m_cloudPuffs;         // this frame's, taken from the sky's draws
+    bool m_cloudsDrawn = false;                  // drawn this frame (where the sky ended)
+    bool m_drawIsCloudPuff = false;              // the current visual is a cloud puff (SetDrawVisual)
+    bool m_cloudNoiseMade = false;
+    VkImage m_cloudNoise = VK_NULL_HANDLE;
+    VmaAllocation_T* m_cloudNoiseAllocation = nullptr;
+    VkImageView m_cloudNoiseView = VK_NULL_HANDLE;
+    VkSampler m_cloudRepeatSampler = VK_NULL_HANDLE, m_cloudClampSampler = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_cloudSetLayout = VK_NULL_HANDLE, m_cloudNoiseSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout m_cloudLayout = VK_NULL_HANDLE, m_cloudNoiseLayout = VK_NULL_HANDLE;
+    VkPipeline m_cloudPipeline = VK_NULL_HANDLE, m_cloudNoisePipeline = VK_NULL_HANDLE;
+    bool CreateCloudResources(std::string* error);
+    void DestroyCloudResources();
+    bool CaptureCloudPuff(uint32_t fvf, const void* vertices, uint32_t vertexCount, const uint16_t* indices,
+                          uint32_t indexCount);
+    void DrawClouds(VkCommandBuffer cmd);
+    void MakeCloudNoise(VkCommandBuffer cmd);
     std::vector<SmokeVolume> m_smokeVolumes;
     SmokeImage m_smokeCurl, m_smokeDiv, m_smokePressure[2];
     SmokeImage m_smokeNoise;                     // the wisps' noise (tiling; made once, smoke_sim.comp stage 10)

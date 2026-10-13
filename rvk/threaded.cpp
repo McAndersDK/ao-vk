@@ -1064,6 +1064,11 @@ void ThreadedDevice::SetSmokeParams(const Device::SmokeParams& params)
     Enqueue([this, params](const uint8_t*) { m_device.SetSmokeParams(params); });
 }
 
+void ThreadedDevice::SetCloudParams(const Device::CloudParams& params)
+{
+    Enqueue([this, params](const uint8_t*) { m_device.SetCloudParams(params); });
+}
+
 void ThreadedDevice::SmokeSourceFrame(uint64_t key, const Device::SmokeSource& source)
 {
     Enqueue([this, key, source](const uint8_t*) { m_device.SmokeSourceFrame(key, source); });

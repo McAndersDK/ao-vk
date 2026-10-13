@@ -145,6 +145,11 @@ Setting g_settings[] = {
     {"RVK_SmokeOpaque", "Smoke: how opaque it is drawn",                           "Experimental",     Float, 0.05f, 8, 0.05f, 1, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeHalf",  "Smoke: drawn at half resolution (much cheaper)",          "Experimental",     Bool,  0, 1, 1, 1, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeExact", "Smoke: exact flow (cheaper; lower, wider plumes)",       "Experimental",     Bool,  0, 1, 1, 0, nullptr, 0, "RVK_SmokeOn"},
+    {"RVK_CloudsOn",   "Volumetric clouds (the game's clouds given depth; needs HDR)", "Experimental", Bool,  0, 1, 1, 0, nullptr, 0},
+    {"RVK_CloudThick", "Clouds: how thick",                                        "Experimental",     Float, 0.1f, 4, 0.1f, 1, nullptr, 0, "RVK_CloudsOn"},
+    {"RVK_CloudBright", "Clouds: how light",                                       "Experimental",     Float, 0.25f, 3, 0.05f, 1, nullptr, 0, "RVK_CloudsOn"},
+    {"RVK_CloudDetail", "Clouds: billows and wisps (0 smooth)",                    "Experimental",     Float, 0, 2, 0.1f, 1, nullptr, 0, "RVK_CloudsOn"},
+    {"RVK_CloudSteps",  "Clouds: quality (steps through a cloud)",                 "Experimental",     Int,   8, 96, 4, 32, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_SmokeGame",  "Smoke: the game's smoke sprites too",                     "Experimental",     Bool,  0, 1, 1, 0, nullptr, 0, "RVK_SmokeOn"},
 
     {"RVK_SunShadow",  "Sun shadows",                                              "Shadows",          Bool,  0, 1, 1, 1, "RANDYVK_SHADOWS", 0},
@@ -485,6 +490,15 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
         s.half = V("RVK_SmokeHalf") != 0.0f;
         s.exact = V("RVK_SmokeExact") != 0.0f;
         d->SetSmokeParams(s);
+    }
+    else if (std::strncmp(n, "RVK_Cloud", 9) == 0) {
+        rvk::Device::CloudParams c;
+        c.enable = V("RVK_CloudsOn") != 0.0f;
+        c.density = V("RVK_CloudThick");
+        c.brightness = V("RVK_CloudBright");
+        c.detail = V("RVK_CloudDetail");
+        c.steps = uint32_t(V("RVK_CloudSteps"));
+        d->SetCloudParams(c);
     }
     else if (std::strncmp(n, "RVK_Vol", 7) == 0) d->SetVolume(V("RVK_Volume"), V("RVK_VolHaze"), V("RVK_VolShafts"));
     else if (is("RVK_MBlur") || is("RVK_MBlurNear")) d->SetMotionBlur(V("RVK_MBlur"), V("RVK_MBlurNear"));
