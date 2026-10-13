@@ -16,6 +16,7 @@
 #include "native/vc10.h"
 #include "native/xmath.h"
 
+#include <atomic>
 #include <cmath>
 #include <initializer_list>
 #include <cstdio>
@@ -26,6 +27,7 @@ namespace rnative::occluder {
 namespace {
 
 HMODULE g_orig;
+std::atomic<bool> g_horizonCulling{true};       // RVK_Occlusion
 
 template <typename T>
 T& Field(void* object, uint32_t offset) { return *reinterpret_cast<T*>(static_cast<uint8_t*>(object) + offset); }
@@ -458,6 +460,7 @@ void __fastcall BuildHorizons(Occ* o, void*, uint8_t* vp)
 // middle out, the top lowered along a sphere's outline towards the sides.
 bool __fastcall Visible(Occ* o, void*, void*, float left, float right, float bottom, float top, float z)
 {
+    if (!g_horizonCulling.load(std::memory_order_relaxed)) return true;   // (RVK_Occlusion off)
     if (!Heights(o) || !Field<int32_t>(o, kEnabled) || Field<int32_t>(o, kNoHorizon) == 1) return true;
     const float depth = float(((double(z) - 8.0) - 4.0) * 0.25);
     int32_t s = int32_t(Lrint(double(depth) - 0.49999));
@@ -734,6 +737,11 @@ void Install(HMODULE orig)
     else
         Log("occluder: no proxy/native/private/occlusion_data.inc (tools/gen_occlusion_data.py) - PreProcessPlayfield stays");
     Log("occluder: %d of %d functions native", installed, int(sizeof(entries) / sizeof(entries[0])) + (kHaveHandCells ? 1 : 0));
+}
+
+void SetHorizonCulling(bool on)
+{
+    g_horizonCulling.store(on, std::memory_order_relaxed);
 }
 
 }  // namespace rnative::occluder
