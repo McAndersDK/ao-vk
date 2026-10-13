@@ -23,7 +23,7 @@ layout(set = 0, binding = 0, std140) uniform LayerFrame {
     vec4 sub;           // reused over frames (cloud_resolve.frag): xy this frame's pixel in each 2x2, z: 2 (one of each
                         // 2x2 marched, into a quarter-size target) or 1 (every pixel)
     vec4 horizon;       // x: how much the game fogs its clouds (0..1: towards the horizon they become the fog's colour,
-                        // as the game's do - the fogged ground meets them seamlessly)
+                        // as the game's do - the fogged ground meets them seamlessly); y: contrast (RVK_CloudShade)
 } L;
 layout(set = 0, binding = 1) uniform sampler2D weatherMap;
 layout(set = 0, binding = 2) uniform sampler3D shapeNoise;
@@ -72,14 +72,21 @@ float Density(vec3 p, bool detail)
     if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
         return 0.0;
     vec4 w = textureLod(weatherMap, uv, 0.0);
-    float cover = w.r;
-    if (cover < 0.01)
+    if (w.r < 0.005)                             // (clear: nothing - the warp below reaches only a few texels)
         return 0.0;
     vec3 q = (p + L.wind.xyz) * L.shape.x;
     q.y *= 1.6;                                  // (cells a little flatter than wide)
     vec4 n = textureLod(shapeNoise, q, 0.0);
+    // The weather read a little off where the body's noise says, differently at each height: coverage's edges then
+    // lean and wander instead of standing as straight walls (seen from below, walls line up into streaks).
+    w = textureLod(weatherMap, uv + (n.gb - 0.5) * (500.0 * L.weather.z), 0.0);
+    // (... and a little more or less with the body's noise: in 3D, so no edge of the map's runs straight up.)
+    float cover = clamp(w.r + (n.a - 0.5) * 0.3, 0.0, 1.0);
+    if (cover < 0.01)
+        return 0.0;
     float fbm = n.g * 0.625 + n.b * 0.25 + n.a * 0.125;
-    float body = Remap(n.r, fbm - 1.0, 1.0, 0.0, 1.0) * Profile(h, w.g);
+    float lift = w.a * 0.22;                     // (the uneven underside: the clouds start this much higher here)
+    float body = Remap(n.r, fbm - 1.0, 1.0, 0.0, 1.0) * Profile(clamp((h - lift) / (1.0 - lift), 0.0, 1.0), w.g);
     // Coverage eats into the body from its thin parts: little cover, only the cores remain.
     float d = clamp(Remap(body, 1.0 - cover, 1.0, 0.0, 1.0), 0.0, 1.0) * cover;
     if (d <= 0.0 || !detail)                     // (the detail below only takes away)
@@ -174,7 +181,7 @@ void main()
         float od = 0.0;
         bool far = tHere > 8000.0;
         int lightSteps = far ? 2 : int(L.view.w);
-        float ls = gThick * (far ? 0.15 : 0.06), grow = far ? 2.5 : 1.6;
+        float ls = gThick * (far ? 0.1 : 0.045), grow = far ? 2.2 : 1.5;
         vec3 lp = p;
         for (int k = 0; k < lightSteps; ++k) {
             lp += sunL * ls;
@@ -199,11 +206,18 @@ void main()
         // The sky's light: the sky's colour from above (lighter at the tops), less and warmer from below (the ground
         // lit by it), dimmed by the cloud over the point (the sun's way through it stands in for up: dark storm bases).
         vec3 skyTop = L.ambient.rgb * 1.15, skyLow = L.ambient.rgb * vec3(0.66, 0.62, 0.58);
-        vec3 sky = mix(skyLow, skyTop, smoothstep(0.0, 0.8, h)) * mix(0.4, 1.0, exp(-od * 0.3));
+        // (Dimmed by the cloud towards the sun only over a short way - from far off, the cloud's shadows lie through
+        // it as long streaks all one way.)
+        vec3 sky = mix(skyLow * mix(1.0, 0.75, L.ambient.w), skyTop, smoothstep(0.0, 0.8, h)) * mix(0.4, 1.0, exp(-od * 0.3));
         // (The game's colour - its puffs as it shows them, fog and all - wholly in the sky's light, half in the sun's:
         // a storm takes the game's colour, sunlit tops stay bright.)
         vec3 S = (sunColour * sun * powder * 1.5 * mix(L.tint.rgb, vec3(dot(L.tint.rgb, vec3(0.3, 0.59, 0.11))), 0.5) +
                   sky * L.tint.rgb) * L.tint.w;
+        // Contrast (RVK_CloudShade): how far from the cloud's middle light (its colour as the game shows it) a part
+        // is, made more - shaded parts darker, lit parts lighter - its hue kept.
+        const vec3 luma = vec3(0.3, 0.59, 0.11);
+        float middle = max(dot(L.tint.rgb, luma) * L.tint.w, 1e-3);
+        S *= clamp(pow(max(dot(S, luma) / middle, 1e-3), L.horizon.y - 1.0), 0.15, 3.0);
         float stepT = exp(-d * sigma * dt);
         light += transmit * (1.0 - stepT) * S;
         depthSum += transmit * (1.0 - stepT) * tHere;

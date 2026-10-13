@@ -1173,7 +1173,7 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
     VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     color.imageView = m_cloudWeather->m_view;
     color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;   // (cleared: the pipeline blends over - its alpha is the base)
     color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
     ri.renderArea = {{0, 0}, {kWeatherSize, kWeatherSize}};
@@ -1286,6 +1286,7 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     }
     // Towards the horizon the clouds become the fog's colour as far as the game's are fogged (a little at least).
     lf.horizon[0] = std::clamp(0.25f + 0.75f * m_cloudFogged, 0.0f, 1.0f);
+    lf.horizon[1] = std::clamp(m_cloudParams.shade, 0.25f, 4.0f);
     std::memcpy(lf.tint, m_cloudTint, 12);
     const float storm = std::clamp(m_rain, 0.0f, 1.0f);
     lf.tint[3] = m_cloudParams.brightness * (1.0f - 0.4f * storm);

@@ -573,6 +573,7 @@ public:
         bool layer = true;                       // RVK_CloudLayer: a cloud layer over the sky (else each puff a volume)
         float cover = 0.0f;                      // RVK_CloudCover: the layer's coverage, more (+) or less (-)
         float height = 900.0f;                   // RVK_CloudHeight: the layer's base above the eye's ground (world)
+        float shade = 1.6f;                      // RVK_CloudShade: contrast (light and shade; 1 = as lit)
     };
     void SetCloudParams(const CloudParams& params);
     void SmokeSourceFrame(uint64_t key, const SmokeSource& source);

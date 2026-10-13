@@ -1435,6 +1435,7 @@ float g_cloudCover = 0.0f;        // --cloud-cover X: RVK_CloudCover
 float g_sunDir[3] = {}, g_sunColour[3] = {};   // --sun-dir X Y Z, --sun-colour R G B: the water scenes' sun
 bool g_sunDirSet = false, g_sunColourSet = false;
 float g_cloudThick = 1.0f;        // --cloud-thick X: RVK_CloudThick
+float g_cloudShade = 1.6f;        // --cloud-shade X: RVK_CloudShade
 bool g_cloudLayer = true;         // --cloud-puffs: RVK_CloudLayer off (a volume per puff)
 bool g_cloudsHalf = true;         // --clouds-full: RVK_CloudHalf off        // --clouds-game: ... drawn as the game draws them (RVK_CloudsOn off)
 bool g_fixedClock = false;        // --fixed-clock MS: the renderer's clock steps MS a frame (no sleeping: benchmarks)
@@ -3001,6 +3002,7 @@ int main(int argc, char** argv)
         else if (a == "--sun-colour" && i + 3 < argc) { for (float& x : g_sunColour) x = float(std::atof(argv[++i])); g_sunColourSet = true; }
         else if (a == "--cloud-cover" && i + 1 < argc) g_cloudCover = float(std::atof(argv[++i]));
         else if (a == "--cloud-thick" && i + 1 < argc) g_cloudThick = float(std::atof(argv[++i]));
+        else if (a == "--cloud-shade" && i + 1 < argc) g_cloudShade = float(std::atof(argv[++i]));
         else if (a == "--fixed-clock" && i + 1 < argc) { g_fixedClock = true; Device::SetFixedClock(std::atof(argv[++i]) * 1e-3); }
         else if (a == "--cache-test" && i + 1 < argc) { cacheTest = std::atoi(argv[++i]); shadowTest = shadows = true; }
         else if (a == "--dump" && i + 1 < argc) dump = argv[++i];
@@ -3209,6 +3211,7 @@ int main(int argc, char** argv)
         clouds.layer = g_cloudLayer;
         clouds.cover = g_cloudCover;
         clouds.density = g_cloudThick;
+        clouds.shade = g_cloudShade;
         dev.SetCloudParams(clouds);
     }
     if (g_smoke) {
