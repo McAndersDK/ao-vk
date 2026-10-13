@@ -8,6 +8,19 @@
 layout(set = 0, binding = 0) uniform sampler2D depthTex;
 layout(set = 0, binding = 1) uniform sampler2DArrayShadow shadowMap;
 layout(set = 0, binding = 2) uniform sampler2D cloudShadow;   // the clouds' (rvk clouds.cpp; FL.clouds: where, if any)
+layout(set = 0, binding = 3) uniform sampler2D terrainSun;    // the terrain's shade from a low sun (rvk terrain_sun.cpp)
+
+// At a point of the air: 1 in the sun, 0 under the terrain hiding a low sun (FL.terrainSun: where, its weight).
+float TerrainSunAt(vec3 q)
+{
+    if ((floatBitsToUint(FL.terrainSun.w) & 0xFFFFFu) == 0u || FL.terrainSun2.y <= 0.0)
+        return 1.0;
+    vec2 uv = (q.xz - FL.terrainSun.xy) * FL.terrainSun.z;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
+        return 1.0;
+    float need = textureLod(terrainSun, uv, 0.0).r;
+    return mix(1.0, smoothstep(need - 1.0, need + 3.0, q.y), FL.terrainSun2.y);
+}
 layout(push_constant) uniform Push {
     mat4 invViewProj;   // the world camera's clip -> world (raw D3DMATRIX memory)
     vec4 eye;           // camera position; w = longest ray (world units)
@@ -75,7 +88,7 @@ void main()
             // the sky leave it soon (the sky isn't washed out), air near the ground - where shadows fall - keeps it.
             float density = exp(-max(q.y - (P.eye.y - 2.0), 0.0) / kHazeHeight);
             float w = (2.0 * u) * exp(-kExtinction * t) * density;
-            lit += mix(1.0, SunVisible(t), casterFade) * CloudShadowMap(q) * w;
+            lit += mix(1.0, SunVisible(t), casterFade) * CloudShadowMap(q) * TerrainSunAt(q) * w;   // (and the terrain's)
             open += w;
         }
         // Shafts are contrast: a ray partly in shadow is darkened by a power of its lit fraction, a fully lit one

@@ -268,6 +268,11 @@ void main()
         vec3 q = axis - normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0)) * 0.05;
         shade = (1.0 - (1.0 - SunShadowCasters(q)) * FL.shadowParams.y) * (1.0 - 0.5 * (1.0 - CloudShadowMap(q)));
     }
+    // The terrain's shade from a low sun, as on the ground (ffp FlatShade: the darker of it and the shadows, at the
+    // shadows' own strength) - the eye's place (grass is drawn near it). Brighter than the game's ground grass under
+    // the mountains, ours stood out until the game's took over further off (user, 2026-10-13).
+    float terrainLit = mix(1.0, FL.terrainSun2.x, FL.terrainSun2.y);
+    shade = min(shade, 1.0 - (1.0 - terrainLit) * FL.terrainSun2.z);
     vec3 groundN = normalize(vec3(up.x * 0.5, 1.0, up.z * 0.5));
     vec3 sun = GF.sunColour.rgb * max(dot(groundN, -normalize(GF.sunDir.xyz + vec3(0.0, -1e-6, 0.0))), 0.0);
     // By night the moon's light (as on the ground: FL.moon), the map then its - its shadow takes only the moon's.
