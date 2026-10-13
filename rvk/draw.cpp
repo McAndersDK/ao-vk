@@ -2526,7 +2526,7 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     c.flags[2] = m_rs[d3d::RS_FOGTABLEMODE];
     // The sky's scenery (mesh ids: the ships over the cities, kilometres out): hazed as the far sky - exponentially, in
     // the fog's colour, never wholly (the ground's linear fog made them flat fog-coloured shapes; none at all left
-    // them hard and dark against a hazy sky): ~45% of their colour left at 2 km, 20% at 4 km, a trace at 9 km.
+    // them hard and dark against a hazy sky): ~37% of their colour left at 2 km, 14% at 4 km, a trace at 9 km.
     if (skyScenery && m_rs[d3d::RS_FOGENABLE]) {
         c.flags[1] = 1;                          // D3DFOG_EXP
         c.flags[2] = 0;
