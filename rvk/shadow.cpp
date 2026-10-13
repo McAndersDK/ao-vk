@@ -604,7 +604,12 @@ uint64_t Device::CasterKey(uint32_t primitive, uint32_t fvf, uint32_t stride, co
         const int32_t facing[2] = {int32_t(std::lround(heading * (180.0f / 3.14159265f) / 5.0f)), det < 0.0f ? 1 : 0};
         key = HashBytes(facing, sizeof(facing), key ^ 0xFACEull);
     }
-    return HashBytes(&texture, sizeof(texture), key ^ uint64_t(texOffset + 1));
+    // The cut-out texture by its kind (size, format), not which one: a flip-book (an animated glow on a character's gear
+    // changes its texture every ~0.3 s) is one caster, not one per frame of it - each was remembered, then forgotten
+    // as unseen in view: a shadow blinking steadily (user, 2026-10-13).
+    const uint32_t kind[3] = {texture ? texture->m_width : 0u, texture ? texture->m_height : 0u,
+                              texture ? uint32_t(texture->m_format) : ~0u};
+    return HashBytes(kind, sizeof(kind), key ^ uint64_t(texOffset + 1));
 }
 
 void Device::CacheCaster(uint64_t key, const ShadowCaster& c, const void* vertices, const uint16_t* indices)
