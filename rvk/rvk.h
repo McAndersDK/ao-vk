@@ -1050,6 +1050,11 @@ private:
     // (Diagnostics, a frame's: streaks begun, and casters refused by the cache, by why.)
     uint32_t m_cacheStreakStarts = 0, m_cacheRefusedFar = 0, m_cacheRefusedFull = 0, m_cacheRefusedNoVertices = 0;
     uint32_t m_cacheRefusedMoving = 0;
+    // Where characters stand (their bodies' draws, RCATMesh_t): this frame's and the last's. Their gear is drawn as
+    // plain meshes (RTriMesh_t, no owner) following their bones - small casters inside a character's space aren't
+    // remembered (an idle character's gear, re-keyed as it shifts, blinked in the remembered shadows - user).
+    std::vector<std::array<float, 3>> m_characterSpots, m_characterSpotsPrev;
+    bool NearCharacter(const float centre[3]) const;
     float m_cacheRefusedFarD = 0.0f;
     uint32_t m_cacheKeptSolid = 0;               // (since start)
     uint32_t m_cacheTraceLines = 0;              // (the churn trace's lines so far: 300 at most)

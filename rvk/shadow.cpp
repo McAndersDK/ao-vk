@@ -476,6 +476,8 @@ void Device::RecordShadowCaster(uint32_t primitive, uint32_t fvf, uint32_t strid
     c.world = m_world;
     c.generation = m_ringGeneration;
     ShadowCutout(fvf, &c.texture, &c.texOffset, &c.alphaRef);
+    if (std::strncmp(m_drawVisualName, "RCATMesh", 8) == 0 && m_characterSpots.size() < 256)
+        m_characterSpots.push_back({m_world.m[3][0], m_world.m[3][1], m_world.m[3][2]});   // (a character's body)
     uint64_t key = CasterKey(primitive, fvf, stride, vertices, vertexCount, indices, indexCount, c.texture, c.texOffset,
                              c.boundsMin, c.boundsMax);
     c.key = key;
@@ -522,6 +524,21 @@ void Device::RecordShadowCaster(uint32_t primitive, uint32_t fvf, uint32_t strid
     if (streak.moved || c.owner != 0) {
         ++m_cacheRefusedMoving;
         return;
+    }
+    {
+        // (Small, inside a character's space: its gear.)
+        float centre[3], size = 0.0f;
+        for (int j = 0; j < 3; ++j) size = std::max(size, c.boundsMax[j] - c.boundsMin[j]);
+        const float mc[3] = {0.5f * (c.boundsMin[0] + c.boundsMax[0]), 0.5f * (c.boundsMin[1] + c.boundsMax[1]),
+                             0.5f * (c.boundsMin[2] + c.boundsMax[2])};
+        for (int j = 0; j < 3; ++j)
+            centre[j] = mc[0] * m_world.m[0][j] + mc[1] * m_world.m[1][j] + mc[2] * m_world.m[2][j] + m_world.m[3][j];
+        const float scale = std::sqrt(m_world.m[0][0] * m_world.m[0][0] + m_world.m[0][1] * m_world.m[0][1] +
+                                      m_world.m[0][2] * m_world.m[0][2]);
+        if (size * scale < 3.0f && NearCharacter(centre)) {
+            ++m_cacheRefusedMoving;
+            return;
+        }
     }
     if (!vertices) {
         ++m_cacheRefusedNoVertices;
@@ -701,8 +718,21 @@ void Device::ForgetCasterTexture(Texture* texture)
 
 // End of frame: drop streaks that were broken, and cached casters that are gone - ones in the middle of the view
 // that the game didn't draw (removed, or replaced by another level of detail) - or that are far away.
+bool Device::NearCharacter(const float c[3]) const
+{
+    for (const auto* spots : {&m_characterSpots, &m_characterSpotsPrev})
+        for (const auto& s : *spots) {
+            const float dx = c[0] - s[0], dz = c[2] - s[2], dy = c[1] - s[1];
+            if (dx * dx + dz * dz < 1.2f * 1.2f && dy > -0.5f && dy < 2.5f)
+                return true;
+        }
+    return false;
+}
+
 void Device::UpdateCasterCache()
 {
+    m_characterSpotsPrev.swap(m_characterSpots);   // (this frame's the last's; the next frame's anew)
+    m_characterSpots.clear();
     if (m_frameNumber % 300 == 0) {
         Log("caster cache: %zu remembered, %zu streaks; this frame %u streaks started, refused %u far (last %.0f from the "
             "eye (%.1f %.1f %.1f)), %u full, %u without vertices, %u moving or a character's; %u kept "
