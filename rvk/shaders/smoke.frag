@@ -86,7 +86,7 @@ void main()
     float d2 = texelFetch(sceneDepth, min(at + ivec2(0, 1), last), 0).r, d3 = texelFetch(sceneDepth, min(at + 1, last), 0).r;
     bool farthest = ((int(gl_FragCoord.x) + int(gl_FragCoord.y)) & 1) != 0;
     float sd = farthest ? max(max(d0, d1), max(d2, d3)) : min(min(d0, d1), min(d2, d3));
-    outDepth = vec4(sd < 1.0 ? SmokeViewZ(sd) : 60000.0, 0.0, 0.0, 0.0);
+    outDepth = vec4(sd < 1.0 ? SmokeViewZ(sd) : 60000.0, 0.0, 0.0, 1.0);   // (alpha 1: blended over = written)
 #else
     float sd = texelFetch(sceneDepth, ivec2(gl_FragCoord.xy), 0).r;
 #endif

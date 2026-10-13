@@ -413,7 +413,8 @@ bool Device::CreateSmokeResources(std::string* error)
         ci.pCode = code;
         return Check(vkCreateShaderModule(m_device, &ci, nullptr, out), "smoke module", error);
     };
-    // A pipeline drawing premultiplied over its targets (the attachments `blended`; the others written as they are).
+    // A pipeline drawing premultiplied over its targets (the first `blended`; the others written as they are - a
+    // mix needs the independent blending feature).
     auto pipeline = [&](const uint32_t* vertCode, size_t vertSize, const uint32_t* fragCode, size_t fragSize,
                         VkPipelineLayout layout, const VkFormat* formats, uint32_t count, uint32_t blended,
                         VkPipeline* out) {
@@ -480,12 +481,13 @@ bool Device::CreateSmokeResources(std::string* error)
     const VkFormat sceneFormats[5] = {GetFormatInfo(Format::RGBA16F).vk, GetFormatInfo(Format::RGBA16F).vk,
                                       GetFormatInfo(Format::RGBA8).vk, GetFormatInfo(Format::RGBA16F).vk,
                                       GetFormatInfo(Format::A8R8G8B8).vk};
-    // The half-size target: the smoke (premultiplied over) and the view depth each pixel marched to (written).
+    // The half-size target: the smoke (premultiplied over) and the view depth each pixel marched to (blended alike -
+    // no independent blending - with alpha 1: written).
     const VkFormat halfFormats[2] = {GetFormatInfo(Format::RGBA16F).vk, GetFormatInfo(Format::RG16F).vk};
     return pipeline(kSmokeVertSpirv, sizeof(kSmokeVertSpirv), kSmokeFragSpirv, sizeof(kSmokeFragSpirv), m_smokeLayout,
                     sceneFormats, 5, 5, &m_smokePipeline) &&
            pipeline(kSmokeVertSpirv, sizeof(kSmokeVertSpirv), kSmokeHalfFragSpirv, sizeof(kSmokeHalfFragSpirv),
-                    m_smokeLayout, halfFormats, 2, 1, &m_smokeHalfPipeline) &&
+                    m_smokeLayout, halfFormats, 2, 2, &m_smokeHalfPipeline) &&
            pipeline(kFullscreenVertSpirv, sizeof(kFullscreenVertSpirv), kSmokeUpFragSpirv, sizeof(kSmokeUpFragSpirv),
                     m_smokeUpLayout, sceneFormats, 5, 5, &m_smokeUpPipeline);
 }
@@ -683,22 +685,43 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
     uint32_t groups = 0;
     EnsureRingSpace(live.size() * (sizeof(SmokeBodies) + 256) + 1024);
     Frame& f = m_frames[m_frameIndex];
-    for (auto& [dist, vp] : live) {
+    // Which volumes step this frame: warming up ones every frame; of the others those due, the most overdue first, as
+    // many as keep them all stepping every kSimStep or so - each frame about the same work, not two volumes' steps in
+    // one frame and none in the next (a stutter) - and any a period late.
+    std::vector<uint8_t> stepNow(live.size()), warmingNow(live.size());
+    {
+        std::vector<std::pair<float, size_t>> due;
+        size_t stepping = 0;
+        for (size_t i = 0; i < live.size(); ++i) {
+            SmokeVolume& v = *live[i].second;
+            warmingNow[i] = v.age < kWarmUp;
+            v.age += dt;
+            v.simWait += dt;
+            const float period = warmingNow[i] ? 0.0f : live[i].first > kSimFar ? 2.0f * kSimStep : kSimStep;
+            if (warmingNow[i] || !m_smokeNoiseMade || v.simWait >= 2.0f * period) {
+                stepNow[i] = 1;
+                ++stepping;
+            } else if (v.simWait + 0.5f * dt >= period) {
+                due.emplace_back(v.simWait / period, i);
+            }
+        }
+        std::sort(due.begin(), due.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+        const size_t budget = std::max<size_t>(1, size_t(std::ceil(float(live.size()) * dt / kSimStep)));
+        for (const auto& [late, i] : due)
+            if (stepping < budget) { stepNow[i] = 1; ++stepping; }
+    }
+    for (size_t li = 0; li < live.size(); ++li) {
+        auto& [dist, vp] = live[li];
         SmokeVolume& v = *vp;
         const SmokeSource& s = v.source;
         const uint32_t n = v.n;
         groups = n / 4;
-        // Stepped when it is due (warming up: every frame); the steps' dt what has passed since the last.
-        const bool warming = v.age < kWarmUp;
-        v.age += dt;
-        v.simWait += dt;
-        const float period = warming ? 0.0f : dist > kSimFar ? 2.0f * kSimStep : kSimStep;
-        if (v.simWait + 0.5f * dt < period && m_smokeNoiseMade)
+        if (!stepNow[li])
             continue;
-        const float simDt = std::min(v.simWait, 1.0f / 30.0f);
+        const bool warming = warmingNow[li];
+        const float simDt = std::min(v.simWait, 1.0f / 30.0f);   // (the step's dt: what has passed since the last)
         v.lastStep = simDt;
-        // (Warmed up: volumes made together - a zone's - are spread over the frames, not all stepped in the same one.)
-        v.simWait = warming && v.age >= kWarmUp ? -kSimStep * float(v.key % 5u) / 5.0f : 0.0f;
+        v.simWait = 0.0f;
         const uint32_t slot = uint32_t(&v - m_smokeVolumes.data());
         vkCmdFillBuffer(cmd, m_smokeBounds, slot * kBoundsSlot, 16, 0xFFFFFFFFu);   // (empty: lowest > highest)
         vkCmdFillBuffer(cmd, m_smokeBounds, slot * kBoundsSlot + 16, 16, 0u);
@@ -773,6 +796,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         const uint32_t c = v.cur, o = c ^ 1u;
         // Bindings: 0 velIn, 1 densIn (sampled); 2 velOut, 3 densOut, 4 curl, 5 pIn, 6 pOut, 7 div, 8 velRead, 9 look;
         // 10 the curl image sampled (MacCormack's forward step); 11 the characters; 12 the wisps' noise.
+        VkImageView forwardView = m_smokeCurl.view;   // binding 10: the curl image (stage 8); stage 7 the last state
         auto dispatch = [&](int stage, const SmokeImage& velIn, const SmokeImage& densIn, const SmokeImage& velOut,
                             const SmokeImage& densOut, const SmokeImage& pIn, const SmokeImage& pOut,
                             const SmokeImage& velRead, float e3) {
@@ -782,7 +806,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
                 {VK_NULL_HANDLE, m_smokeCurl.view, VK_IMAGE_LAYOUT_GENERAL}, {VK_NULL_HANDLE, pIn.view, VK_IMAGE_LAYOUT_GENERAL},
                 {VK_NULL_HANDLE, pOut.view, VK_IMAGE_LAYOUT_GENERAL},   {VK_NULL_HANDLE, m_smokeDiv.view, VK_IMAGE_LAYOUT_GENERAL},
                 {VK_NULL_HANDLE, velRead.view, VK_IMAGE_LAYOUT_GENERAL}, {VK_NULL_HANDLE, v.look.view, VK_IMAGE_LAYOUT_GENERAL},
-                {m_smokeSampler, m_smokeCurl.view, VK_IMAGE_LAYOUT_GENERAL}, {}, {VK_NULL_HANDLE, m_smokeNoise.view, VK_IMAGE_LAYOUT_GENERAL},
+                {m_smokeSampler, forwardView, VK_IMAGE_LAYOUT_GENERAL}, {}, {VK_NULL_HANDLE, m_smokeNoise.view, VK_IMAGE_LAYOUT_GENERAL},
                 {}, {VK_NULL_HANDLE, v.flow.view, VK_IMAGE_LAYOUT_GENERAL},
             };
             VkDescriptorBufferInfo boundsInfo{m_smokeBounds, 0, VK_WHOLE_SIZE};
@@ -872,7 +896,9 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         dispatch(6, v.vel[o], v.dens[c], v.vel[c], v.dens[o], p0, pr[0], v.vel[c], 0.0f);       // density forward -> curl
         dispatch(8, v.vel[o], v.dens[c], v.vel[c], v.dens[o], p0, pr[0], v.vel[c], 0.0f);       // ... and back -> div
         dispatch(9, v.vel[o], v.dens[c], v.vel[c], v.dens[o], p0, pr[0], v.vel[c], 0.0f);       // corrected -> dens[o]
+        forwardView = v.dens[c].view;            // (the state before this step, for the look's blend from it)
         dispatch(7, v.vel[o], v.dens[o], v.vel[c], v.dens[c], p0, pr[0], v.vel[c], 0.0f);       // sunlight -> look
+        forwardView = m_smokeCurl.view;
         groups = (n / 2 + 3) / 4;
         dispatch(11, v.vel[o], v.dens[o], v.vel[c], v.dens[c], p0, pr[0], v.vel[c], 0.0f);      // vel[o] -> flow
         v.cur = o;

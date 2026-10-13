@@ -26,8 +26,10 @@ layout(set = 0, binding = 5, r32f) uniform readonly image3D pIn;
 layout(set = 0, binding = 6, r32f) uniform writeonly image3D pOut;
 layout(set = 0, binding = 7, r32f) uniform image3D divImg;
 layout(set = 0, binding = 8, rgba16f) uniform readonly image3D velRead;   // exact reads (neighbours)
-layout(set = 0, binding = 9, rgba16f) uniform image3D lookImg;   // stage 7: R density, G sunlight; B A the last step's
-layout(set = 0, binding = 10) uniform sampler3D forwardIn;       // stage 8: the forward step (the curl image)
+layout(set = 0, binding = 9, rgba16f) uniform writeonly image3D lookImg;   // stage 7: R density, G sunlight; B A the
+                                                                           // last step's
+layout(set = 0, binding = 10) uniform sampler3D forwardIn;       // stage 8: the forward step (the curl image); stage 7:
+                                                                 // the density before this step
 layout(set = 0, binding = 12, r16f) uniform writeonly image3D noiseOut;   // stage 10
 layout(set = 0, binding = 14, rgba8_snorm) uniform writeonly image3D flowOut;   // stage 11 (half the cells a side)
 // The characters in the box (rvk/smoke.cpp SmokeBodies): upright capsules the smoke moves with and flows round.
@@ -246,10 +248,12 @@ void main()
                 break;
             optical += texture(densIn, p).r;
         }
-        // (With the last step's, which the drawing blends from: the simulation steps less often than frames.)
-        vec2 last = imageLoad(lookImg, id).rg;
+        // With the density before this step, which the drawing blends from (the simulation steps less often than
+        // frames) - read where this cell was then, as the box may have moved with its source since (P.e).
         float now = texelFetch(densIn, id, 0).r;
-        imageStore(lookImg, id, vec4(now, exp(-optical * P.f.w * stepLen * size), last));
+        float sunlit = exp(-optical * P.f.w * stepLen * size);
+        vec2 last = vec2(texture(forwardIn, uvw + P.e.xyz).r, sunlit);
+        imageStore(lookImg, id, vec4(now, sunlit, last));
         // The bounds (the drawing skips smoke thinner than this): the group's, then the volume's.
         if (max(now, last.x) >= 1e-4) {
             uvec3 u = uvec3(id);
