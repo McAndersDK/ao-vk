@@ -125,6 +125,7 @@ public:
     void SetLeafLight(float s);
     void SetNightGlow(float s);
     void SetMoonLight(float s);
+    void SetNightDark(float s);
     void SetContactShadows(float s);
     void SetAo(float strength, float radius);
     void SetGi(float strength, float radius);

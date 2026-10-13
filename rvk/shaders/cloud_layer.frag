@@ -172,7 +172,7 @@ vec4 Deck(vec3 eye, vec3 dir, float jitter)
     float dt = (t1 - t0) / float(kSteps);
     float sigma = L.shape.w * 0.9, transmit = 1.0;
     vec3 sunL = normalize(FL.sunTrue.xyz + vec3(0.0, 1e-6, 0.0));   // (the sun's: below the horizon too)
-    vec3 sun = SunLight(sunL) * 0.35 + Afterglow(sunL) * 0.45;   // (its underside: the afterglow on it)
+    vec3 sun = SunLight(sunL) * 0.35 + Afterglow(sunL) * 0.45 + MoonLight() * 0.35;   // (its underside: the afterglow)
     vec3 light = vec3(0.0);
     for (int i = 0; i < kSteps && transmit > 0.02; ++i) {
         vec3 p = eye + dir * (t0 + (float(i) + jitter) * dt);
@@ -181,7 +181,8 @@ vec4 Deck(vec3 eye, vec3 dir, float jitter)
             continue;
         float h = (float(i) + 0.5) / float(kSteps);
         // (Seen from below: mostly its underside - darker than the layer's sunlit tops; thick parts darker still.)
-        vec3 S = (L.ambient.rgb * mix(0.38, 0.8, h) * mix(0.55, 1.0, exp(-d * 2.0)) * NightSky() * (1.0 + Night()) + sun) * L.tint.rgb * L.tint.w;
+        vec3 S = (L.ambient.rgb * mix(0.38, 0.8, h) * mix(0.55, 1.0, exp(-d * 2.0)) * NightSky() * (1.0 + Night()) *
+                  mix(1.0, 0.7, MoonShare()) + sun) * L.tint.rgb * L.tint.w;
         const vec3 luma = vec3(0.3, 0.59, 0.11);   // (contrast, as the layer: RVK_CloudShade)
         S *= clamp(pow(max(dot(S, luma) / max(dot(L.tint.rgb, luma) * L.tint.w, 1e-3), 1e-3), L.horizon.y - 1.0), 0.15, 3.0);
         float st = exp(-d * sigma * dt);
@@ -288,12 +289,19 @@ void main()
     // Steps growing with the distance (short near the eye: the near clouds' detail; long far off), at most L.view.z.
     int steps = int(L.view.z);
     vec3 sunL = normalize(FL.sunTrue.xyz + vec3(0.0, 1e-6, 0.0));   // (the sun's: below the horizon too)
-    float cosT = dot(dir, sunL);
     vec3 sunColour = SunLight(sunL);
     vec3 glow = Afterglow(sunL);
+    // By night the moon in the sun's place (when its light is the greater): the march towards it, its forward lobe.
+    vec3 moonColour = MoonLight();
+    const vec3 kLuma = vec3(0.3, 0.59, 0.11);
+    if (dot(moonColour, kLuma) > dot(sunColour, kLuma)) {
+        sunL = MoonDir();
+        sunColour = moonColour;
+    }
+    float cosT = dot(dir, sunL);
     // (By night the heaps' sky light twice the sheets': cloud dimmed inside, they came out greyer and darker than
-    // the game's sheets round them - user.)
-    float nightSky = NightSky() * (1.0 + Night());
+    // the game's sheets round them - user. Under the moon less: the side away from it darker.)
+    float nightSky = NightSky() * (1.0 + Night()) * mix(1.0, 0.7, MoonShare());
     float sigma = L.shape.w;
     float transmit = 1.0;
     vec3 light = vec3(0.0);

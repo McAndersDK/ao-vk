@@ -858,6 +858,11 @@ void ThreadedDevice::SetMoonLight(float s)
     Enqueue([this, s](const uint8_t*) { m_device.SetMoonLight(s); });
 }
 
+void ThreadedDevice::SetNightDark(float s)
+{
+    Enqueue([this, s](const uint8_t*) { m_device.SetNightDark(s); });
+}
+
 void ThreadedDevice::SetContactShadows(float s)
 {
     Enqueue([this, s](const uint8_t*) { m_device.SetContactShadows(s); });

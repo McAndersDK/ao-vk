@@ -427,7 +427,7 @@ float LeafMask()
 
 // The game's cloud sheets (MAT_CLOUDSHEET: its flat sky sheets, drawn behind the cloud layer) lit as the layer lights
 // its clouds - the whitened game colour, the sky's light (raised by night), the sun through a thin sheet (bright and
-// silvery towards it, thick parts darker), the sunset's colours and afterglow - and hazed as the layer by the air
+// silvery towards it, thick parts darker; by night the moon's the same), the sunset's colours and afterglow - and hazed as the layer by the air
 // (the game's fog colour at the horizon, paler above). tex: the sheet's texture (alpha: its shape; colour: shading).
 vec3 CloudSheet(vec4 tex)
 {
@@ -439,7 +439,9 @@ vec3 CloudSheet(vec4 tex)
     float phase = min((1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * dot(dir, sunL), 1.5), 8.0);
     vec3 tint = FL.cloudTint.rgb;
     vec3 sun = SunLight(sunL) * (0.3 + 0.2 * phase) * (1.0 - 0.45 * thick) * mix(tint, vec3(dot(tint, luma)), 0.5);
-    vec3 sky = FL.cloudSky.rgb * mix(1.0, 0.72, thick) * NightSky() * tint;
+    float moonPhase = min((1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * dot(dir, MoonDir()), 1.5), 8.0);
+    sun += MoonLight() * (0.3 + 0.2 * moonPhase) * (1.0 - 0.45 * thick) * mix(tint, vec3(dot(tint, luma)), 0.5);
+    vec3 sky = FL.cloudSky.rgb * mix(1.0, 0.72, thick) * NightSky() * mix(1.0, 0.7, MoonShare()) * tint;
     vec3 S = (sun + sky + Afterglow(sunL) * 0.6 * tint) * FL.cloudTint.w * mix(0.8, 1.05, dot(tex.rgb, luma));
     float low = HorizonBand(dir, FL.cloudAir.w);
     return mix(S, AirColour(FL.cloudAir.rgb, low), max(0.25, low));

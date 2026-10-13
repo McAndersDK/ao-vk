@@ -48,3 +48,22 @@ vec3 AirColour(vec3 haze, float low)
     float grey = dot(haze, vec3(0.3, 0.59, 0.11));
     return mix(mix(vec3(grey), haze, 0.35) * 1.25, haze, low);
 }
+
+// The moon's light on the clouds (rvk night.cpp: FL.moon, at night FL.sunDir its direction): cool and dim, a light
+// the clouds take as they take the sun's - brightest towards it, silver edges looking at it.
+vec3 MoonLight()
+{
+    return FL.moon.rgb * 1.2;
+}
+
+vec3 MoonDir()
+{
+    return -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
+}
+
+// How much the moon lights (0 none .. 1 a high moon at night): the sky's light on the clouds eased down by it, so
+// those away from the moon are darker than those it lights.
+float MoonShare()
+{
+    return clamp(dot(FL.moon.rgb, vec3(0.3, 0.59, 0.11)) / 0.25, 0.0, 1.0);
+}

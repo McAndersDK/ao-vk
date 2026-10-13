@@ -61,6 +61,14 @@ void main()
         }
     }
     c = max((c + Volumetric() + glow) * P.params.y, vec3(0.0));
+    // Night (RVK_NightDark x how much it is night): darker - the darks and middle tones down, the sky more; what is
+    // bright kept (lamps, windows, the moon, stars, moonlit cloud edges), so it stands out of the dark.
+    float nightDark = P.grade2.x * P.grade2.w;
+    if (nightDark > 0.0) {
+        float bright = smoothstep(0.35, 0.9, dot(c, vec3(0.3, 0.59, 0.11)));
+        float down = exp2(-0.7 * nightDark) * mix(1.0, 0.8, smoothstep(0.7, 1.0, far) * min(nightDark, 1.0));
+        c *= mix(down, 1.0, bright);
+    }
     float m = max(c.r, max(c.g, c.b)), k = P.params.x;
     if (m > k) {
         float room = 1.0 - k;

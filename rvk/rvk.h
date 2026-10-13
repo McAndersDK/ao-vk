@@ -426,6 +426,8 @@ public:
     void SetNightGlow(float s) { m_nightGlow = s; m_frameLightsDirty = true; m_constantsDirty = true; }
     // The moon's light at night (night.cpp; 0 = none, 1 = as planned).
     void SetMoonLight(float s) { m_moonLight = s; m_frameLightsDirty = true; m_constantsDirty = true; }
+    // How dark nights get (tonemap.frag; 0 = as the game, 1 = moonlit blue, 2 = dark).
+    void SetNightDark(float s) { m_nightDark = s; }
     void SetContactShadows(float s) { m_contact = s; m_constantsDirty = true; }
     void SetEffectGlow(float gain) { if (m_effectGlow != gain) { m_effectGlow = gain; m_constantsDirty = true; } }
     float EffectGlow() const { return m_effectGlow; }
@@ -954,6 +956,7 @@ private:
     // The moon (night.cpp, RVK_MoonLight): once the sun is down, a dim cool light from the moon on the land - the
     // shadow map drawn from it, the game's night light (from under the ground) turned to come from it.
     float m_moonLight = 1.0f;                    // RVK_MoonLight (0: none)
+    float m_nightDark = 1.0f;                    // RVK_NightDark (0: as the game)
     float m_moonSeenDir[3] = {}, m_moonSeenSize = 0.0f;   // this frame's biggest moon in the sky (towards it)
     uint64_t m_moonSeenFrame = ~0ull, m_skySeenFrame = ~0ull;
     float m_moonPos[3] = {0.0f, 1.0f, 0.0f};     // towards the moon (eased)
