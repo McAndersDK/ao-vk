@@ -14,8 +14,11 @@ vec3 Grade(vec3 c, float far)
     const vec3 kLuma = vec3(0.3, 0.59, 0.11);
     float warmth = P.grade.z * mix(1.0, -0.5, smoothstep(0.3, 1.0, far));
     c *= vec3(1.0 + 0.12 * warmth, 1.0 + 0.02 * warmth, 1.0 - 0.12 * warmth);
+    // By night (RVK_NightTint) colour fades and leans blue as eyes see in the dark - most in the darks, little in what
+    // is bright (lamps, windows keep their colour).
     float nightTint = P.grade2.x * P.grade2.y;
-    c = mix(c, dot(c, kLuma) * vec3(0.78, 0.9, 1.18), 0.6 * nightTint);
+    float darks = 1.0 - smoothstep(0.08, 0.45, dot(c, kLuma));
+    c = mix(c, dot(c, kLuma) * vec3(0.78, 0.9, 1.18), min(nightTint * mix(0.3, 1.2, darks), 1.0));
     vec3 s = sqrt(max(c, vec3(0.0)));
     s = (s - 0.5) * P.grade.y + 0.5;
     c = max(s, vec3(0.0)) * max(s, vec3(0.0));
@@ -65,7 +68,9 @@ void main()
     // bright kept (lamps, windows, the moon, stars, moonlit cloud edges), so it stands out of the dark.
     float nightDark = P.grade2.x * P.grade2.w;
     if (nightDark > 0.0) {
-        float bright = smoothstep(0.35, 0.9, dot(c, vec3(0.3, 0.59, 0.11)));
+        // (Nearer, from a lower brightness: lamp-lit ground keeps most of its light; the sky and clouds as tuned.)
+        float sky = smoothstep(0.7, 1.0, far);
+        float bright = smoothstep(mix(0.25, 0.35, sky), mix(0.8, 0.9, sky), dot(c, vec3(0.3, 0.59, 0.11)));
         float down = exp2(-0.7 * nightDark) * mix(1.0, 0.8, smoothstep(0.7, 1.0, far) * min(nightDark, 1.0));
         c *= mix(down, 1.0, bright);
     }
