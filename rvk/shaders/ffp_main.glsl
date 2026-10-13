@@ -242,9 +242,12 @@ float CloudShadow(vec3 posW)
     return mix(1.0, t, FL.clouds2.y * inside);
 }
 
+float gCasterVisibility = 1.0, gCloudVisibility = 1.0;   // SunVisibility's two parts: things' shadows, the clouds'
+
 float SunVisibility(vec3 posW, vec3 n)
 {
-    float v = SunVisibilityCasters(posW, n) * CloudShadow(posW);
+    gCloudVisibility = CloudShadow(posW);
+    float v = SunVisibilityCasters(posW, n);
     if (v > 0.0 && (C.flags.x & F_SHADOWCHEAP) == 0u) {
         bool hasN = dot(n, n) > 0.0;
         vec3 nn = hasN ? normalize(n) : n;
@@ -252,7 +255,17 @@ float SunVisibility(vec3 posW, vec3 n)
         if (!hasN || nl > 0.0)                   // (facing away: the light equation handles it, as above)
             v *= mix(1.0, GrassShadowVisibility(posW, nn, nl), kGrassShadowStrength);
     }
-    return v;
+    gCasterVisibility = v;
+    return v * gCloudVisibility;
+}
+
+// A cloud's shadow takes the sunlight, not the sky's: where a shadow darkens all of a surface's light (the ground's
+// lightmap holds the sun and the sky's light together; unlit surfaces), only about the sun's part of it goes - a cloud
+// over the sun had left the ground near black (user, 2026-10-13).
+const float kCloudSunShare = 0.5;
+float FlatShade()
+{
+    return (1.0 - (1.0 - gCasterVisibility) * FL.shadowParams.y) * (1.0 - kCloudSunShare * (1.0 - gCloudVisibility));
 }
 
 float SunVisibilityCasters(vec3 posW, vec3 n)
@@ -486,14 +499,15 @@ void main()
     }
 #endif
     // Shadow: lit draws scale the sunlight (per-pixel lighting), others darken their final colour.
-    float shade = 1.0, localScale = 1.0, texShade = 1.0;
+    float shade = 1.0, localScale = 1.0, texShade = 1.0, flatShade = 1.0;
     if ((C.flags.x & (F_SHADOW | F_SHADOWCOMP | F_SHADOWTEX)) != 0u) {
         gSunVisibility = SunVisibility(vPosW, vNormalW.xyz);
         gSunVisibilityValid = true;
         shade = 1.0 - (1.0 - gSunVisibility) * FL.shadowParams.y;
+        flatShade = FlatShade();                  // (all of the light: the clouds' only in part)
     }
     if ((C.flags.x & F_SHADOWCOMP) != 0u) {
-        localScale = 1.0 / max(shade, 0.05);
+        localScale = 1.0 / max(flatShade, 0.05);
         shade = 1.0;
     }
     // By night the map is the moon's (FL.moon.w): its shadow takes only the moon's light - the ground's lightmap and
@@ -503,7 +517,7 @@ void main()
         if (FL.moon.w > 0.5)
             moonShade = shade;
         else
-            texShade = shade;
+            texShade = flatShade;
         shade = 1.0;
     }
     bool shadeSun = (C.flags.x & (F_PERPIXEL | F_LIGHTING)) == (F_PERPIXEL | F_LIGHTING);
@@ -656,7 +670,7 @@ void main()
         if ((C.flags.x & F_HDR) == 0u) current.rgb = min(current.rgb, vec3(1.0));
     }
     if (!shadeSun)
-        current.rgb *= FL.moon.w > 0.5 ? mix(1.0, shade, 0.5) : shade;   // (by night the moon's: unlit, half of it)
+        current.rgb *= FL.moon.w > 0.5 ? mix(1.0, shade, 0.5) : flatShade;   // (by night the moon's: unlit, half of it)
     // Sunlight through leaves: where the sun is behind a leaf (seen from the camera), its light comes through tinted
     // by the leaf, most looking into the sun; other leaves' shadows still block it. Only textures with holes around
     // this point (their coarse mip's alpha) are leaves - not walls drawn the same way.

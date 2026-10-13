@@ -299,6 +299,7 @@ void main()
         sunColour = moonColour;
     }
     float cosT = dot(dir, sunL);
+    float day = 1.0 - Night();
     // (By night the heaps' sky light twice the sheets': cloud dimmed inside, they came out greyer and darker than
     // the game's sheets round them - user. Under the moon less: the side away from it darker.)
     float nightSky = NightSky() * (1.0 + Night()) * mix(1.0, 0.7, MoonShare());
@@ -341,6 +342,9 @@ void main()
             sun += aa * exp(-od * bb) * phase;
             aa *= 0.5; bb *= 0.4; cc *= 0.5;
         }
+        // By day the light bounced about deep inside (more orders, all ways): undersides and the side away from the sun
+        // not dark grey against a bright sky (user: lighter by day).
+        sun += 0.3 * exp(-od * 0.06) * day;
         // Powder: an edge facing the sun is darker than the inside it lights (light enters, doesn't come back out).
         float powder = 1.0 - 0.5 * exp(-d * sigma * gThick * 0.08);
         float h = Height(p);
@@ -349,7 +353,8 @@ void main()
         vec3 skyTop = L.ambient.rgb * 1.15, skyLow = L.ambient.rgb * vec3(0.66, 0.62, 0.58);
         // (Dimmed by the cloud towards the sun only over a short way - from far off, the cloud's shadows lie through
         // it as long streaks all one way.)
-        vec3 sky = mix(skyLow * mix(1.0, 0.75, L.ambient.w), skyTop, smoothstep(0.0, 0.8, h)) * mix(0.4, 1.0, exp(-od * 0.3));
+        vec3 sky = mix(skyLow * mix(1.0, 0.75, L.ambient.w), skyTop, smoothstep(0.0, 0.8, h)) *
+                   mix(mix(0.4, 0.6, day), 1.0, exp(-od * 0.3));
         sky += glow * (1.0 - smoothstep(0.0, 0.7, h)) * 0.9;   // (round sunset: the pink undersides)
         sky *= nightSky;
         // (The game's colour - its puffs as it shows them, fog and all - wholly in the sky's light, half in the sun's:

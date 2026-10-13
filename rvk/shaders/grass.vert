@@ -263,8 +263,11 @@ void main()
     if (FL.shadowParams.x > 0.5)
         // (Taken at the blade's axis a little towards the sun: the blades cast into the map too, and a blade
         // mustn't shadow itself - the map's copy of it faces the sun, this one the camera.)
-        shade = 1.0 - (1.0 - SunShadow(axis - normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0)) * 0.05)) *
-                FL.shadowParams.y;
+    {
+        // (The clouds' part takes only about the sun's share of the ground's light, as on the ground: ffp FlatShade.)
+        vec3 q = axis - normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0)) * 0.05;
+        shade = (1.0 - (1.0 - SunShadowCasters(q)) * FL.shadowParams.y) * (1.0 - 0.5 * (1.0 - CloudShadowMap(q)));
+    }
     vec3 groundN = normalize(vec3(up.x * 0.5, 1.0, up.z * 0.5));
     vec3 sun = GF.sunColour.rgb * max(dot(groundN, -normalize(GF.sunDir.xyz + vec3(0.0, -1e-6, 0.0))), 0.0);
     // By night the moon's light (as on the ground: FL.moon), the map then its - its shadow takes only the moon's.
