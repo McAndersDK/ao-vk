@@ -666,6 +666,8 @@ bool Device::CaptureCloudPuff(uint32_t fvf, const void* vertices, uint32_t verte
                 for (const LightSlot& slot : m_lights) {
                     if (!slot.enabled || slot.light.type != d3d::LIGHT_DIRECTIONAL)
                         continue;
+                    if (i == 0)
+                        NoteCloudGameLight(slot.light.diffuse);   // (the game's sunlight on its clouds: its hue)
                     const d3d::Vector& d = slot.light.direction;
                     const float dl = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
                     if (dl < 1e-6f) continue;
@@ -720,6 +722,29 @@ bool Device::CaptureCloudPuff(uint32_t fvf, const void* vertices, uint32_t verte
 // (prepass.cpp: the scene's rendering split at its depth clear) they are recorded into their own commands, run after
 // the pre-pass and before the scene's draws (Frame::clouds): the scene's rendering - and its pre-pass segment - go on
 // unbroken, and the march skips every pixel the pre-pass found an opaque surface at (the scene's draws cover it
+// The game's sunlight on one of its puffs (CaptureCloudPuff): the brightest this frame kept; a new frame takes the
+// last one's as the clouds' (eased hue: about half a second).
+void Device::NoteCloudGameLight(const d3d::Color& c)
+{
+    if (m_cloudGameLightFrame != m_frameNumber) {
+        std::memcpy(m_cloudGameLight, m_cloudGameLightNext, sizeof(m_cloudGameLight));
+        m_cloudGameLightNext[0] = m_cloudGameLightNext[1] = m_cloudGameLightNext[2] = 0.0f;
+        m_cloudGameLightFrame = m_frameNumber;
+        const float mx = std::max({m_cloudGameLight[0], m_cloudGameLight[1], m_cloudGameLight[2]});
+        if (mx > 0.02f) {
+            const float k = m_cloudGameHueFrame == ~0ull ? 1.0f : 0.03f;
+            for (int j = 0; j < 3; ++j) m_cloudGameHue[j] += (m_cloudGameLight[j] / mx - m_cloudGameHue[j]) * k;
+            m_cloudGameHueFrame = m_frameNumber;
+        }
+    }
+    const float luma = 0.3f * c.r + 0.59f * c.g + 0.11f * c.b;
+    if (luma > 0.3f * m_cloudGameLightNext[0] + 0.59f * m_cloudGameLightNext[1] + 0.11f * m_cloudGameLightNext[2]) {
+        m_cloudGameLightNext[0] = std::max(c.r, 0.0f);
+        m_cloudGameLightNext[1] = std::max(c.g, 0.0f);
+        m_cloudGameLightNext[2] = std::max(c.b, 0.0f);
+    }
+}
+
 // later). Without the pre-pass, the scene's rendering is ended for them and begun again (and nothing is skipped).
 void Device::DrawClouds(VkCommandBuffer cmd)
 {

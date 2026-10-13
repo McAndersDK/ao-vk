@@ -1,27 +1,38 @@
 // Light on clouds, shared by the cloud layer (cloud_layer.frag) and the game's cloud sheets drawn with it
 // (ffp_main.glsl, MAT_CLOUDSHEET). The includer declares the frame lights (FL).
 
-// The sunlight reaching the clouds: reddened low in the sky (its long way through the air - orange, then pink near
-// the horizon), gone a little after it sets (the clouds stay lit a while: they're high).
+// The game's sunlight on its own clouds (rvk clouds.cpp NoteCloudGameLight: its hue - amber at dawn, white by day), when
+// known: our clouds lit in it keep to the game's palette (user, 2026-10-13: pink dawn clouds over a world the game
+// lit gold stood out).
+bool GameCloudHue(out vec3 hue)
+{
+    hue = unpackUnorm4x8(floatBitsToUint(FL.clouds2.z)).rgb;
+    return FL.clouds2.w > 0.5 && max(hue.r, max(hue.g, hue.b)) > 0.0;
+}
+
+// The sunlight reaching the clouds: in the game's hue for its clouds when known (it reddens them itself at dawn and
+// dusk), else reddened low in the sky (orange, then pink near the horizon); fading a little after it sets. At dawn and
+// dusk the game's level light stays the frame's sun (rvk shadow.cpp: no shadows under ~3 degrees).
 vec3 SunLight(vec3 sunL)
 {
     float low = 1.0 - smoothstep(0.0, 0.35, sunL.y);
     low *= low;                                  // (golden first; pink only in its last few degrees)
     vec3 tint = mix(vec3(1.0), mix(vec3(1.0, 0.8, 0.58), vec3(1.0, 0.6, 0.5), smoothstep(0.75, 1.0, low)), low);
-    vec3 sun = FL.sunColor.rgb * tint * smoothstep(-0.12, 0.1, sunL.y);
-    // At sunrise and sunset the game's light is still level and the renderer's sun off (under ~3 degrees): a warm
-    // light of their own for the clouds, from just under the horizon to ~10 degrees up (user: the night sky didn't
-    // light up with the sunrise).
-    float dawn = smoothstep(-0.1, 0.0, sunL.y) * (1.0 - smoothstep(0.08, 0.25, sunL.y));
-    return max(sun, vec3(1.0, 0.72, 0.55) * tint * 0.8 * dawn);
+    vec3 hue;
+    if (GameCloudHue(hue)) {
+        float strength = dot(FL.sunColor.rgb, vec3(0.3, 0.59, 0.11)) / max(dot(hue, vec3(0.3, 0.59, 0.11)), 0.05);
+        return hue * strength * smoothstep(-0.12, 0.1, sunL.y);
+    }
+    return FL.sunColor.rgb * tint * smoothstep(-0.12, 0.1, sunL.y);
 }
 
-// The glow under the clouds round sunset: their undersides lit pink by the light low in the sky (most with the sun
-// at the horizon and a little after). Scaled as the sky's light (about 1).
+// The glow under the clouds round sunset: their undersides lit by the light low in the sky (most with the sun at the
+// horizon and a little after) - in the game's hue for its clouds, faint (a strong pink one stood out); else pink.
 vec3 Afterglow(vec3 sunL)
 {
     float g = smoothstep(-0.14, -0.02, sunL.y) * (1.0 - smoothstep(0.02, 0.12, sunL.y));
-    return vec3(1.0, 0.5, 0.55) * g;
+    vec3 hue;
+    return GameCloudHue(hue) ? hue * g * 0.35 : vec3(1.0, 0.5, 0.55) * g;
 }
 
 // How much it is night for the clouds' light: 0 with the sun up .. 1 with it ~11 degrees down - by the sun's true

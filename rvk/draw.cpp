@@ -353,6 +353,14 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
         }
     }
     std::memcpy(&fl->clouds[3], &clouds, 4);
+    // The game's sunlight on its clouds: its hue (cloud_light.glsl SunLight), when seen lately.
+    if (m_cloudGameHueFrame != ~0ull && m_cloudGameHueFrame + 600 >= m_frameNumber) {
+        uint32_t hue = 0;
+        for (int j = 0; j < 3; ++j)
+            hue |= uint32_t(std::lround(std::clamp(m_cloudGameHue[j], 0.0f, 1.0f) * 255.0f)) << (8 * j);
+        std::memcpy(&fl->clouds2[2], &hue, 4);
+        fl->clouds2[3] = 1.0f;
+    }
     // The game's cloud sheets (RVK_CloudSheet), coloured as the layer's clouds.
     std::memcpy(fl->cloudTint, m_sheetTint, sizeof(fl->cloudTint));
     std::memcpy(fl->cloudSky, m_sheetSky, sizeof(fl->cloudSky));

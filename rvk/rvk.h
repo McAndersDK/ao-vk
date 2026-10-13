@@ -1521,6 +1521,12 @@ private:
     uint64_t m_sceneFogFrame = ~0ull;
     // The world's global ambient (the terrain's base pass: RS_AMBIENT, luma, eased): the game's own day cycle - 0.23 by
     // night, ~0.34 at dawn, ~0.46 by day - lifts the night grading at dawn and dusk (NightAmount).
+    // The game's sunlight on its clouds (its directional light on the puffs, the brightest this frame): its hue lights
+    // our clouds (cloud_light.glsl SunLight) - amber at dawn, white by day - so they keep to the game's palette.
+    float m_cloudGameLight[3] = {0.0f, 0.0f, 0.0f}, m_cloudGameLightNext[3] = {0.0f, 0.0f, 0.0f};
+    float m_cloudGameHue[3] = {1.0f, 1.0f, 1.0f};
+    uint64_t m_cloudGameLightFrame = ~0ull, m_cloudGameHueFrame = ~0ull;
+    void NoteCloudGameLight(const d3d::Color& c);
     float m_sceneAmbient = -1.0f;
     uint64_t m_sceneAmbientFrame = ~0ull;
     // How much it is night for the grading (tone map, bloom, night glow): the sun's light on flat ground, but no more

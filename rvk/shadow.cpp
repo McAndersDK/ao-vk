@@ -1156,16 +1156,21 @@ void Device::RenderShadowMap(VkCommandBuffer cmd)
     // With the sun down, the moon's light (night.cpp) - the map drawn from it. The valley mist (mist.cpp).
     UpdateMoon();
     UpdateMist();
-    const bool moon = !haveSun && MoonOn();
-    const float* lightDir = haveSun ? m_sunDir : m_moonDir;
+    // Low (under ~3 degrees, still above the horizon): no shadows (too long, too ragged), but the game's light stays
+    // the frame's sun for our effects - clouds, leaves, air - fading in from the horizon: at dawn and dusk the game
+    // lights its world in gold, and with the sun off ours stayed in the night's colours (user, 2026-10-13).
+    const bool lowSun = !haveSun && m_sunLuminance > 0.0f && m_sunDir[1] < 0.0f;
+    const float lowFade = lowSun ? std::clamp(-m_sunDir[1] / 0.02f, 0.0f, 1.0f) : 0.0f;
+    const bool moon = !haveSun && !lowSun && MoonOn();
+    const float* lightDir = haveSun || lowSun ? m_sunDir : m_moonDir;
     m_shadowValid = false;
     m_shadowItemsCount = m_shadowStaticItems = m_shadowAnimatedItems = 0;
     m_shadowDrawn = m_shadowCulled = m_shadowStaticDrawn = m_shadowAnimatedDrawn = 0;
     m_shadowCollectMs = m_shadowCullMs = m_shadowDrawMs = 0.0;
     m_animatedItems.clear();
     // The sun for effects that don't need the shadow map (light through leaves, contact shadows).
-    if (haveSun || moon) std::memcpy(m_frameSunDir, lightDir, sizeof(m_frameSunDir));
-    for (int i = 0; i < 3; ++i) m_frameSunColor[i] = haveSun ? m_sunColor[i] : 0.0f;
+    if (haveSun || lowSun || moon) std::memcpy(m_frameSunDir, lightDir, sizeof(m_frameSunDir));
+    for (int i = 0; i < 3; ++i) m_frameSunColor[i] = haveSun ? m_sunColor[i] : lowSun ? m_sunColor[i] * lowFade : 0.0f;
     m_frameLightsDirty = true;
     // The world camera: the one most casters were drawn with.
     uint32_t world = 0;
