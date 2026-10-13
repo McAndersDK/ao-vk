@@ -83,6 +83,11 @@ float Profile(float h, float type)
     return type < 0.5 ? mix(stratus, cumulus, type * 2.0) : mix(cumulus, storm, type * 2.0 - 1.0);
 }
 
+// The noise's drift (main sets them): the body with the wind (and rising: shapes change), the detail faster. The
+// shadow map's: all with the wind, none rising - its shadows slide over the land as one, no edge creeping against
+// the rest (user: shadows going opposite ways).
+vec3 gWind = vec3(0.0), gDetailWind = vec3(0.0);
+
 float Density(vec3 p, bool detail)
 {
     float h = Height(p);
@@ -94,7 +99,7 @@ float Density(vec3 p, bool detail)
     vec4 w = textureLod(weatherMap, uv, 0.0);
     if (w.r < 0.005)                             // (clear: nothing - the warp below reaches only a few texels)
         return 0.0;
-    vec3 q = (p + L.wind.xyz) * L.shape.x;
+    vec3 q = (p + gWind) * L.shape.x;
     q.y *= 1.6;                                  // (cells a little flatter than wide)
     vec4 n = textureLod(shapeNoise, q, 0.0);
     // The weather read a little off where the body's noise says, differently at each height: coverage's edges then
@@ -122,7 +127,7 @@ float Density(vec3 p, bool detail)
         return 0.0;
     // The edges eroded by finer cells, swirled by the body's own noise (wisps curl rather than tile), at two scales.
     vec3 swirl = (n.gba - 0.5) * 0.35;
-    vec3 dq = (p + L.wind.xyz * 1.7) * L.shape.y + swirl;
+    vec3 dq = (p + gDetailWind) * L.shape.y + swirl;
     vec3 e = textureLod(detailNoise, dq, 0.0).rgb;
     float ef = e.r * 0.625 + e.g * 0.25 + e.b * 0.125;
     ef = mix(ef, textureLod(detailNoise, dq.zxy * 1.37 + 0.31, 0.0).g, 0.35);   // (another scale, axes turned: no
@@ -221,8 +226,10 @@ void main()
     // threshold sweeping through noise as a cloud came near grew rings up a mountain, like slicing 3D noise - user):
     // - the clouds' shadow read at a point pushed about by noise (~60-150 units) moving with the clouds: ragged edges
     //   that travel with them;
-    // - in the open, small shadows of their own (as many as the sky is cloudy overall, L.sub.w - steady), drifting at
-    //   a quarter of the clouds' speed.
+    // - in the open, small shadows of their own (as many as the sky is cloudy overall, L.sub.w - steady), drifting
+    //   with the clouds.
+    gWind = vec3(L.wind.x, 0.0, L.wind.z);
+    gDetailWind = gWind;
     vec3 c = p + sunL * ((L.layer.x + 0.35 * (L.layer.y - L.layer.x) - p.y) / sunL.y);
     vec4 warp = textureLod(shapeNoise, vec3((c.x + L.wind.x) * L.shape.x * 14.0, 0.21, (c.z + L.wind.z) * L.shape.x * 14.0), 0.0);
     vec3 pw = p + vec3(warp.g - 0.5, 0.0, warp.b - 0.5) * 260.0;
@@ -243,7 +250,7 @@ void main()
     }
     float shade = 1.0 - exp(-od * 0.25);          // (softened: thin cloud a light shade, thick cloud dark)
     {
-        vec3 q = vec3((c.x + 0.25 * L.wind.x) * L.shape.x * 14.0, 0.43, (c.z + 0.25 * L.wind.z) * L.shape.x * 14.0);
+        vec3 q = vec3((c.x + L.wind.x) * L.shape.x * 14.0, 0.43, (c.z + L.wind.z) * L.shape.x * 14.0);
         vec4 n = textureLod(shapeNoise, q, 0.0);
         // (Worley fbm at 4 and 8 cells a tile: values bunched in ~0.45..0.63 - the threshold that leaves `cover` of
         // the ground above it, fitted to their spread.)
@@ -255,7 +262,7 @@ void main()
     // The game's sheets (RVK_CloudSheet, L.deck.w): a faint veil's shadow - fixed in the world, drifting with the wind
     // (the sheets themselves are kept round the eye: their own shadow would slide with the player), high up, fibrous.
     if (L.deck.w > 0.0) {
-        vec3 q = p + sunL * ((L.layer.y + 1500.0 - p.y) / sunL.y) + L.wind.xyz * 0.6;
+        vec3 q = p + sunL * ((L.layer.y + 1500.0 - p.y) / sunL.y) + gWind;   // (with the rest)
         float n = textureLod(detailNoise, vec3(q.x / 4000.0, 0.37, q.z / 1500.0), 0.0).r * 0.7 +
                   textureLod(detailNoise, vec3(q.z / 1700.0 + 0.3, 0.71, q.x / 900.0), 0.0).g * 0.3;
         light *= 1.0 - L.deck.w * smoothstep(0.38, 0.7, n);
@@ -265,6 +272,8 @@ void main()
 #else
 void main()
 {
+    gWind = L.wind.xyz;
+    gDetailWind = L.wind.xyz * 1.7;
     // The half-size pixel marched (one of each 2x2 when reused over frames).
     vec2 hp = L.sub.z > 1.5 ? floor(gl_FragCoord.xy) * 2.0 + L.sub.xy + 0.5 : gl_FragCoord.xy;
     // The four scene pixels under this one: none of them sky - an opaque surface is drawn there later.
