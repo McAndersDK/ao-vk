@@ -57,7 +57,7 @@ const uint32_t kCloudResolveFragSpirv[] = {
 #include "cloud_resolve.frag.inc"
 };
 
-constexpr uint32_t kShadowSize = 256;           // the clouds' shadow map (pixels a side)
+constexpr uint32_t kShadowSize = 1024;          // the clouds' shadow map (pixels a side; cloud_layer.frag kShadowMapSize)
 constexpr float kShadowArea = 3000.0f;          // ... over this much of the world round the camera
 constexpr float kLayerHeight = 350.0f;          // the cloud layer above the camera (world), where the puffs' shadows
                                                 // are cast from (the game's sky draws them nearer than they are)
@@ -72,7 +72,9 @@ constexpr uint32_t kNoiseSize = 64;             // the clouds' noise image (cell
 constexpr uint32_t kShapeSize = 128, kDetailSize = 64;   // the layer's noise images (cells a side; tiling)
 constexpr uint32_t kWeatherSize = 256;          // the weather map (pixels a side)
 constexpr float kDeckThickness = 300.0f;        // the low deck (stratus): its thickness (world)
-constexpr float kLayerShadowArea = 12000.0f;    // RVK_CloudLayer's shadow map: over this much (world) round the camera
+constexpr float kLayerShadowArea = 8000.0f;     // RVK_CloudLayer's shadow map: over this much (world) round the camera
+                                                // (~8 units a texel: the clouds' edges and small clouds as patches on
+                                                // the ground - at 47 a cloud's shadow covered all the land in view)
 // The game's puff textures (RDB 1010004): single_cloud01..03 (121213, 121212, 121211) fibrous puffs, 04 streaky wisps.
 constexpr uint32_t kCloudTexWispy = 121214;
 constexpr float kWeatherArea = 24000.0f;        // ... over this much of the world round the camera
@@ -1541,7 +1543,8 @@ void Device::MakeCloudLayerShadow(VkCommandBuffer cmd, const float eye[3])
     ri.colorAttachmentCount = 1;
     ri.pColorAttachments = &color;
     vkCmdBeginRendering(cmd, &ri);
-    const float sub[4] = {0.0f, 0.0f, 1.0f, 0.0f};
+    // (w: how cloudy the sky is - the shadow's fine patches, as many: cloud_layer.frag RVK_CLOUD_SHADOW.)
+    const float sub[4] = {0.0f, 0.0f, 1.0f, std::clamp(m_cloudCloudy + 0.5f * m_cloudParams.cover, 0.0f, 1.0f)};
     MarchCloudLayer(cmd, false, sub, shadowArea);
     vkCmdEndRendering(cmd);
     Transition(cmd, m_cloudShadowMap, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
