@@ -33,14 +33,20 @@ float Smooth(float a, float b, float x)
 // up about half the game's night ambient again.
 constexpr float kMoon[3] = {0.20f, 0.25f, 0.36f};
 
+constexpr uint32_t kMoonTexture = 16807;     // the big moon's texture (RDB type 1010004)
+
 }  // namespace
 
-// A mesh in the sky (SetDrawVisual: the sky's GenericMeshObject_t). The game's moons are lit 584-vertex balls kept
-// round the eye (about 800 units out and 400 up: ~27 degrees high), going round it as the night goes on (user dumps).
-// The biggest seen this frame (by its size in the sky) is the moon that lights.
+// A mesh in the sky (SetDrawVisual: the sky's GenericMeshObject_t). The game's moons are lit 49-vertex discs (7 x 7),
+// alpha blended, each drawn again additively over itself (its glow: skipped here); there are up to three, crossing the
+// sky as the night goes on (user dump rvk-frame-143150: the big one setting behind the ruins). (The lit 584-vertex
+// meshes, four fixed round the eye with one texture, are not moons.) The biggest seen this frame (by its size in the
+// sky) is the moon that lights.
 void Device::NoteSkyMesh(uint32_t fvf, const void* vertices, uint32_t vertexCount)
 {
-    if (!vertices || vertexCount != 584 || (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZ || !m_rs[d3d::RS_LIGHTING])
+    if (!vertices || vertexCount != 49 || (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZ || !m_rs[d3d::RS_LIGHTING] ||
+        !m_rs[d3d::RS_ALPHABLENDENABLE] || m_rs[d3d::RS_SRCBLEND] != d3d::BLEND_SRCALPHA ||
+        m_rs[d3d::RS_DESTBLEND] != d3d::BLEND_INVSRCALPHA)
         return;
     const FvfLayout layout = DecodeFvf(fvf);
     const uint8_t* base = static_cast<const uint8_t*>(vertices);
@@ -68,10 +74,21 @@ void Device::NoteSkyMesh(uint32_t fvf, const void* vertices, uint32_t vertexCoun
     if (dist < 1.0f)
         return;
     const float size = radius / dist;
-    if (m_moonSeenFrame == m_frameNumber && size <= m_moonSeenSize)
+    // Which is which (tuning): every one, now and then.
+    if ((m_frameNumber % 600) == 20) {
+        const Texture* t = m_textures[0];
+        Log("moon: a moon towards (%.2f %.2f %.2f), %.0f away, radius %.0f (size %.3f), texture rdb %u %ux%u, at (%.0f %.0f %.0f) "
+            "from the eye",
+            d[0] / dist, d[1] / dist, d[2] / dist, dist, radius, size, t ? t->m_rdbId : 0u, t ? t->Width() : 0u,
+            t ? t->Height() : 0u, w[3][0] - eye[0], w[3][1] - eye[1], w[3][2] - eye[2]);
+    }
+    // The big moon's texture (RDB 1010004:16807, user) first, then the biggest.
+    const Texture* tex = m_textures[0];
+    const float rank = size + (tex && tex->m_rdbId == kMoonTexture ? 10.0f : 0.0f);
+    if (m_moonSeenFrame == m_frameNumber && rank <= m_moonSeenSize)
         return;
     m_moonSeenFrame = m_frameNumber;
-    m_moonSeenSize = size;
+    m_moonSeenSize = rank;
     for (int j = 0; j < 3; ++j) m_moonSeenDir[j] = d[j] / dist;
 }
 
