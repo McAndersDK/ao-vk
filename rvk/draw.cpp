@@ -331,6 +331,12 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
         for (int i = 0; i < 3; ++i) fl->sunTrue[i] = -d[i] / l;
         fl->sunTrue[3] = night;
     }
+    {
+        float ts[8];
+        TerrainSunLights(ts);
+        std::memcpy(fl->terrainSun, ts, sizeof(fl->terrainSun));
+        std::memcpy(fl->terrainSun2, ts + 4, sizeof(fl->terrainSun2));
+    }
     fl->pbr[0] = m_pbr.specular;
     fl->pbr[1] = m_pbr.ambient;
     fl->pbr[2] = m_ssr > 0.0f ? m_pbr.reflections : 0.0f;
@@ -2141,6 +2147,8 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     // (The terrain's base pass: its light pass multiplies, its fog white - not the scene's fog colour.)
     if (IsTerrain(fvf) && !IsMultiplyPass() && m_scenePhase && m_target == m_scene && !m_external && !m_drawGpu)
         NoteTerrainHeights(fvf, vertices, vertexCount);   // (the valley mist's low ground: mist.cpp)
+    if (IsTerrain(fvf) && !IsMultiplyPass() && m_scenePhase && m_target == m_scene && !m_external && !m_drawGpu)
+        NoteTerrainSun(fvf, vertices, vertexCount);   // (the terrain's shade from a low sun: terrain_sun.cpp)
     if (IsTerrain(fvf) && !IsMultiplyPass() && m_scenePhase && m_target == m_scene && !m_external) {
         RenderStateFog(m_sceneFogColour, m_sceneFogParams);
         m_sceneFogFrame = m_frameNumber;

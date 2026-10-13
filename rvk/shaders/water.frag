@@ -336,7 +336,7 @@ void main()
     vec3 L = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
     // (A fall lies on its cliff: looked up a little out from the sheet, or the cliff shadows it.)
     float shadow = SunShadow(vPos + (fall ? N * 0.6 : vec3(0.0)) + vec3(0.0, 0.05, 0.0));
-    vec3 sun = FL.sunColor.rgb;
+    vec3 sun = FL.sunColor.rgb * mix(1.0, FL.terrainSun2.x, FL.terrainSun2.y);   // (low sun under the mountains: none)
     vec3 ambient = W.ambient.rgb;
     vec3 light = ambient + sun * (max(L.y, 0.0) * shadow);
 

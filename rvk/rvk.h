@@ -1529,6 +1529,22 @@ private:
     float m_cloudGameHue[3] = {1.0f, 1.0f, 1.0f};
     uint64_t m_cloudGameLightFrame = ~0ull, m_cloudGameHueFrame = ~0ull;
     void NoteCloudGameLight(const d3d::Color& c);
+    // The terrain's shade from a low sun (terrain_sun.cpp): the game's terrain heights in a grid round the eye, each
+    // cell's height to see the sun over it (a map, FL.terrainSun), the eye's own; weighted in low in the sky.
+    std::vector<float> m_tsHeights;
+    int m_tsOrigin[2] = {0, 0};
+    float m_tsMapOrigin[2] = {0.0f, 0.0f}, m_tsSunUsed[3] = {0.0f, 0.0f, 0.0f};
+    float m_tsEye = 1.0f, m_tsWeight = 0.0f;
+    bool m_tsDirty = false;
+    uint64_t m_tsMadeFrame = ~0ull;
+    Texture* m_terrainSunMap = nullptr;
+    VkPipeline m_terrainSunPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout m_terrainSunLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_terrainSunSetLayout = VK_NULL_HANDLE;
+    void NoteTerrainSun(uint32_t fvf, const void* vertices, uint32_t vertexCount);
+    void RecentreTerrainSun();
+    void UpdateTerrainSun(VkCommandBuffer cmd);
+    void TerrainSunLights(float out[8]);
     float m_sceneAmbient = -1.0f;
     uint64_t m_sceneAmbientFrame = ~0ull;
     // How much it is night for the grading (tone map, bloom, night glow): the sun's light on flat ground, but no more

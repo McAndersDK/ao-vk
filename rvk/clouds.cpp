@@ -44,6 +44,9 @@ const uint32_t kSunFragSpirv[] = {             // the suns (sun.cpp)
 const uint32_t kSunVisCompSpirv[] = {          // how much of each sun is seen (sun.cpp)
 #include "sun_vis.comp.inc"
 };
+const uint32_t kTerrainSunFragSpirv[] = {      // the terrain's shade from a low sun (terrain_sun.cpp)
+#include "terrain_sun.frag.inc"
+};
 const uint32_t kCloudShadowFragSpirv[] = {
 #include "cloud_shadow.frag.inc"
 };
@@ -401,6 +404,24 @@ bool Device::CreateCloudResources(std::string* error)
         if (vmaCreateBuffer(m_allocator, &bi, &ac, &m_sunVisBuffer, &m_sunVisAllocation, &info) != VK_SUCCESS)
             return false;
         m_sunVisCpu = static_cast<uint8_t*>(info.pMappedData);
+        // The terrain's shade from a low sun (terrain_sun.cpp): heights (a pushed storage buffer) -> RG16F, written.
+        const VkDescriptorSetLayoutBinding tb{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        VkDescriptorSetLayoutCreateInfo tl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        tl.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+        tl.bindingCount = 1;
+        tl.pBindings = &tb;
+        VkPushConstantRange tp{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32};
+        VkPipelineLayoutCreateInfo tpl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        tpl.setLayoutCount = 1;
+        tpl.pSetLayouts = &m_terrainSunSetLayout;
+        tpl.pushConstantRangeCount = 1;
+        tpl.pPushConstantRanges = &tp;
+        const VkFormat terrainFormat = GetFormatInfo(Format::RG16F).vk;
+        if (!Check(vkCreateDescriptorSetLayout(m_device, &tl, nullptr, &m_terrainSunSetLayout), "terrain sun set", error) ||
+            !Check(vkCreatePipelineLayout(m_device, &tpl, nullptr, &m_terrainSunLayout), "terrain sun layout", error) ||
+            !pipeline(kFullscreenVertSpirv, sizeof(kFullscreenVertSpirv), kTerrainSunFragSpirv, sizeof(kTerrainSunFragSpirv),
+                      m_terrainSunLayout, &terrainFormat, 1, VK_FORMAT_UNDEFINED, &m_terrainSunPipeline))
+            return false;
     }
 
     // RVK_CloudLayer: its noise (two 3D images, one compute pipeline: push mode, size), the weather map's pass (0 its
@@ -498,6 +519,10 @@ bool Device::CreateCloudResources(std::string* error)
 void Device::DestroyCloudResources()
 {
     if (m_cloudSunRay) { DestroyTexture(m_cloudSunRay); m_cloudSunRay = nullptr; }
+    if (m_terrainSunMap) { DestroyTexture(m_terrainSunMap); m_terrainSunMap = nullptr; }
+    if (m_terrainSunPipeline) { vkDestroyPipeline(m_device, m_terrainSunPipeline, nullptr); m_terrainSunPipeline = VK_NULL_HANDLE; }
+    if (m_terrainSunLayout) { vkDestroyPipelineLayout(m_device, m_terrainSunLayout, nullptr); m_terrainSunLayout = VK_NULL_HANDLE; }
+    if (m_terrainSunSetLayout) { vkDestroyDescriptorSetLayout(m_device, m_terrainSunSetLayout, nullptr); m_terrainSunSetLayout = VK_NULL_HANDLE; }
     if (m_sunPipeline) { vkDestroyPipeline(m_device, m_sunPipeline, nullptr); m_sunPipeline = VK_NULL_HANDLE; }
     if (m_sunVisPipeline) { vkDestroyPipeline(m_device, m_sunVisPipeline, nullptr); m_sunVisPipeline = VK_NULL_HANDLE; }
     if (m_sunVisLayout) { vkDestroyPipelineLayout(m_device, m_sunVisLayout, nullptr); m_sunVisLayout = VK_NULL_HANDLE; }

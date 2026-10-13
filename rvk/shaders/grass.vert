@@ -305,7 +305,8 @@ void main()
         vec3 Ls = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
         float sunOn = clamp(dot(FL.sunColor.rgb, kLuma) * 2.5, 0.0, 1.0) * smoothstep(0.0, 0.1, Ls.y);
         float canopyShade = mix(1.0, smoothstep(0.0, 0.75, t), canopy * 0.7 * (1.0 - Ls.y));
-        float sunlit = shade * sunOn * canopyShade * GF.look.z;
+        // (Low sun: the eye's place under the mountains hiding it - grass is drawn near the eye - rvk terrain_sun.cpp.)
+        float sunlit = shade * sunOn * canopyShade * GF.look.z * mix(1.0, FL.terrainSun2.x, FL.terrainSun2.y);
         // Rounded: the edge towards the sun lighter, the other darker (zero-mean across the blade, so the field stays
         // as bright as its ground - which already holds the sunlight).
         vec3 face = vec3(vh.x, 0.0, vh.y) / max(vl, 1e-3);

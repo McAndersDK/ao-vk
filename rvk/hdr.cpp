@@ -601,7 +601,9 @@ void Device::LandHaze(float out[24]) const
         const float tint[3] = {1.0f, 1.0f - 0.35f * low2, 1.0f - 0.6f * low2};
         // (A low sun's light through much air: a third of it at the horizon, all from ~17 degrees.)
         const float through = 0.35f + 0.65f * std::clamp(to[1] / 0.3f, 0.0f, 1.0f);
-        for (int k = 0; k < 3; ++k) out[20 + k] = light[k] * tint[k] * (moon ? 1.0f : 0.5f * through);
+        // (The sun's glow in the air, as the eye stands: none under the mountains hiding a low sun - terrain_sun.cpp.)
+        const float terrain = moon ? 1.0f : 1.0f + (m_tsEye - 1.0f) * m_tsWeight;
+        for (int k = 0; k < 3; ++k) out[20 + k] = light[k] * tint[k] * (moon ? 1.0f : 0.5f * through) * terrain;
     }
     if (m_frameNumber % 600 == 3)
         Log("land haze: colour %.2f %.2f %.2f x %.2f, the game's fog %.0f..%.0f", double(out[0]), double(out[1]),

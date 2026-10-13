@@ -124,6 +124,9 @@ struct FrameLights {               // binding 4: per-frame data (constants.glsl 
                                    // the shadow map is the moon's (sunDir: the moon's light), not the sun's
     float sunTrue[4];              // towards the sun, below the horizon too (the clouds' light: sunset, afterglow);
                                    // w: how much it is night (0 day .. 1)
+    float terrainSun[4];           // the terrain's shade from a low sun (terrain_sun.cpp): its map's corner x, z, 1 / its
+                                   // size, its bindless image + 1 | sampler << 20 (the float's bits; 0 = none)
+    float terrainSun2[4];          // ... x: the eye's own (0 shaded .. 1), y: its weight (0 high sun .. 1 low)
     GpuLight lights[kFrameLights];
 };
 

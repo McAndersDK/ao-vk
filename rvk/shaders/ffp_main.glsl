@@ -414,6 +414,25 @@ float CasterFade()
     return smoothstep(0.05, 0.17, -normalize(FL.sunDir.xyz + vec3(0.0, 1e-6, 0.0)).y);
 }
 
+// The terrain's shade from a low sun (rvk terrain_sun.cpp): at a point, 1 in the sun, 0 under the terrain hiding it -
+// by the height a point at its place must be to see the sun over the terrain (a map round the eye; 2 units' grace:
+// the ground itself, and what stands on it, not shading itself on the flat). Weighted in low in the sky.
+float TerrainSun(vec3 posW)
+{
+    uint slot = floatBitsToUint(FL.terrainSun.w);
+    if ((slot & 0xFFFFFu) == 0u || FL.terrainSun2.y <= 0.0)
+        return 1.0;
+    vec2 uv = (posW.xz - FL.terrainSun.xy) * FL.terrainSun.z;
+    vec2 edge = min(uv, 1.0 - uv);
+    float inside = smoothstep(0.0, 0.03, min(edge.x, edge.y));
+    if (inside <= 0.0)
+        return 1.0;
+    uint img = (slot & 0xFFFFFu) - 1u, smp = (slot >> 20) & 0xFFu;
+    float need = textureLod(sampler2D(texImages[img], bindlessSamplers[smp]), uv, 0.0).r;
+    float lit = smoothstep(need - 1.0, need + 3.0, posW.y + 2.0);
+    return mix(1.0, lit, FL.terrainSun2.y * inside);
+}
+
 float gSunVisibility = 1.0;          // SunVisibility(vPosW, vNormalW) when computed (main)
 bool gSunVisibilityValid = false;
 
@@ -580,6 +599,8 @@ void main()
         vec3 ambient = vec3(0.0), diff = vec3(0.0), spec = vec3(0.0), diffL = vec3(0.0), specL = vec3(0.0);
         // Sunlight is shadowed: by the receiver's shade, or in the ground's lighting pass by the lightmap's.
         float sunScale = (C.flags.x & F_SHADOWTEX) != 0u ? texShade * moonShade : shadeSun ? shade : 1.0;
+        if ((C.flags.x & F_SHADOWTEX) == 0u && FL.moon.w <= 0.5)
+            sunScale *= TerrainSun(vPosW);       // (low sun: under the mountains hiding it, no sunlight)
         AccumulateLights(vPosW, n, sunScale, localScale, ambient, diff, spec, diffL, specL);
         // PBR: metals have no diffuse light; the occlusion map takes ambient light away.
         float kd = gPbrOn ? 1.0 - gPbrMetal : 1.0, kAmb = gPbrOn ? kd * gPbrAo : 1.0;
@@ -597,7 +618,7 @@ void main()
             // shadow cascades, whose shadows a low sun makes long), and fading as the sun nears the horizon.
             if (gPbrBase && dot(FL.sunColor.rgb, FL.sunColor.rgb) > 0.0 && dot(FL.sunDir.xyz, FL.sunDir.xyz) > 0.0) {
                 vec3 Ls = -normalize(FL.sunDir.xyz);
-                float sunVis = gSunVisibilityValid ? mix(1.0, gSunVisibility, CasterFade()) : 1.0;
+                float sunVis = (gSunVisibilityValid ? mix(1.0, gSunVisibility, CasterFade()) : 1.0) * TerrainSun(vPosW);
                 float horizon = smoothstep(0.03, 0.25, Ls.y);
                 float baked = smoothstep(0.2, 0.55, dot(Sample(0u).rgb, vec3(0.3, 0.59, 0.11)));
                 gPbrSpec += FL.sunColor.rgb * PbrSpecular(gPbrNormal, Ls, V) * (sunVis * horizon * baked) * FL.pbr.x;
@@ -692,7 +713,8 @@ void main()
             if (through + glare > 0.0) {
                 // The sun's visibility on the lit side: the shadow already computed for the surface (a second,
                 // opposite-side search only darkened back-lit leaves and cost another few taps).
-                float visible = FL.shadowParams.x <= 0.5 ? 1.0 : gSunVisibilityValid ? mix(1.0, gSunVisibility, CasterFade()) : 1.0;
+                float visible = (FL.shadowParams.x <= 0.5 ? 1.0 : gSunVisibilityValid ? mix(1.0, gSunVisibility, CasterFade()) : 1.0) *
+                                TerrainSun(vPosW);   // (low sun: leaves under the mountains don't glow)
                 current.rgb += t0.rgb * FL.sunColor.rgb * ((0.5 * through + 0.7 * glare) * visible * holes * FL.effects.x);
             }
         }

@@ -1156,6 +1156,7 @@ void Device::RenderShadowMap(VkCommandBuffer cmd)
     // With the sun down, the moon's light (night.cpp) - the map drawn from it. The valley mist (mist.cpp).
     UpdateMoon();
     UpdateMist();
+    UpdateTerrainSun(cmd);                       // (the terrain's shade from a low sun: terrain_sun.cpp)
     // Low (under ~3 degrees, still above the horizon): no shadows (too long, too ragged), but the game's light stays
     // the frame's sun for our effects - clouds, leaves, air - fading in from the horizon: at dawn and dusk the game
     // lights its world in gold, and with the sun off ours stayed in the night's colours (user, 2026-10-13).
