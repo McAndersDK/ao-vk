@@ -58,6 +58,15 @@ vec3 Afterglow(vec3 sunL)
     return vec3(1.0, 0.5, 0.55) * g;
 }
 
+// How much the sky's light is raised with the sun gone (night; 1 by day): lit only by the sky, cloud dimmed inside
+// to 0.4 came out a third as light as the game's own night clouds (user: brightness 3 to look right) - the sky's
+// light then carries the game's colour on its own.
+float NightSky()
+{
+    float sun = dot(FL.sunColor.rgb, vec3(0.3, 0.59, 0.11));
+    return mix(2.0, 1.0, smoothstep(0.0, 0.25, sun));
+}
+
 // The air between the eye and a cloud dist away (premultiplied light, alpha): its colour goes towards the game's
 // distance colour (the more the farther - wholly far off - and low in the sky the more the game fogs its clouds). The
 // cloud stays as opaque as it is: the air in front of it hides what's behind as well (thinning far clouds instead
@@ -202,7 +211,7 @@ vec4 Deck(vec3 eye, vec3 dir, float jitter)
             continue;
         float h = (float(i) + 0.5) / float(kSteps);
         // (Seen from below: mostly its underside - darker than the layer's sunlit tops; thick parts darker still.)
-        vec3 S = (L.ambient.rgb * mix(0.38, 0.8, h) * mix(0.55, 1.0, exp(-d * 2.0)) + sun) * L.tint.rgb * L.tint.w;
+        vec3 S = (L.ambient.rgb * mix(0.38, 0.8, h) * mix(0.55, 1.0, exp(-d * 2.0)) * NightSky() + sun) * L.tint.rgb * L.tint.w;
         const vec3 luma = vec3(0.3, 0.59, 0.11);   // (contrast, as the layer: RVK_CloudShade)
         S *= clamp(pow(max(dot(S, luma) / max(dot(L.tint.rgb, luma) * L.tint.w, 1e-3), 1e-3), L.horizon.y - 1.0), 0.15, 3.0);
         float st = exp(-d * sigma * dt);
@@ -304,6 +313,7 @@ void main()
     float cosT = dot(dir, sunL);
     vec3 sunColour = SunLight(sunL);
     vec3 glow = Afterglow(sunL);
+    float nightSky = NightSky();
     float sigma = L.shape.w;
     float transmit = 1.0;
     vec3 light = vec3(0.0);
@@ -353,6 +363,7 @@ void main()
         // it as long streaks all one way.)
         vec3 sky = mix(skyLow * mix(1.0, 0.75, L.ambient.w), skyTop, smoothstep(0.0, 0.8, h)) * mix(0.4, 1.0, exp(-od * 0.3));
         sky += glow * (1.0 - smoothstep(0.0, 0.7, h)) * 0.9;   // (round sunset: the pink undersides)
+        sky *= nightSky;
         // (The game's colour - its puffs as it shows them, fog and all - wholly in the sky's light, half in the sun's:
         // a storm takes the game's colour, sunlit tops stay bright.)
         vec3 S = (sunColour * sun * powder * 1.5 * mix(L.tint.rgb, vec3(dot(L.tint.rgb, vec3(0.3, 0.59, 0.11))), 0.5) +
@@ -361,7 +372,7 @@ void main()
         // is, made more - shaded parts darker, lit parts lighter - its hue kept.
         const vec3 luma = vec3(0.3, 0.59, 0.11);
         float middle = max(dot(L.tint.rgb, luma) * L.tint.w, 1e-3);
-        S *= clamp(pow(max(dot(S, luma) / middle, 1e-3), L.horizon.y - 1.0), 0.15, 3.0);
+        S *= clamp(pow(max(dot(S, luma) / middle, 1e-3), (L.horizon.y - 1.0) / nightSky), 0.15, 3.0);
         float stepT = exp(-d * sigma * dt);
         light += transmit * (1.0 - stepT) * S;
         depthSum += transmit * (1.0 - stepT) * tHere;
