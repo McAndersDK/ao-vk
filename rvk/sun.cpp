@@ -100,6 +100,21 @@ void Device::DrawSun()
         const float* d = m_sunLuminance > 0.0f ? m_sunDir : m_trueSunDir;
         sprites.push_back(SunSprite{{-d[0], -d[1], -d[2]}, 0.25f, {1.0f, 1.0f, 1.0f}, 1.0f, 0});
     }
+    // How much of each is seen: this frame slot's measure (made when it last ran: its commands are done now), eased -
+    // the glare swelling in as a sun comes out (~0.35 s), going quickly as it goes behind something (~0.08 s).
+    float target[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    if (m_sunVisMeasured[m_frameIndex] && m_sunVisCpu) {
+        vmaInvalidateAllocation(m_allocator, m_sunVisAllocation, m_sunVisStride * m_frameIndex, 16);
+        const float* seen = reinterpret_cast<const float*>(m_sunVisCpu + m_sunVisStride * m_frameIndex);
+        for (uint32_t k = 0; k < m_sunVisCount[m_frameIndex] && k < 4; ++k)
+            target[k] = std::clamp(seen[k], 0.0f, 1.0f);
+        m_sunVisMeasured[m_frameIndex] = false;
+    }
+    const float dt = m_sunSeenClock < 0.0 ? 1.0f : float(std::clamp(m_frameClock - m_sunSeenClock, 0.0, 1.0));
+    m_sunSeenClock = m_frameClock;
+    for (int k = 0; k < 4; ++k)
+        m_sunSeen[k] += (target[k] - m_sunSeen[k]) * (1.0f - std::exp(-dt / (target[k] > m_sunSeen[k] ? 0.35f : 0.08f)));
+    m_sunViewProj = MulMatrix(m_view, m_proj);
     const float scale = std::clamp(m_sunSize, 0.1f, 3.0f);
     for (size_t k = 0; k < sprites.size(); ++k) {
         const SunSprite& s = sprites[k];
@@ -113,7 +128,10 @@ void Device::DrawSun()
                               std::clamp((to[1] + 0.03f) / 0.05f, 0.0f, 1.0f);
         SunDrawn d{};
         std::memcpy(d.dir, to, sizeof(d.dir));
-        d.size = std::clamp(s.size * scale, 0.002f, 1.2f);
+        // Low in the sky (RVK: under ~17 degrees): bigger, flattened, its glow spread along the horizon (sun.frag).
+        d.low = low;
+        d.size = std::clamp(s.size * scale * (1.0f + 0.35f * low2), 0.002f, 1.2f);
+        d.seen = m_sunsDrawn.size() < 4 ? m_sunSeen[m_sunsDrawn.size()] : 1.0f;
         for (int j = 0; j < 3; ++j) d.colour[j] = s.colour[j] * tint[j] * through * m_sun;
         d.rimFade = s.rimFade;
         d.seed = float(k) * 17.31f;
@@ -121,7 +139,8 @@ void Device::DrawSun()
     }
     DrawSuns(false);
     if (m_frameNumber % 600 == 50) {
-        Log("suns: %zu sprites (last frame's), %zu drawn", m_sunSprites.size(), m_sunsDrawn.size());
+        Log("suns: %zu sprites (last frame's), %zu drawn; seen %.2f %.2f %.2f %.2f", m_sunSprites.size(),
+            m_sunsDrawn.size(), double(m_sunSeen[0]), double(m_sunSeen[1]), double(m_sunSeen[2]), double(m_sunSeen[3]));
         for (const SunSprite& s : m_sunSprites)
             Log("  sprite: hub %u towards (%.3f %.3f %.3f) size %.3f tint %.2f %.2f %.2f rim %.2f", s.hub,
                 double(s.dir[0]), double(s.dir[1]), double(s.dir[2]), double(s.size), double(s.colour[0]),
@@ -138,6 +157,84 @@ void Device::DrawSunOver()
     m_sunOverFrame = m_frameNumber;
     if (m_sunBleed > 0.0f)
         DrawSuns(true);
+}
+
+// How much of each sprite's core is seen (sun_vis.comp), with the clouds' own commands: after the pre-pass (its depth
+// readable) and the cloud layer's march (`clouds`: its coverage). Read when this frame slot comes round again.
+void Device::MeasureSunVisibility(VkCommandBuffer cmd, Texture* clouds)
+{
+    m_sunVisMeasured[m_frameIndex] = false;
+    if (!m_sunVisPipeline || !m_sunVisCpu || m_sunsDrawn.empty() || m_sunDrawnFrame != m_frameNumber)
+        return;
+    struct Push { float sun[4][4], info[4]; } push{};
+    const float w = float(m_scene->m_width), h = float(m_scene->m_height);
+    const auto& m = m_sunViewProj.m;
+    auto screen = [&](const float d[3], float out[2]) {   // (a direction: w 0 - where it is, however far)
+        float c[4];
+        for (int j = 0; j < 4; ++j) c[j] = d[0] * m[0][j] + d[1] * m[1][j] + d[2] * m[2][j];
+        if (c[3] <= 1e-4f)
+            return false;
+        out[0] = (c[0] / c[3] * 0.5f + 0.5f) * w;
+        out[1] = (0.5f - c[1] / c[3] * 0.5f) * h;
+        return true;
+    };
+    const uint32_t count = uint32_t(std::min<size_t>(m_sunsDrawn.size(), 4));
+    for (uint32_t k = 0; k < count; ++k) {
+        const SunDrawn& d = m_sunsDrawn[k];
+        // The core: ~0.135 of the sprite's radius (sun.frag); its radius on the screen from a point that far off.
+        const float core = 0.135f * d.size;
+        float side[3] = {-d.dir[2], 0.0f, d.dir[0]};
+        const float sl = std::sqrt(side[0] * side[0] + side[2] * side[2]);
+        if (sl < 1e-4f) side[0] = 1.0f; else { side[0] /= sl; side[2] /= sl; }
+        const float off[3] = {d.dir[0] + side[0] * std::tan(core), d.dir[1], d.dir[2] + side[2] * std::tan(core)};
+        float p[2], q[2];
+        if (!screen(d.dir, p) || !screen(off, q))
+            continue;                            // (behind the camera: w 0, seen - nothing of it on the screen)
+        push.sun[k][0] = p[0];
+        push.sun[k][1] = p[1];
+        push.sun[k][2] = std::clamp(std::sqrt((q[0] - p[0]) * (q[0] - p[0]) + (q[1] - p[1]) * (q[1] - p[1])), 1.0f, 2.0f * h);
+        push.sun[k][3] = 1.0f;
+    }
+    push.info[0] = w;
+    push.info[1] = h;
+    push.info[2] = m_prepassClearZ;
+    push.info[3] = clouds ? 1.0f : 0.0f;
+    // (The march's writes and the depth's read layout: made for fragment shaders - this reads them in a compute one.)
+    VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    mb.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    mb.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+    mb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    mb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dep.memoryBarrierCount = 1;
+    dep.pMemoryBarriers = &mb;
+    vkCmdPipelineBarrier2(cmd, &dep);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_sunVisPipeline);
+    VkDescriptorImageInfo depthInfo{m_pointSampler, m_depthView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo cloudInfo{m_cloudClampSampler, (clouds ? clouds : m_blackTexture)->m_view,
+                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorBufferInfo outInfo{m_sunVisBuffer, m_sunVisStride * m_frameIndex, 16};
+    VkWriteDescriptorSet wr[3] = {};
+    for (uint32_t i = 0; i < 3; ++i) {
+        wr[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wr[i].dstBinding = i;
+        wr[i].descriptorCount = 1;
+        wr[i].descriptorType = i < 2 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    }
+    wr[0].pImageInfo = &depthInfo;
+    wr[1].pImageInfo = &cloudInfo;
+    wr[2].pBufferInfo = &outInfo;
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_sunVisLayout, 0, 3, wr);
+    vkCmdPushConstants(cmd, m_sunVisLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+    vkCmdDispatch(cmd, count, 1, 1);
+    // (For the CPU, once the frame's commands are done.)
+    mb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    mb.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+    mb.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
+    vkCmdPipelineBarrier2(cmd, &dep);
+    m_sunVisMeasured[m_frameIndex] = true;
+    m_sunVisCount[m_frameIndex] = count;
 }
 
 void Device::DrawSuns(bool over)
@@ -170,6 +267,8 @@ void Device::DrawSuns(bool over)
         push.view[3] = std::clamp(m_sunBleed, 0.0f, 1.0f);
         push.anim[0] = float(std::fmod(m_frameClock, 3600.0));   // the clock (serrations swelling, rays turning)
         push.anim[1] = d.seed;                   // each sprite its own
+        push.anim[2] = d.low;                    // low in the sky (0..1)
+        push.anim[3] = d.seen;                   // how much of its core is seen (eased): its glare
         vkCmdPushConstants(cmd, m_sunLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
         vkCmdDraw(cmd, 3, 1, 0, 0);
     }

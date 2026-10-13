@@ -38,8 +38,11 @@ const uint32_t kFullscreenVertSpirv[] = {
 const uint32_t kCloudUpFragSpirv[] = {
 #include "cloud_up.frag.inc"
 };
-const uint32_t kSunFragSpirv[] = {             // the sun's disc (sun.cpp)
+const uint32_t kSunFragSpirv[] = {             // the suns (sun.cpp)
 #include "sun.frag.inc"
+};
+const uint32_t kSunVisCompSpirv[] = {          // how much of each sun is seen (sun.cpp)
+#include "sun_vis.comp.inc"
 };
 const uint32_t kCloudShadowFragSpirv[] = {
 #include "cloud_shadow.frag.inc"
@@ -355,6 +358,46 @@ bool Device::CreateCloudResources(std::string* error)
             !pipeline(kFullscreenVertSpirv, sizeof(kFullscreenVertSpirv), kSunFragSpirv, sizeof(kSunFragSpirv), m_sunLayout,
                       sceneFormats, 5, kDepthFormat, &m_sunPipeline))
             return false;
+        // How much of each is seen (sun_vis.comp): depth, clouds, the result (pushed); the result read by the CPU.
+        const VkShaderStageFlags comp = VK_SHADER_STAGE_COMPUTE_BIT;
+        const VkDescriptorSetLayoutBinding vb[3] = {{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, comp, nullptr},
+                                                    {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, comp, nullptr},
+                                                    {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, comp, nullptr}};
+        VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        li.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+        li.bindingCount = 3;
+        li.pBindings = vb;
+        VkPushConstantRange vp{comp, 0, 80};
+        VkPipelineLayoutCreateInfo vl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        vl.setLayoutCount = 1;
+        vl.pSetLayouts = &m_sunVisSetLayout;
+        vl.pushConstantRangeCount = 1;
+        vl.pPushConstantRanges = &vp;
+        if (!Check(vkCreateDescriptorSetLayout(m_device, &li, nullptr, &m_sunVisSetLayout), "sun visibility set", error) ||
+            !Check(vkCreatePipelineLayout(m_device, &vl, nullptr, &m_sunVisLayout), "sun visibility layout", error))
+            return false;
+        VkShaderModule m;
+        if (!module(kSunVisCompSpirv, sizeof(kSunVisCompSpirv), &m))
+            return false;
+        VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+        ci.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, m, "main", nullptr};
+        ci.layout = m_sunVisLayout;
+        const bool ok = Check(vkCreateComputePipelines(m_device, m_pipelineCache, 1, &ci, nullptr, &m_sunVisPipeline),
+                              "sun visibility pipeline", error);
+        vkDestroyShaderModule(m_device, m, nullptr);
+        if (!ok)
+            return false;
+        VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        m_sunVisStride = std::max<VkDeviceSize>(256, m_props.limits.minStorageBufferOffsetAlignment);
+        bi.size = m_sunVisStride * kFramesInFlight;
+        bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        VmaAllocationCreateInfo ac{};
+        ac.usage = VMA_MEMORY_USAGE_AUTO;
+        ac.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        VmaAllocationInfo info{};
+        if (vmaCreateBuffer(m_allocator, &bi, &ac, &m_sunVisBuffer, &m_sunVisAllocation, &info) != VK_SUCCESS)
+            return false;
+        m_sunVisCpu = static_cast<uint8_t*>(info.pMappedData);
     }
 
     // RVK_CloudLayer: its noise (two 3D images, one compute pipeline: push mode, size), the weather map's pass (0 its
@@ -449,6 +492,11 @@ bool Device::CreateCloudResources(std::string* error)
 void Device::DestroyCloudResources()
 {
     if (m_sunPipeline) { vkDestroyPipeline(m_device, m_sunPipeline, nullptr); m_sunPipeline = VK_NULL_HANDLE; }
+    if (m_sunVisPipeline) { vkDestroyPipeline(m_device, m_sunVisPipeline, nullptr); m_sunVisPipeline = VK_NULL_HANDLE; }
+    if (m_sunVisLayout) { vkDestroyPipelineLayout(m_device, m_sunVisLayout, nullptr); m_sunVisLayout = VK_NULL_HANDLE; }
+    if (m_sunVisSetLayout) { vkDestroyDescriptorSetLayout(m_device, m_sunVisSetLayout, nullptr); m_sunVisSetLayout = VK_NULL_HANDLE; }
+    if (m_sunVisBuffer) { vmaDestroyBuffer(m_allocator, m_sunVisBuffer, m_sunVisAllocation); m_sunVisBuffer = VK_NULL_HANDLE; }
+    m_sunVisCpu = nullptr;
     if (m_sunLayout) { vkDestroyPipelineLayout(m_device, m_sunLayout, nullptr); m_sunLayout = VK_NULL_HANDLE; }
     for (VkPipeline* p : {&m_cloudPipeline, &m_cloudHalfPipeline, &m_cloudUpPipeline, &m_cloudUpScenePipeline,
                           &m_cloudShadowPipeline, &m_cloudLayerNoisePipeline, &m_cloudWeatherPipeline, &m_cloudLayerPipeline,
@@ -770,6 +818,8 @@ void Device::DrawClouds(VkCommandBuffer cmd)
         Texture* clouds = m_cloudHalf;           // the half-size clouds to filter up
         if (layer) {
             clouds = ReusedCloudLayer(work, skipCovered, eyeNow);
+            if (skipCovered)
+                MeasureSunVisibility(work, clouds);   // (sun.cpp: the glare follows how much of each sun is seen)
         } else {
             Transition(work, m_cloudHalf, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};

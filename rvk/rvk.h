@@ -985,8 +985,16 @@ private:
     // The game's sun sprites seen this frame / the last (sun.cpp): where, how big, their colour - grouped into suns.
     struct SunSprite { float dir[3], size, colour[3], rimFade; uint32_t hub; };
     // The sprites as drawn this frame (DrawSun under the clouds, then their glow over them: DrawSunOver).
-    struct SunDrawn { float dir[3], size, colour[3], rimFade, seed; };
+    struct SunDrawn { float dir[3], size, colour[3], rimFade, seed, low, seen; };
     std::vector<SunDrawn> m_sunsDrawn;
+    d3d::Matrix m_sunViewProj{};                 // the sky's camera they were drawn with
+    // How much of each sprite's core is seen (sun_vis.comp, measured with the clouds; 1 when not): the frame slot's
+    // measure written (read when the slot comes round again), the eased value a sprite (the glare follows it).
+    bool m_sunVisMeasured[kFramesInFlight] = {};
+    uint32_t m_sunVisCount[kFramesInFlight] = {};
+    float m_sunSeen[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    double m_sunSeenClock = -1.0;
+    void MeasureSunVisibility(VkCommandBuffer cmd, Texture* clouds);
     std::vector<SunSprite> m_sunSprites;
     uint64_t m_sunSpritesFrame = 0;
     void NoteSunSprite(uint32_t fvf, const void* vertices, uint32_t vertexCount, const uint16_t* indices,
@@ -1713,8 +1721,15 @@ private:
     VkPipelineLayout m_cloudLayout = VK_NULL_HANDLE, m_cloudNoiseLayout = VK_NULL_HANDLE;
     VkPipeline m_cloudPipeline = VK_NULL_HANDLE, m_cloudNoisePipeline = VK_NULL_HANDLE;
     VkPipeline m_cloudHalfPipeline = VK_NULL_HANDLE, m_cloudUpPipeline = VK_NULL_HANDLE;   // RVK_CloudHalf
-    VkPipeline m_sunPipeline = VK_NULL_HANDLE;   // the sun's disc (sun.cpp)
+    VkPipeline m_sunPipeline = VK_NULL_HANDLE;   // the suns (sun.cpp)
     VkPipelineLayout m_sunLayout = VK_NULL_HANDLE;
+    VkPipeline m_sunVisPipeline = VK_NULL_HANDLE;   // how much of each is seen (sun_vis.comp)
+    VkPipelineLayout m_sunVisLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_sunVisSetLayout = VK_NULL_HANDLE;
+    VkBuffer m_sunVisBuffer = VK_NULL_HANDLE;    // its results, a slot a frame in flight (host-visible)
+    VmaAllocation_T* m_sunVisAllocation = nullptr;
+    uint8_t* m_sunVisCpu = nullptr;
+    VkDeviceSize m_sunVisStride = 256;
     VkPipeline m_cloudUpScenePipeline = VK_NULL_HANDLE;   // ... the filtering up inside the scene's rendering (its depth)
     VkDescriptorSetLayout m_cloudUpSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_cloudUpLayout = VK_NULL_HANDLE;

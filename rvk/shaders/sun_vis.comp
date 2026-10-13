@@ -1,0 +1,39 @@
+#version 450
+// How much of each sun sprite's core is seen (rvk/sun.cpp MeasureSunVisibility): run with the clouds' own commands,
+// after the depth pre-pass and the cloud layer's march. 64 points over the core's disc on the screen: sky there (the
+// pre-pass left its depth at the clear value) and how little cloud covers it (the layer's alpha: its coverage). One
+// workgroup a sprite; the mean written for the CPU (read a frame or two later, eased: the glare swelling in).
+layout(local_size_x = 64) in;
+layout(push_constant) uniform Params {
+    vec4 sun[4];        // xy: the core's middle (pixels), z: its radius (pixels), w: 1 on screen ahead, 0 not
+    vec4 info;          // xy: the scene's size, z: the pre-pass's clear depth, w: the clouds' alpha counted (0 / 1)
+} P;
+layout(binding = 0) uniform sampler2D sceneDepth;
+layout(binding = 1) uniform sampler2D clouds;
+layout(binding = 2) buffer Out { float seen[4]; } O;
+
+shared float s_seen[64];
+
+void main()
+{
+    uint k = gl_WorkGroupID.x, i = gl_LocalInvocationID.x;
+    vec4 s = P.sun[k];
+    float seen = 1.0;
+    if (s.w > 0.5) {
+        float rr = s.z * sqrt((float(i) + 0.5) / 64.0), a = float(i) * 2.3999632;
+        vec2 p = s.xy + rr * vec2(cos(a), sin(a));
+        if (all(greaterThanEqual(p, vec2(0.0))) && all(lessThan(p, P.info.xy))) {   // (off the screen: seen)
+            bool sky = texelFetch(sceneDepth, ivec2(p), 0).r == P.info.z;
+            float cover = P.info.w > 0.5 ? clamp(textureLod(clouds, p / P.info.xy, 0.0).a, 0.0, 1.0) : 0.0;
+            seen = sky ? 1.0 - cover : 0.0;
+        }
+    }
+    s_seen[i] = seen;
+    barrier();
+    for (uint n = 32u; n > 0u; n >>= 1u) {
+        if (i < n) s_seen[i] += s_seen[i + n];
+        barrier();
+    }
+    if (i == 0u)
+        O.seen[k] = s_seen[0] / 64.0;
+}
