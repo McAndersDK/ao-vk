@@ -8,11 +8,14 @@
 // box's move). A new volume warms up: its first kWarmUp seconds simulated kWarmSpeed times as fast while it fades in,
 // so a source coming into view shows a grown plume, not one growing from nothing. Sources not handed over any more go on until their smoke has faded (about their life x 1.5); the
 // volumes are kept for the next. The velocity and the density are kept in pairs per volume (one read, one written,
-// swapped each step); the curl, the divergence and the pressure are scratch, shared by all.
+// swapped each step); the curl, the divergence and the pressure are scratch, shared by all (RVK_SmokeExact: each
+// volume keeps its pressure, the next solve starts from it). A volume steps about kSimStep apart whatever the frame
+// rate; its drawing blends its last two states (the look image).
 #include "internal.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -36,8 +39,13 @@ const uint32_t kSmokeFragSpirv[] = {
 constexpr uint32_t kSmokeMax = 8;               // volumes
 constexpr uint32_t kSmokeSimMax = 6;            // ... simulated a frame (the nearest)
 constexpr float kSmokeRange = 160.0f;           // simulated and drawn this near only
-constexpr uint32_t kJacobi = 24;                // pressure steps
+constexpr uint32_t kJacobi = 24;                // pressure steps, from 0 (even: the result back in the first image)
+constexpr uint32_t kJacobiExact = 8;            // RVK_SmokeExact: ... from the last step's pressure, near this one's: so
+                                                // closer to the converged pressure than 24 from 0 (its gradient's error
+                                                // 0.24 against 0.72 in the demo; RANDYVK_SMOKE_RESIDUAL measures it)
 constexpr float kWarmUp = 2.0f, kWarmSpeed = 3.0f;
+constexpr float kSimStep = 1.0f / 60.0f;         // a volume steps about this often (s), whatever the frame rate - drawn
+constexpr float kSimFar = 40.0f;                // between its last two states; beyond this (world) half as often
 constexpr uint32_t kNoiseSize = 64;             // the wisps' noise image (cells a side)
 constexpr float kExtinction = 3.2f;             // per world unit at density 1 (x RVK_SmokeDensity)
 
@@ -103,6 +111,92 @@ float AsFloatBits(uint32_t v)
     float f;
     std::memcpy(&f, &v, 4);
     return f;
+}
+
+// Diagnostics (RANDYVK_SMOKE_RESIDUAL=F): at frame F the first volume's pressure and divergence are copied out; a few
+// frames later the pressure equation's residual is logged (how well the solve converged).
+struct SmokeResidual {
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VmaAllocation_T* allocation = nullptr;
+    void* cpu = nullptr;
+    uint64_t frame = 0, readAt = 0;
+    uint32_t n = 0;
+    float h = 0.0f;
+};
+SmokeResidual g_residual;
+
+// ... the solve's error, logged once the copy is done.
+void LogSmokeResidual()
+{
+    g_residual.readAt = 0;
+    const uint32_t n = g_residual.n;
+    const float* pr = static_cast<const float*>(g_residual.cpu);
+    const float* dv = pr + size_t(n) * n * n;
+    // The reference: the same equation (6p - neighbours = -div h^2; the floor's neighbour below is the cell itself,
+    // beyond the walls and the top 0) solved to convergence by conjugate gradients; the solve's error measured in
+    // what it does - the pressure gradient taken from the velocity (central differences, as stage 5).
+    const size_t N = size_t(n) * n * n;
+    const float h2 = g_residual.h * g_residual.h;
+    auto idx = [&](int x, int y, int z) { return (size_t(z) * n + y) * n + x; };
+    auto apply = [&](const std::vector<double>& x, std::vector<double>& out) {
+        for (int z = 0; z < int(n); ++z)
+            for (int y = 0; y < int(n); ++y)
+                for (int xx = 0; xx < int(n); ++xx) {
+                    const double self = x[idx(xx, y, z)];
+                    double sum = 0.0;
+                    if (xx > 0) sum += x[idx(xx - 1, y, z)];
+                    if (xx + 1 < int(n)) sum += x[idx(xx + 1, y, z)];
+                    sum += y > 0 ? x[idx(xx, y - 1, z)] : self;
+                    if (y + 1 < int(n)) sum += x[idx(xx, y + 1, z)];
+                    if (z > 0) sum += x[idx(xx, y, z - 1)];
+                    if (z + 1 < int(n)) sum += x[idx(xx, y, z + 1)];
+                    out[idx(xx, y, z)] = 6.0 * self - sum;
+                }
+    };
+    std::vector<double> b(N), x(N, 0.0), r(N), d(N), q(N);
+    for (size_t i = 0; i < N; ++i) b[i] = -double(dv[i]) * h2;
+    r = b;
+    d = r;
+    double rr = 0.0, bb = 0.0;
+    for (size_t i = 0; i < N; ++i) rr += r[i] * r[i];
+    bb = rr;
+    int it = 0;
+    for (; it < 2000 && rr > bb * 1e-14; ++it) {
+        apply(d, q);
+        double dq = 0.0;
+        for (size_t i = 0; i < N; ++i) dq += d[i] * q[i];
+        const double alpha = rr / dq;
+        double rr2 = 0.0;
+        for (size_t i = 0; i < N; ++i) { x[i] += alpha * d[i]; r[i] -= alpha * q[i]; rr2 += r[i] * r[i]; }
+        const double beta = rr2 / rr;
+        rr = rr2;
+        for (size_t i = 0; i < N; ++i) d[i] = r[i] + beta * d[i];
+    }
+    // Gradients (cells' differences; the same boundary values as stage 5).
+    auto grad = [&](auto get, int xx, int y, int z, double g[3]) {
+        const double self = get(xx, y, z);
+        auto at = [&](int a, int bq, int c, double outside) {
+            return a < 0 || c < 0 || a >= int(n) || bq >= int(n) || c >= int(n) ? outside : bq < 0 ? self : get(a, bq, c);
+        };
+        g[0] = at(xx + 1, y, z, 0.0) - at(xx - 1, y, z, 0.0);
+        g[1] = at(xx, y + 1, z, 0.0) - at(xx, y - 1, z, 0.0);
+        g[2] = at(xx, y, z + 1, 0.0) - at(xx, y, z - 1, 0.0);
+    };
+    double ee = 0.0, gg = 0.0, res = 0.0;
+    std::vector<double> gpu(N);
+    for (size_t i = 0; i < N; ++i) gpu[i] = pr[i];
+    apply(gpu, q);
+    for (size_t i = 0; i < N; ++i) res += (q[i] - b[i]) * (q[i] - b[i]);
+    for (int z = 0; z < int(n); ++z)
+        for (int y = 0; y < int(n); ++y)
+            for (int xx = 0; xx < int(n); ++xx) {
+                double gr[3], gs[3];
+                grad([&](int a, int bq, int c) { return x[idx(a, bq, c)]; }, xx, y, z, gr);
+                grad([&](int a, int bq, int c) { return gpu[idx(a, bq, c)]; }, xx, y, z, gs);
+                for (int k = 0; k < 3; ++k) { ee += (gs[k] - gr[k]) * (gs[k] - gr[k]); gg += gr[k] * gr[k]; }
+            }
+    Log("smoke residual: frame %llu, %u^3: |r|/|b| %.4f, gradient error %.4f of the converged one's (CG %d its)",
+        (unsigned long long)g_residual.frame, n, std::sqrt(res / std::max(bb, 1e-30)), std::sqrt(ee / std::max(gg, 1e-30)), it);
 }
 
 }  // namespace
@@ -174,7 +268,8 @@ void Device::DestroySmokeImages()
     };
     for (SmokeVolume& v : m_smokeVolumes) {
         for (int k = 0; k < 2; ++k) { destroy(v.vel[k]); destroy(v.dens[k]); }
-        destroy(v.light);
+        destroy(v.pressure);
+        destroy(v.look);
         v.fresh = true;
         v.age = 0.0f;
         v.n = 0;
@@ -203,16 +298,16 @@ bool Device::CreateSmokeResources(std::string* error)
     si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;   // (the wisps' noise)
     if (!Check(vkCreateSampler(m_device, &si, nullptr, &m_smokeRepeatSampler), "smoke sampler", error))
         return false;
-    // The simulation: 0, 1, 10 sampled; 2..9 storage images; 11 the characters.
+    // The simulation: 0, 1, 10 sampled; 2..9 and 12 storage images; 11 the characters.
     {
-        VkDescriptorSetLayoutBinding b[12] = {};
-        for (uint32_t i = 0; i < 12; ++i)
+        VkDescriptorSetLayoutBinding b[13] = {};
+        for (uint32_t i = 0; i < 13; ++i)
             b[i] = {i, i < 2 || i == 10 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1,
                     VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
         b[11].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         VkDescriptorSetLayoutCreateInfo sl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         sl.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-        sl.bindingCount = 12;
+        sl.bindingCount = 13;
         sl.pBindings = b;
         if (!Check(vkCreateDescriptorSetLayout(m_device, &sl, nullptr, &m_smokeSimSetLayout), "smoke sim set", error))
             return false;
@@ -240,16 +335,16 @@ bool Device::CreateSmokeResources(std::string* error)
         if (!ok)
             return false;
     }
-    // The rendering: 0 the block, 1 the density, 2 the sunlight, 3 the scene's depth, 4 the frame lights, 5 the flow,
-    // 6 the wisps' noise.
-    VkDescriptorSetLayoutBinding b[7] = {};
-    for (uint32_t i = 0; i < 7; ++i)
+    // The rendering: 0 the block, 1 the look (density, sunlight), 2 the flow, 3 the scene's depth, 4 the frame lights,
+    // 5 the wisps' noise.
+    VkDescriptorSetLayoutBinding b[6] = {};
+    for (uint32_t i = 0; i < 6; ++i)
         b[i] = {i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                 nullptr};
     b[0].descriptorType = b[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     VkDescriptorSetLayoutCreateInfo sl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     sl.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-    sl.bindingCount = 7;
+    sl.bindingCount = 6;
     sl.pBindings = b;
     if (!Check(vkCreateDescriptorSetLayout(m_device, &sl, nullptr, &m_smokeSetLayout), "smoke set", error))
         return false;
@@ -328,6 +423,7 @@ bool Device::CreateSmokeResources(std::string* error)
 
 void Device::DestroySmokeResources()
 {
+    if (g_residual.buffer) { vmaDestroyBuffer(m_allocator, g_residual.buffer, g_residual.allocation); g_residual = SmokeResidual{}; }
     DestroySmokeImages();
     m_smokeVolumes.clear();
     if (m_smokePipeline) { vkDestroyPipeline(m_device, m_smokePipeline, nullptr); m_smokePipeline = VK_NULL_HANDLE; }
@@ -347,6 +443,8 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
     const double now = m_frameClock;
     const float dt = m_smokeLastClock < 0.0 ? 0.0f : float(std::clamp(now - m_smokeLastClock, 0.0, 1.0 / 30.0));
     m_smokeLastClock = now;
+    if (g_residual.readAt && m_frameNumber >= g_residual.readAt)
+        LogSmokeResidual();
     if (!P.enable || !m_smokeSimPipeline || !m_smokePipeline || !m_scene || !m_hdr || m_smokeVolumes.empty())
         return;
     // Gone sources whose smoke has faded give their volumes back.
@@ -396,7 +494,8 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         for (auto& [d, v] : live) {
             if (v->n && v->n != cells(*v)) {
                 for (int k = 0; k < 2; ++k) { destroy(v->vel[k]); destroy(v->dens[k]); }
-                destroy(v->light);
+                destroy(v->pressure);
+                destroy(v->look);
                 v->n = 0;
                 v->fresh = true;
             }
@@ -453,9 +552,13 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
     }
     for (auto& [d, v] : live) {
         ok = ok && ensure(v->vel[0], rgba, true, v->n) && ensure(v->vel[1], rgba, true, v->n) &&
-             ensure(v->dens[0], rgba, true, v->n) && ensure(v->dens[1], rgba, true, v->n) && ensure(v->light, r16, false, v->n);
-        if (v->fresh)
+             ensure(v->dens[0], rgba, true, v->n) && ensure(v->dens[1], rgba, true, v->n) && ensure(v->look, rgba, true, v->n) &&
+             (!P.exact || ensure(v->pressure, r32, true, v->n));
+        if (v->fresh) {
             for (int k = 0; k < 2; ++k) { toClear.push_back(v->vel[k].image); toClear.push_back(v->dens[k].image); }
+            toClear.push_back(v->look.image);
+            if (v->pressure.image) toClear.push_back(v->pressure.image);
+        }
         v->fresh = false;
     }
     if (!ok) {
@@ -507,6 +610,17 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         const SmokeSource& s = v.source;
         const uint32_t n = v.n;
         groups = n / 4;
+        // Stepped when it is due (warming up: every frame); the steps' dt what has passed since the last.
+        const bool warming = v.age < kWarmUp;
+        v.age += dt;
+        v.simWait += dt;
+        const float period = warming ? 0.0f : dist > kSimFar ? 2.0f * kSimStep : kSimStep;
+        if (v.simWait + 0.5f * dt < period && m_smokeNoiseMade)
+            continue;
+        const float simDt = std::min(v.simWait, 1.0f / 30.0f);
+        v.lastStep = simDt;
+        // (Warmed up: volumes made together - a zone's - are spread over the frames, not all stepped in the same one.)
+        v.simWait = warming && v.age >= kWarmUp ? -kSimStep * float(v.key % 5u) / 5.0f : 0.0f;
         const bool fed = now - v.lastSeen < 0.25;           // a source gone: its smoke goes on, nothing added
         float corner[3], shift[3], wind[2];
         SmokeWind(s, m_rainWind, wind);
@@ -515,9 +629,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
             shift[i] = (corner[i] - v.corner[i]) / s.size;
             v.corner[i] = corner[i];
         }
-        const bool warming = v.age < kWarmUp;
-        const float step = warming ? dt * kWarmSpeed : dt;
-        v.age += dt;
+        const float step = warming ? simDt * kWarmSpeed : simDt;
         SimPush p{};
         p.a[1] = float(n);
         p.a[2] = step;
@@ -574,46 +686,55 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         std::memcpy(bodiesCpu, &bodies, sizeof(bodies));
         VkDescriptorBufferInfo bodiesInfo{f.ring, bodiesOffset, sizeof(SmokeBodies)};
         const uint32_t c = v.cur, o = c ^ 1u;
-        VkImageView lightView = v.light.view;
-        // Bindings: 0 velIn, 1 densIn (sampled); 2 velOut, 3 densOut, 4 curl, 5 pIn, 6 pOut, 7 div, 8 velRead, 9 light;
-        // 10 the curl image sampled (MacCormack's forward step).
+        // Bindings: 0 velIn, 1 densIn (sampled); 2 velOut, 3 densOut, 4 curl, 5 pIn, 6 pOut, 7 div, 8 velRead, 9 look;
+        // 10 the curl image sampled (MacCormack's forward step); 11 the characters; 12 the wisps' noise.
         auto dispatch = [&](int stage, const SmokeImage& velIn, const SmokeImage& densIn, const SmokeImage& velOut,
                             const SmokeImage& densOut, const SmokeImage& pIn, const SmokeImage& pOut,
-                            const SmokeImage& velRead, float first) {
-            VkDescriptorImageInfo info[11] = {
+                            const SmokeImage& velRead, float e3) {
+            VkDescriptorImageInfo info[13] = {
                 {m_smokeSampler, velIn.view, VK_IMAGE_LAYOUT_GENERAL},  {m_smokeSampler, densIn.view, VK_IMAGE_LAYOUT_GENERAL},
                 {VK_NULL_HANDLE, velOut.view, VK_IMAGE_LAYOUT_GENERAL}, {VK_NULL_HANDLE, densOut.view, VK_IMAGE_LAYOUT_GENERAL},
                 {VK_NULL_HANDLE, m_smokeCurl.view, VK_IMAGE_LAYOUT_GENERAL}, {VK_NULL_HANDLE, pIn.view, VK_IMAGE_LAYOUT_GENERAL},
                 {VK_NULL_HANDLE, pOut.view, VK_IMAGE_LAYOUT_GENERAL},   {VK_NULL_HANDLE, m_smokeDiv.view, VK_IMAGE_LAYOUT_GENERAL},
-                {VK_NULL_HANDLE, velRead.view, VK_IMAGE_LAYOUT_GENERAL}, {VK_NULL_HANDLE, lightView, VK_IMAGE_LAYOUT_GENERAL},
-                {m_smokeSampler, m_smokeCurl.view, VK_IMAGE_LAYOUT_GENERAL},
+                {VK_NULL_HANDLE, velRead.view, VK_IMAGE_LAYOUT_GENERAL}, {VK_NULL_HANDLE, v.look.view, VK_IMAGE_LAYOUT_GENERAL},
+                {m_smokeSampler, m_smokeCurl.view, VK_IMAGE_LAYOUT_GENERAL}, {}, {VK_NULL_HANDLE, m_smokeNoise.view, VK_IMAGE_LAYOUT_GENERAL},
             };
-            VkWriteDescriptorSet w[12] = {};
-            for (uint32_t i = 0; i < 12; ++i) {
+            VkWriteDescriptorSet w[13] = {};
+            for (uint32_t i = 0; i < 13; ++i) {
                 w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 w[i].dstBinding = i;
                 w[i].descriptorCount = 1;
                 w[i].descriptorType = i < 2 || i == 10 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                w[i].pImageInfo = i < 11 ? &info[i] : nullptr;
+                w[i].pImageInfo = &info[i];
             }
             w[11].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            w[11].pImageInfo = nullptr;
             w[11].pBufferInfo = &bodiesInfo;
-            vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_smokeSimLayout, 0, 12, w);
+            vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_smokeSimLayout, 0, 13, w);
             SimPush q = p;
             q.a[0] = float(stage);
-            q.e[3] = first;
+            q.e[3] = e3;
             vkCmdPushConstants(cmd, m_smokeSimLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(q), &q);
             vkCmdDispatch(cmd, groups, groups, groups);
             memory(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            // (RANDYVK_SMOKE_STAGES: the profile times each stage, all volumes' summed.)
+            static const char* const kStageNames[] = {"smoke 0 advect", "smoke 1 curl", "smoke 2 vorticity",
+                                                      "smoke 3 divergence", "smoke 4 pressure", "smoke 5 project",
+                                                      "smoke 6 density on", "smoke 7 light", "smoke 8 density back",
+                                                      "smoke 9 density", "smoke 10 noise"};
+            static const bool stageProfile = getenv("RANDYVK_SMOKE_STAGES") != nullptr;
+            if (stageProfile)
+                ProfileMark(kStageNames[stage]);
         };
-        SmokeImage* pr = m_smokePressure;
-        if (!m_smokeNoiseMade) {                 // (once: the wisps' noise, written through the light binding)
-            lightView = m_smokeNoise.view;
+        // The pressure: Jacobi steps between the first image and the second; the first the volume's own (RVK_SmokeExact:
+        // kept, the next solve starts from it) or shared (the solve starts from 0).
+        SmokeImage pr[2] = {P.exact ? v.pressure : m_smokePressure[0], m_smokePressure[1]};
+        const uint32_t jacobi = P.exact ? kJacobiExact : kJacobi;
+        if (!m_smokeNoiseMade) {                 // (once: the wisps' noise)
             p.a[1] = float(kNoiseSize);
             groups = kNoiseSize / 4;
             dispatch(10, v.vel[c], v.dens[c], v.vel[o], v.dens[o], pr[0], pr[1], v.vel[c], 0.0f);
-            lightView = v.light.view;
             p.a[1] = float(n);
             groups = n / 4;
             m_smokeNoiseMade = true;
@@ -622,14 +743,46 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         dispatch(1, v.vel[c], v.dens[c], v.vel[c], v.dens[o], pr[0], pr[1], v.vel[o], 0.0f);   // curl of vel[o]
         dispatch(2, v.vel[o], v.dens[c], v.vel[c], v.dens[o], pr[0], pr[1], v.vel[o], 0.0f);   // vorticity -> vel[c]
         dispatch(3, v.vel[o], v.dens[c], v.vel[o], v.dens[o], pr[0], pr[1], v.vel[c], 0.0f);   // divergence of vel[c]
-        for (uint32_t k = 0; k < kJacobi; ++k)                                                  // pressure: pr[0] <-> pr[1]
-            dispatch(4, v.vel[o], v.dens[c], v.vel[o], v.dens[o], pr[k & 1], pr[(k & 1) ^ 1], v.vel[c], k == 0 ? 1.0f : 0.0f);
-        const SmokeImage& p0 = pr[kJacobi & 1];                                                 // (the last written)
+        for (uint32_t k = 0; k < jacobi; ++k)                                                   // pressure: pr[0] <-> pr[1]
+            dispatch(4, v.vel[o], v.dens[c], v.vel[o], v.dens[o], pr[k & 1], pr[(k & 1) ^ 1], v.vel[c],
+                     k == 0 && !P.exact ? 1.0f : 0.0f);
+        const SmokeImage& p0 = pr[jacobi & 1];                                                 // (the last written)
+        static const uint64_t residualFrame = getenv("RANDYVK_SMOKE_RESIDUAL") ? std::strtoull(getenv("RANDYVK_SMOKE_RESIDUAL"), nullptr, 10) : 0;
+        if (residualFrame && m_frameNumber == residualFrame && &v == live.front().second) {
+            const VkDeviceSize bytes = VkDeviceSize(n) * n * n * 4;
+            if (!g_residual.buffer) {
+                VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+                bi.size = bytes * 2;
+                bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+                VmaAllocationCreateInfo rc{};
+                rc.usage = VMA_MEMORY_USAGE_AUTO;
+                rc.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+                VmaAllocationInfo info{};
+                if (vmaCreateBuffer(m_allocator, &bi, &rc, &g_residual.buffer, &g_residual.allocation, &info) == VK_SUCCESS)
+                    g_residual.cpu = info.pMappedData;
+            }
+            if (g_residual.cpu) {
+                memory(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                       VK_ACCESS_2_TRANSFER_READ_BIT);
+                VkBufferImageCopy r{};
+                r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                r.imageExtent = {n, n, n};
+                vkCmdCopyImageToBuffer(cmd, p0.image, VK_IMAGE_LAYOUT_GENERAL, g_residual.buffer, 1, &r);
+                r.bufferOffset = bytes;
+                vkCmdCopyImageToBuffer(cmd, m_smokeDiv.image, VK_IMAGE_LAYOUT_GENERAL, g_residual.buffer, 1, &r);
+                memory(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                       VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                g_residual.frame = m_frameNumber;
+                g_residual.readAt = m_frameNumber + 6;
+                g_residual.n = n;
+                g_residual.h = s.size / float(n);
+            }
+        }
         dispatch(5, v.vel[c], v.dens[c], v.vel[o], v.dens[o], p0, pr[0], v.vel[c], 0.0f);       // projected -> vel[o]
         dispatch(6, v.vel[o], v.dens[c], v.vel[c], v.dens[o], p0, pr[0], v.vel[c], 0.0f);       // density forward -> curl
         dispatch(8, v.vel[o], v.dens[c], v.vel[c], v.dens[o], p0, pr[0], v.vel[c], 0.0f);       // ... and back -> div
         dispatch(9, v.vel[o], v.dens[c], v.vel[c], v.dens[o], p0, pr[0], v.vel[c], 0.0f);       // corrected -> dens[o]
-        dispatch(7, v.vel[o], v.dens[o], v.vel[c], v.dens[c], p0, pr[0], v.vel[c], 0.0f);       // sunlight
+        dispatch(7, v.vel[o], v.dens[o], v.vel[c], v.dens[c], p0, pr[0], v.vel[c], 0.0f);       // sunlight -> look
         v.cur = o;
     }
     memory(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
@@ -685,6 +838,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
             sf.colour[i] = std::max(sf.colour[i], 0.1f) * P.brightness;   // (black smoke dark grey: lit and shadowed,
                                                                           //  not a flat shape)
         sf.look[0] = std::clamp(P.opacity, 0.0f, 8.0f);
+        sf.look[1] = v.lastStep > 0.0f ? std::clamp(v.simWait / v.lastStep, 0.0f, 1.0f) : 1.0f;
         sf.detail[0] = P.detail;
         sf.detail[1] = 1.2f;
         sf.detail[2] = 2.5f;
@@ -714,13 +868,12 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         std::memcpy(cpu, &sf, sizeof(sf));
         VkDescriptorBufferInfo blockInfo{f.ring, offset, sizeof(SmokeFrame)};
         VkDescriptorBufferInfo lightsInfo{f.ring, m_frameLightsOffset, sizeof(FrameLights)};
-        VkDescriptorImageInfo densInfo{m_smokeSampler, v.dens[v.cur].view, VK_IMAGE_LAYOUT_GENERAL};
-        VkDescriptorImageInfo sunInfo{m_smokeSampler, v.light.view, VK_IMAGE_LAYOUT_GENERAL};
-        VkDescriptorImageInfo depthInfo{m_pointSampler, m_depthView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkDescriptorImageInfo lookInfo{m_smokeSampler, v.look.view, VK_IMAGE_LAYOUT_GENERAL};
         VkDescriptorImageInfo velInfo{m_smokeSampler, v.vel[v.cur].view, VK_IMAGE_LAYOUT_GENERAL};
+        VkDescriptorImageInfo depthInfo{m_pointSampler, m_depthView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkDescriptorImageInfo noiseInfo{m_smokeRepeatSampler, m_smokeNoise.view, VK_IMAGE_LAYOUT_GENERAL};
-        VkWriteDescriptorSet w[7] = {};
-        for (uint32_t i = 0; i < 7; ++i) {
+        VkWriteDescriptorSet w[6] = {};
+        for (uint32_t i = 0; i < 6; ++i) {
             w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w[i].dstBinding = i;
             w[i].descriptorCount = 1;
@@ -728,13 +881,12 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         }
         w[0].descriptorType = w[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         w[0].pBufferInfo = &blockInfo;
-        w[1].pImageInfo = &densInfo;
-        w[2].pImageInfo = &sunInfo;
+        w[1].pImageInfo = &lookInfo;
+        w[2].pImageInfo = &velInfo;
         w[3].pImageInfo = &depthInfo;
         w[4].pBufferInfo = &lightsInfo;
-        w[5].pImageInfo = &velInfo;
-        w[6].pImageInfo = &noiseInfo;
-        vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_smokeLayout, 0, 7, w);
+        w[5].pImageInfo = &noiseInfo;
+        vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_smokeLayout, 0, 6, w);
         vkCmdDraw(cmd, 36, 1, 0, 0);
     }
     vkCmdEndRendering(cmd);

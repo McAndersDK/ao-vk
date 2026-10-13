@@ -1405,6 +1405,7 @@ bool g_smokeGame = false;         // --smoke-game: the source as the game's barr
 float g_smokeDensity = 1.0f;      // --smoke-density X (RVK_SmokeDensity)
 float g_smokeWindScale = 1.0f;    // --smoke-wind X: the game's wind x X
 float g_smokeWisps = 1.0f;        // --smoke-wisps X (RVK_SmokeWisps)
+bool g_smokeExact = false;        // --smoke-exact (RVK_SmokeExact)
 bool g_smokeTwo = false;          // --smoke-two: a second, bigger source
 float g_smokeOpaque = 1.0f;       // --smoke-opaque X (RVK_SmokeOpaque)
 float g_rainForce = 0.0f;         // --rain F: rain this hard (0..1; RVK_RainForce), the new weather on
@@ -2826,8 +2827,8 @@ int main(int argc, char** argv)
         else if (a == "--point-shadow-slab") g_slabTest = pointShadowTest = pointShadowSun = shadows = true;
         else if (a == "--point-shadow-sun") pointShadowTest = pointShadowSun = shadows = true;
         else if (a == "--frame-ms" && i + 1 < argc) frameMs = std::atoi(argv[++i]);
-        else if (a == "--cache-test" && i + 1 < argc) { cacheTest = std::atoi(argv[++i]); shadowTest = shadows = true; }
         else if (a == "--fixed-clock" && i + 1 < argc) { g_fixedClock = true; Device::SetFixedClock(std::atof(argv[++i]) * 1e-3); }
+        else if (a == "--cache-test" && i + 1 < argc) { cacheTest = std::atoi(argv[++i]); shadowTest = shadows = true; }
         else if (a == "--dump" && i + 1 < argc) dump = argv[++i];
         else if (a == "--bench" && i + 1 < argc) bench = std::atoi(argv[++i]);
         else if (a == "--game-ms" && i + 1 < argc) g_benchGameMs = std::atof(argv[++i]);
@@ -2870,6 +2871,7 @@ int main(int argc, char** argv)
         else if (a == "--smoke-two") g_smokeTwo = true;
         else if (a == "--smoke-opaque" && i + 1 < argc) g_smokeOpaque = float(std::atof(argv[++i]));
         else if (a == "--smoke-wisps" && i + 1 < argc) g_smokeWisps = float(std::atof(argv[++i]));
+        else if (a == "--smoke-exact") g_smokeExact = true;
         else if (a == "--smoke-wind" && i + 1 < argc) g_smokeWindScale = float(std::atof(argv[++i]));
         else if (a == "--smoke-density" && i + 1 < argc) g_smokeDensity = float(std::atof(argv[++i]));
         else if (a == "--rain" && i + 1 < argc) { g_rainForce = float(std::atof(argv[++i])); hdr = true; }
@@ -3026,6 +3028,7 @@ int main(int argc, char** argv)
         smoke.enable = true;
         smoke.density = g_smokeDensity;
         smoke.detail = g_smokeWisps;
+        smoke.exact = g_smokeExact;
         smoke.opacity = g_smokeOpaque;
         dev.SetSmokeParams(smoke);
     }

@@ -542,6 +542,8 @@ public:
         float detail = 1.0f;                    // RVK_SmokeWisps: the wisps finer than the grid (0 none)
         float brightness = 1.0f;                // RVK_SmokeBright: its colour, x
         float opacity = 1.0f;                   // RVK_SmokeOpaque: how opaque it is drawn (<= 1 x; above, as if thicker)
+        bool exact = false;                      // RVK_SmokeExact: the pressure solved closer (from the last step's;
+                                                 // cheaper too - but its plumes rise less high: a look of its own)
     };
     struct SmokeSource {
         float pos[3] = {0, 0, 0};                // world: where it comes from (its box stands round it)
@@ -989,9 +991,9 @@ private:
     void ForgetCachedCaster(std::unordered_map<uint64_t, CachedCaster>::iterator it);
     void ForgetCasterTexture(Texture* texture);
     static double SwayClock();
+    static void TickFixedClock();
     d3d::Matrix SwayPose(const CachedCaster& e) const;
     void CaptureSun(const d3d::Light& light);
-    static void TickFixedClock();
     bool ShadowReceiver(uint32_t fvf) const;
     bool IsShadowCaster(uint32_t primitive, uint32_t fvf) const;
     bool IsTerrain(uint32_t fvf) const;
@@ -1518,9 +1520,14 @@ private:
         float corner[3] = {0, 0, 0};             // the box's lowest corner (world)
         bool fresh = true;                       // its images to be cleared first
         float age = 0.0f;                        // seconds simulated (warming up: faster, fading in)
+        float simWait = 0.0f;                    // seconds since its last step (stepped every kSimStep or so)
+        float lastStep = 0.0f;                   // ... and that step's (drawn between it and the state before)
         uint32_t cur = 0;                        // which of each pair holds the state
         uint32_t n = 0;                          // its images' cells a side (0: none yet)
-        SmokeImage vel[2], dens[2], light;
+        SmokeImage vel[2], dens[2];
+        SmokeImage look;                         // what the drawing reads: R density, G the sunlight reaching it; B A
+                                                 // the same a step before (RGBA16F, written by the simulation's last stage)
+        SmokeImage pressure;                     // RVK_SmokeExact: its pressure (each step's solve starts from the last's)
     };
     SmokeParams m_smokeParams;
     std::vector<SmokeVolume> m_smokeVolumes;

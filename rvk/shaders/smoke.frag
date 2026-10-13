@@ -6,11 +6,11 @@
 // scene; the other targets get nothing (they blend alike: 0 leaves them be) but the local fraction (see the end).
 #include "smoke_common.glsl"
 
-layout(set = 0, binding = 1) uniform sampler3D density;     // R density
-layout(set = 0, binding = 2) uniform sampler3D sunLight;    // R the sunlight reaching the cell (0..1)
+layout(set = 0, binding = 1) uniform sampler3D look;        // R density, G the sunlight reaching it (0..1); B A the
+                                                            // same a simulation step before
+layout(set = 0, binding = 2) uniform sampler3D velocity;    // xyz the flow (world / s)
 layout(set = 0, binding = 3) uniform sampler2D sceneDepth;
-layout(set = 0, binding = 5) uniform sampler3D velocity;    // xyz the flow (world / s)
-layout(set = 0, binding = 6) uniform sampler3D wispNoise;   // R tiling noise, 8 lattice cells across (smoke_sim.comp 10)
+layout(set = 0, binding = 5) uniform sampler3D wispNoise;   // R tiling noise, 8 lattice cells across (smoke_sim.comp 10)
 
 layout(location = 0) in vec3 vWorld;
 
@@ -91,7 +91,9 @@ void main()
     for (int i = 0; i < steps && transmit > 0.01; ++i) {
         vec3 p = eye + dir * (enter + (float(i) + noise) * ds);
         vec3 uvw = (p - S.box.xyz) / S.box.w;
-        float dens = texture(density, uvw).r;
+        vec4 cell = texture(look, uvw);
+        vec2 now = mix(cell.ba, cell.rg, S.look.y);
+        float dens = now.x;
         if (dens < 1e-4)
             continue;
         // Wisps: thin smoke frays right through, thick keeps more of its body (the average kept: 2 x the noise's 0.5).
@@ -100,7 +102,7 @@ void main()
             dens *= mix(1.0, 2.0 * smoothstep(0.3, 0.7, Detail(p, texture(velocity, uvw).xyz)), fray);
         float a = 1.0 - exp(-dens * S.colour.w * ds);
         // The sky's light, too, less inside the smoke (as far in as the sun's is shadowed, about).
-        float sunIn = texture(sunLight, uvw).r;
+        float sunIn = now.y;
         vec3 lit = S.ambient.rgb * mix(0.45, 1.0, sunIn) + sun * sunIn;
         for (uint k = 0u; k < lamps; ++k) {
             Light li = FL.lights[k];
