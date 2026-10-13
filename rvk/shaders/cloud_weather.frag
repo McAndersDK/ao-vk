@@ -1,14 +1,12 @@
 #version 450
 // The cloud layer's weather map (rvk/clouds.cpp MakeCloudWeather): top down round the camera, what the layer holds
 // where - R coverage (0 clear .. 1 overcast), G cloud type (0 flat stratus .. 0.5 cumulus .. 1 towering storm cloud),
-// B density. A drifting field of clouds, as much of the sky covered as the game's sky is cloudy, and the game's puffs
-// stamped where the eye sees them on the layer.
+// B density. A drifting field of clouds fixed in the world, as much of the sky covered as the game's sky is cloudy.
 layout(set = 0, binding = 0) uniform WeatherFrame {
-    vec4 area;          // the map's corner x, z (world), its size (world), the stamps
+    vec4 area;          // the map's corner x, z (world), its size (world)
     vec4 info;          // x: time (s), y: how cloudy the sky is (0..1), z: the type, w: the density
     vec4 drift;         // xy: how far the field has drifted (world), z: the field's scale (world units a noise tile),
                         // w: RVK_CloudCover (a bias, -1..1)
-    vec4 stamp[64];     // x z: a puff's middle on the layer (world), its radius, its opacity
 } W;
 layout(set = 0, binding = 1) uniform sampler3D noiseTexture;   // v1's 64^3 (r billowy, g b worley, a value)
 
@@ -26,15 +24,5 @@ void main()
     float cover = smoothstep(cut - 0.15, cut + 0.25, n) * smoothstep(0.0, 0.15, cloudy);
     cover = max(cover, 0.85 * smoothstep(0.75, 1.0, cloudy));   // (overcast: covered everywhere - not wholly, so the
                                                                  // shape noise still breaks it into cloud)
-    // The game's puffs where they stand on the layer: round patches, ragged.
-    int count = int(W.area.w);
-    for (int i = 0; i < count; ++i) {
-        vec4 s = W.stamp[i];
-        float d = length(p - s.xy) / s.z;
-        if (d >= 1.3)
-            continue;
-        float r = texture(noiseTexture, vec3(p * (1.2 / s.z) + vec2(float(i) * 0.37, 0.0), float(i) * 0.13)).r;
-        cover = max(cover, s.w * (1.0 - smoothstep(0.45, 1.1, d + (r - 0.5) * 0.5)));
-    }
     outWeather = vec4(clamp(cover, 0.0, 1.0), W.info.z, W.info.w, 1.0);
 }

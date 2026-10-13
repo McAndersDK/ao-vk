@@ -1646,6 +1646,8 @@ private:
     VkPipelineLayout m_cloudWeatherLayout = VK_NULL_HANDLE, m_cloudLayerLayout = VK_NULL_HANDLE;
     VkPipeline m_cloudWeatherPipeline = VK_NULL_HANDLE, m_cloudLayerPipeline = VK_NULL_HANDLE;
     float m_cloudBase = 0.0f;                    // the layer's base (world y), easing after the eye's height
+    float m_cloudCloudy = 0.0f, m_cloudType = 0.5f;   // the weather map's cloudiness and type, eased
+    double m_cloudWeatherClock = -1.0;
     double m_cloudBaseClock = -1.0;
     void MakeCloudWeather(VkCommandBuffer cmd, const float eye[3]);
     void MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered);
