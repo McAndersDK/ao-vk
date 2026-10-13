@@ -828,9 +828,9 @@ void ThreadedDevice::SetGi(float strength, float radius)
     Enqueue([this, strength, radius](const uint8_t*) { m_device.SetGi(strength, radius); });
 }
 
-void ThreadedDevice::SetVolume(float strength, float haze, float shafts)
+void ThreadedDevice::SetVolume(float strength, float haze, float shafts, float rays, float land)
 {
-    Enqueue([this, strength, haze, shafts](const uint8_t*) { m_device.SetVolume(strength, haze, shafts); });
+    Enqueue([this, strength, haze, shafts, rays, land](const uint8_t*) { m_device.SetVolume(strength, haze, shafts, rays, land); });
 }
 
 void ThreadedDevice::SetSsr(float strength, float water, float gloss, float wet)

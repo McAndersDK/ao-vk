@@ -290,7 +290,10 @@ public:
     // With HDR: indirect light from the lit scene on screen (hdr.cpp). strength 0 = off; radius in world units.
     void SetGi(float strength, float radius) { m_giStrength = strength; m_giRadius = radius; }
     // With HDR: light scattered by the air - sun shafts (strength; 0 = off), lamp glow (relative), haze density.
-    void SetVolume(float strength, float haze, float shafts) { m_volume = strength; m_volumeHaze = haze; m_volumeShafts = shafts; }
+    // rays: light shafts through the cloud layer's gaps, x; land: haze over the distant land (0..1).
+    void LandHaze(float out[8]) const;
+    void SetVolume(float strength, float haze, float shafts, float rays = 1.0f, float land = 0.4f)
+    { m_volume = strength; m_volumeHaze = haze; m_volumeShafts = shafts; m_volumeRays = rays; m_landHaze = land; }
     // With HDR: screen-space reflections - strength (0 = off), reflectivity of water, glossy surfaces, wet ground.
     void SetSsr(float strength, float water, float gloss, float wet)
     { m_ssr = strength; m_ssrWater = water; m_ssrGloss = gloss; m_ssrWet = wet; m_constantsDirty = true; }
@@ -1899,7 +1902,7 @@ private:
     VkPipeline m_envAccumPipeline = VK_NULL_HANDLE, m_envFilterPipeline = VK_NULL_HANDLE;
     bool RenderEnvProbe(VkCommandBuffer cmd);
     // Volumetric light: sun shafts through the shadow cascades and lamp glow (hdr.cpp, volume.frag).
-    float m_volume = 1.0f, m_volumeHaze = 1.0f, m_volumeShafts = 1.0f;
+    float m_volume = 1.0f, m_volumeHaze = 1.0f, m_volumeShafts = 1.0f, m_volumeRays = 1.0f, m_landHaze = 0.4f;
     Texture* m_volumeTex[2] = {};                // half resolution: scattered light + view depth (ping-pong)
     VkDescriptorSetLayout m_volumeSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_volumeLayout = VK_NULL_HANDLE;

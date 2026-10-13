@@ -39,14 +39,7 @@ void main()
 {
     vec4 s = texelFetch(scene, ivec2(gl_FragCoord.xy), 0);
     vec3 glow = P.params.z > 0.0 ? Bloom() * P.params.z : vec3(0.0);
-    vec3 c = max((Reflected(s.rgb * AmbientFactor() + Indirect()) + Volumetric() + glow) * P.params.y, vec3(0.0));
-    float m = max(c.r, max(c.g, c.b)), k = P.params.x;
-    if (m > k) {
-        float room = 1.0 - k;
-        float shown = room > 0.0 ? k + room * (1.0 - exp(-(m - k) / room)) : 1.0;
-        float white = m > 1.0 ? 1.0 - 1.0 / (1.0 + 0.25 * (m - 1.0)) : 0.0;   // 0 at 1, 0.2 at 2, 0.5 at 5
-        c = mix(c * (shown / m), vec3(shown), white);
-    }
+    vec3 c = Reflected(s.rgb * AmbientFactor() + Indirect());
     // How far the pixel is: its view depth over the far clip's (the sky: wholly).
     float d = texelFetch(depthTex, ivec2(gl_FragCoord.xy), 0).r;
     float far = 1.0;
@@ -54,9 +47,26 @@ void main()
         far = 0.0;                               // (no depth readable: warmth everywhere)
     } else if (d < 1.0) {
         // (Over the far clip - the game's fog end; with no far clip to speak of, over 3 km.)
-        float z = P.proj.y / max(d - P.proj.x, 1e-9);
-        float zFar = P.proj.x < 0.99999 ? P.proj.y / (1.0 - P.proj.x) : 3000.0;
+        // (D3D: m[2][2] = f / (f - n) > 1, m[3][2] = -n m[2][2] < 0 - both terms of the view depth negative.)
+        float z = P.proj.y / min(d - P.proj.x, -1e-9);
+        float zFar = P.proj.x > 1.000001 ? P.proj.y / (1.0 - P.proj.x) : 3000.0;
         far = clamp(z / zFar, 0.0, 1.0);
+        // The haze over the distant land (RVK_VolLand): the air between the eye and the land, thickening from the
+        // eye out - each ridge farther paler and bluer - and giving way to the game's own fog where that starts
+        // (its fog end the far land's colour: no seam with the sky).
+        if (P.haze.w > 0.0 && P.fog.y > P.fog.x) {
+            float air = 1.0 - exp(-z / (0.4 * P.fog.y));
+            float gameFog = clamp((z - P.fog.x) / (P.fog.y - P.fog.x), 0.0, 1.0);
+            c = mix(c, P.haze.rgb, P.haze.w * air * (1.0 - gameFog));
+        }
+    }
+    c = max((c + Volumetric() + glow) * P.params.y, vec3(0.0));
+    float m = max(c.r, max(c.g, c.b)), k = P.params.x;
+    if (m > k) {
+        float room = 1.0 - k;
+        float shown = room > 0.0 ? k + room * (1.0 - exp(-(m - k) / room)) : 1.0;
+        float white = m > 1.0 ? 1.0 - 1.0 / (1.0 + 0.25 * (m - 1.0)) : 0.0;   // 0 at 1, 0.2 at 2, 0.5 at 5
+        c = mix(c * (shown / m), vec3(shown), white);
     }
     outColor = vec4(Grade(min(c, vec3(1.0)), far), clamp(s.a, 0.0, 1.0));
 }

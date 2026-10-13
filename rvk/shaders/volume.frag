@@ -13,7 +13,8 @@ layout(push_constant) uniform Push {
     vec4 eye;           // camera position; w = longest ray (world units)
     vec4 params;        // haze density, sun strength, this frame's noise offset, D3D projection m[2][2]
     vec4 size;          // full target width, height, steps, D3D projection m[3][2]
-    vec4 shafts;        // contrast of the shafts (power on the ray's lit fraction - 1)
+    vec4 shafts;        // x: contrast of the shafts (power on the ray's lit fraction - 1); y: the rays through the
+                        // clouds' gaps, x (0: none); z: their reach (world)
 } P;
 layout(location = 0) out vec4 outVolume;
 
@@ -85,6 +86,33 @@ void main()
         float cosAngle = dot(dir, -normalize(FL.sunDir.xyz));
         float phase = min((1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * cosAngle, 1.5), 4.0);
         light += FL.sunColor.rgb * (lit * stepLen * P.params.x * P.params.y * phase);
+    }
+
+    // Rays through the gaps in the clouds: the air out to kilometres (thin, thinning with height up to the clouds'
+    // shadow plane), lit where the clouds let the sun through (their shadow map) - beams fanning from the gaps,
+    // brightest looking towards the sun. A few long steps: the clouds' shadows are kilometres across.
+    if (P.shafts.y > 0.0 && floatBitsToUint(FL.clouds.w) != 0u && dot(FL.sunColor.rgb, FL.sunColor.rgb) > 0.0) {
+        const int kSteps = 16;
+        float reach = min(d >= 1.0 ? P.shafts.z : dist, P.shafts.z);
+        float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.0583715, 0.06711056))) + P.params.z);
+        float lit = 0.0, open = 0.0, stepLen = reach / float(kSteps);
+        for (int i = 0; i < kSteps; ++i) {
+            float t = (float(i) + noise) * stepLen;
+            vec3 q = P.eye.xyz + dir * t;
+            if (q.y >= FL.clouds2.x) break;      // (into the clouds)
+            float w = exp(-max(q.y - P.eye.y, 0.0) / 500.0) * exp(-t / 2500.0);
+            lit += CloudShadowMap(q) * w;
+            open += w;
+        }
+        if (open > 1e-6) {
+            // Contrast as the near shafts': the shadowed air dark, the beams through the gaps standing out.
+            float fraction = lit / open;
+            float beams = open * pow(fraction, 4.0);
+            const float g = 0.7;
+            float cosAngle = dot(dir, -normalize(FL.sunDir.xyz));
+            float phase = min((1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * cosAngle, 1.5), 6.0);
+            light += FL.sunColor.rgb * (beams * stepLen * 0.0001 * P.shafts.y * phase);
+        }
     }
 
     outVolume = vec4(light, viewZ);

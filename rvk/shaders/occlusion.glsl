@@ -18,6 +18,8 @@ layout(push_constant) uniform Push {
                         // contact shadows on (bit 8), the depth is the scene's (bit 16)
     vec4 grade;         // saturation, contrast, warmth (-1 cool .. 1 warm), lookup table amount
     vec4 grade2;        // night (0 day .. 1 night), night tint, vignette, unused
+    vec4 haze;          // the haze over the distant land (bit 16 only): rgb its colour, w how much (0: none)
+    vec4 fog;           // x, y: the game's fog start and end (view depth)
 } P;
 
 // A reduced-resolution image at this pixel: of the 4 nearest texels, those at this pixel's depth (the same surface,

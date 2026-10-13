@@ -540,13 +540,39 @@ void Device::TonemapInputsPass(VkCommandBuffer cmd, Texture* dst, VkPipeline pip
         w[i].pImageInfo = &images[i];
     }
     vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_tonemapLayout, 0, kTonemapInputs, w);
-    float push[16];
-    std::memcpy(push, params, sizeof(push));
-    if (depthView == m_depthView && m_aoProjValid)
-        push[7] = float(int(push[7]) | 16);      // (the depth is the scene's: the grading's distance)
-    vkCmdPushConstants(cmd, m_tonemapLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 64, push);
+    float push[24] = {};
+    std::memcpy(push, params, 16 * sizeof(float));
+    if (depthView == m_depthView && m_aoProjValid) {
+        push[7] = float(int(push[7]) | 16);      // (the depth is the scene's: the grading's distance, the land's haze)
+        LandHaze(push + 16);
+    }
+    vkCmdPushConstants(cmd, m_tonemapLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), push);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRendering(cmd);
+}
+
+// The haze over the distant land (RVK_VolLand; tonemap.frag): out[0..3] its colour - the game's fog colour (what the
+// far land fades into) cooled and a little lighter, as the air's blue - and how much; out[4..7] the game's fog start
+// and end (view depth: from there the game's own fog takes over), 0 0 if none. Off (strength 0) without the fog.
+void Device::LandHaze(float out[8]) const
+{
+    float fog[4], fogParams[4];
+    SceneFog(fog, fogParams);
+    const bool linear = fog[3] > 0.5f && uint32_t(fogParams[3]) == 3 && fogParams[1] > fogParams[0] && fogParams[1] > 1.0f;
+    if (m_landHaze <= 0.0f || !linear) {
+        for (int k = 0; k < 8; ++k) out[k] = 0.0f;
+        return;
+    }
+    const float l = 0.3f * fog[0] + 0.59f * fog[1] + 0.11f * fog[2];
+    const float cool[3] = {0.78f, 0.95f, 1.25f};
+    for (int k = 0; k < 3; ++k) out[k] = std::max(0.0f, fog[k] + (l * cool[k] - fog[k]) * 0.45f) * 1.08f;
+    out[3] = std::clamp(m_landHaze, 0.0f, 1.0f);
+    out[4] = fogParams[0];
+    out[5] = fogParams[1];
+    out[6] = out[7] = 0.0f;
+    if (m_frameNumber % 600 == 3)
+        Log("land haze: colour %.2f %.2f %.2f x %.2f, the game's fog %.0f..%.0f", double(out[0]), double(out[1]),
+            double(out[2]), double(out[3]), double(out[4]), double(out[5]));
 }
 
 // Depth of field (dof_*.frag): the scene with its occlusion -> focus distance (1x1, eased) -> half resolution colour
@@ -830,7 +856,9 @@ bool Device::RenderVolume(VkCommandBuffer cmd)
     push.size[2] = 32.0f;                                         // sun steps
     push.size[3] = m_aoProj.m[3][2];
     push.shafts[0] = 2.0f * m_volumeShafts;
-    push.shafts[1] = push.shafts[2] = push.shafts[3] = 0.0f;
+    push.shafts[1] = CloudShadowView() != m_blackTexture->m_view ? m_volumeRays : 0.0f;   // (clouds casting shadows)
+    push.shafts[2] = 3000.0f;                                     // the rays' reach
+    push.shafts[3] = 0.0f;
     static_assert(sizeof(push) <= 128, "push constant range");
 
     Texture* dst = m_volumeTex[0];

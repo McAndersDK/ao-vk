@@ -127,7 +127,7 @@ public:
     void SetContactShadows(float s);
     void SetAo(float strength, float radius);
     void SetGi(float strength, float radius);
-    void SetVolume(float strength, float haze, float shafts);
+    void SetVolume(float strength, float haze, float shafts, float rays = 1.0f, float land = 0.4f);
     void SetSsr(float strength, float water, float gloss, float wet);
     void SetBump(float strength);
     void SetNormalMaps(bool enable, float strength);
