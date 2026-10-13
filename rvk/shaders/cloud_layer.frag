@@ -22,7 +22,8 @@ layout(set = 0, binding = 0, std140) uniform LayerFrame {
                         // (world)
     vec4 view;          // xy: the half-size target's size, z: steps, w: steps towards the sun
     vec4 sub;           // reused over frames (cloud_resolve.frag): xy this frame's pixel in each 2x2, z: 2 (one of each
-                        // 2x2 marched, into a quarter-size target) or 1 (every pixel)
+                        // 2x2 marched, into a quarter-size target) or 1 (every pixel); w: the shadow map's - how
+                        // cloudy the sky is
     vec4 horizon;       // x: how much the game fogs its clouds (0..1: towards the horizon they become the fog's colour,
                         // as the game's do - the fogged ground meets them seamlessly); y: contrast (RVK_CloudShade)
     vec4 shadowArea;    // the shadow map (RVK_CLOUD_SHADOW): its corner x, z (world), its size, the plane it lies in
@@ -231,6 +232,23 @@ void main()
         od += ds * dspan / sunL.y * L.shape.w * 0.9;
     }
     float light = exp(-od * 0.25);                // (softened: thin cloud a light shade, thick cloud dark)
+    // Real and finer together (user's choice, 2026-10-13): the clouds' own shadow says where the shade is, but its
+    // cells are about a kilometre - the land in view lay wholly in one or none, and the shadows weren't seen. Patches
+    // of ~60-150 units break it up: under a cloud mostly shade with small lit gaps, in the open mostly light with a few
+    // small shadows as the sky is cloudy (L.sub.w), its edges ragged. They drift a quarter as fast as the clouds
+    // (their own speed, on patches that small, flickered past).
+    {
+        vec3 c = p + sunL * ((L.layer.x + 0.35 * (L.layer.y - L.layer.x) - p.y) / sunL.y);
+        float cover = clamp(0.15 * L.sub.w + 0.85 * (1.0 - light), 0.0, 0.95);
+        vec3 q = vec3((c.x + 0.25 * L.wind.x) * L.shape.x * 14.0, 0.43, (c.z + 0.25 * L.wind.z) * L.shape.x * 14.0);
+        vec4 n = textureLod(shapeNoise, q, 0.0);
+        // (Worley fbm at 4 and 8 cells a tile: values bunched in ~0.45..0.63 - the threshold that leaves `cover` of
+        // the ground above it, fitted to their spread.)
+        float v = n.g * 0.7 + n.b * 0.3;
+        float t = 0.61 - 0.27 * cover;
+        float patchy = smoothstep(t - 0.012, t + 0.018, v);
+        light = mix(1.0, light, 0.3) * (1.0 - 0.85 * patchy);
+    }
     // The game's sheets (RVK_CloudSheet, L.deck.w): a faint veil's shadow - fixed in the world, drifting with the wind
     // (the sheets themselves are kept round the eye: their own shadow would slide with the player), high up, fibrous.
     if (L.deck.w > 0.0) {
