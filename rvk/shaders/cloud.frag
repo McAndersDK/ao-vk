@@ -114,8 +114,9 @@ void main()
         vec2 uv = Uv(p);
         vec3 albedo = C.colour.rgb * textureLod(puffTexture, uv, 0.0).rgb;
         float up = clamp(0.5 + 0.5 * (p[gThin] - gMid) / gHalf, 0.0, 1.0);
-        // (Around the game's colour: its lit side about as the game drew it, its belly and shadowed parts darker.)
-        vec3 lit = albedo * (mix(0.6, 0.85, up) + sunT * phase * 0.35 * sunUp * (0.5 + 0.5 * dot(sunColour, vec3(0.33))));
+        // (Around the game's colour - lit as the game lit it, sun included: its middle about as the game drew it, its
+        // top and sunlit parts brighter, its belly and shadowed parts darker.)
+        vec3 lit = albedo * (mix(0.75, 1.0, up) + (sunT - 0.5) * phase * 0.3 * sunUp * (0.5 + 0.5 * dot(sunColour, vec3(0.33))));
         float a = 1.0 - exp(-d * sigma * ds);
         light += transmit * a * lit;
         transmit *= 1.0 - a;

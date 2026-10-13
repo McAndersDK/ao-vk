@@ -330,7 +330,6 @@ bool Device::CaptureCloudPuff(uint32_t fvf, const void* vertices, uint32_t verte
     for (int k = 0; k < 3; ++k) { p.low[k] = 1e30f; p.high[k] = -1e30f; }
     // Least squares: u, v = a . (x, y, z, 1) - the normal equations' sums.
     double ata[4][4] = {}, atu[4] = {}, atv[4] = {};
-    double colour[4] = {};
     const bool hasUv = layout.offset[4] >= 0, hasColour = layout.offset[2] >= 0;
     for (uint32_t i = 0; i < vertexCount; ++i) {
         const uint8_t* v = base + size_t(i) * layout.stride;
@@ -349,14 +348,6 @@ bool Device::CaptureCloudPuff(uint32_t fvf, const void* vertices, uint32_t verte
                 atu[r] += a[r] * uv[0];
                 atv[r] += a[r] * uv[1];
             }
-        }
-        if (hasColour) {
-            uint32_t argb;
-            std::memcpy(&argb, v + layout.offset[2], 4);
-            colour[0] += ((argb >> 16) & 0xFF) / 255.0;
-            colour[1] += ((argb >> 8) & 0xFF) / 255.0;
-            colour[2] += (argb & 0xFF) / 255.0;
-            colour[3] += (argb >> 24) / 255.0;
         }
     }
     // The thin axis: the mesh's least extent (a sheet); the texture's fit (Gauss-Jordan; a flat sheet makes the
@@ -398,19 +389,72 @@ bool Device::CaptureCloudPuff(uint32_t fvf, const void* vertices, uint32_t verte
         p.uvV[b] = 1.0f / std::max(p.high[b] - p.low[b], 1e-4f);
         p.uvV[3] = -p.low[b] * p.uvV[b];
     }
-    // Its colour as the game lit it (about: the vertex colour times its emissive, the ambient and some sun) and its
-    // opacity (the vertex alpha - the game fades puffs in and out through it - times the material's).
-    float c[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-    if (hasColour)
-        for (int k = 0; k < 4; ++k) c[k] = float(colour[k] / vertexCount);
-    else
-        c[0] = m_material.diffuse.r, c[1] = m_material.diffuse.g, c[2] = m_material.diffuse.b, c[3] = m_material.diffuse.a;
-    const uint32_t amb = m_rs[d3d::RS_AMBIENT];
-    const float ambient[3] = {((amb >> 16) & 0xFF) / 255.0f, ((amb >> 8) & 0xFF) / 255.0f, (amb & 0xFF) / 255.0f};
-    const float emissive[3] = {m_material.emissive.r, m_material.emissive.g, m_material.emissive.b};
-    for (int k = 0; k < 3; ++k)
-        p.colour[k] = c[k] * std::min(emissive[k] + ambient[k] + 0.3f, 1.0f);   // (the game's light saturates at 1)
-    p.colour[3] = c[3];
+    // Its colour as the game lit it - D3D's fixed-function lighting, per vertex, averaged: the emissive and the
+    // global ambient (times their material sources) plus each directional light's diffuse by the vertex normal (times
+    // the diffuse source), clamped at 1 as D3D does; its opacity the diffuse source's alpha (the vertex alpha: the game
+    // fades puffs in and out through it). In storms the vertex colours are dark (~0.25) but the emissive and the
+    // ambient keep the puffs lighter than the sky - scaling everything by the vertex colour made them vanish.
+    {
+        const bool colourVertex = m_rs[d3d::RS_COLORVERTEX] != 0;
+        auto source = [&](uint32_t rs, const d3d::Color& material, const float* c1, const float* c2, float out[4]) {
+            const uint32_t src = colourVertex ? m_rs[rs] : d3d::MCS_MATERIAL;
+            const float* v = src == d3d::MCS_COLOR1 ? c1 : src == d3d::MCS_COLOR2 ? c2 : nullptr;
+            if (v) for (int k = 0; k < 4; ++k) out[k] = v[k];
+            else out[0] = material.r, out[1] = material.g, out[2] = material.b, out[3] = material.a;
+        };
+        const uint32_t amb = m_rs[d3d::RS_AMBIENT];
+        const float global[3] = {((amb >> 16) & 0xFF) / 255.0f, ((amb >> 8) & 0xFF) / 255.0f, (amb & 0xFF) / 255.0f};
+        const bool lit = m_rs[d3d::RS_LIGHTING] != 0, hasNormal = layout.offset[1] >= 0;
+        const bool hasSpecular = layout.offset[3] >= 0;
+        double sum[4] = {};
+        for (uint32_t i = 0; i < vertexCount; ++i) {
+            const uint8_t* v = base + size_t(i) * layout.stride;
+            float c1[4] = {1, 1, 1, 1}, c2[4] = {1, 1, 1, 1};   // (a missing vertex colour: white, as D3D's default)
+            auto unpack = [](const uint8_t* at, float out[4]) {
+                uint32_t argb;
+                std::memcpy(&argb, at, 4);
+                out[0] = ((argb >> 16) & 0xFF) / 255.0f;
+                out[1] = ((argb >> 8) & 0xFF) / 255.0f;
+                out[2] = (argb & 0xFF) / 255.0f;
+                out[3] = (argb >> 24) / 255.0f;
+            };
+            if (hasColour) unpack(v + layout.offset[2], c1);
+            if (hasSpecular) unpack(v + layout.offset[3], c2);
+            float diffuse[4], ambientSrc[4], emissive[4];
+            source(d3d::RS_DIFFUSEMATERIALSOURCE, m_material.diffuse, c1, c2, diffuse);
+            source(d3d::RS_AMBIENTMATERIALSOURCE, m_material.ambient, c1, c2, ambientSrc);
+            source(d3d::RS_EMISSIVEMATERIALSOURCE, m_material.emissive, c1, c2, emissive);
+            float out[3];
+            if (!lit) {
+                for (int k = 0; k < 3; ++k) out[k] = c1[k];
+            } else {
+                for (int k = 0; k < 3; ++k) out[k] = emissive[k] + global[k] * ambientSrc[k];
+                float n[3] = {0.0f, 1.0f, 0.0f};
+                if (hasNormal) {
+                    float nm[3];
+                    std::memcpy(nm, v + layout.offset[1], sizeof(nm));
+                    for (int j = 0; j < 3; ++j)
+                        n[j] = nm[0] * p.world.m[0][j] + nm[1] * p.world.m[1][j] + nm[2] * p.world.m[2][j];
+                    const float l = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+                    if (l > 1e-6f) for (float& x : n) x /= l;
+                }
+                for (const LightSlot& slot : m_lights) {
+                    if (!slot.enabled || slot.light.type != d3d::LIGHT_DIRECTIONAL)
+                        continue;
+                    const d3d::Vector& d = slot.light.direction;
+                    const float dl = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+                    if (dl < 1e-6f) continue;
+                    const float nl = std::max(-(n[0] * d.x + n[1] * d.y + n[2] * d.z) / dl, 0.0f);
+                    out[0] += diffuse[0] * slot.light.diffuse.r * nl + ambientSrc[0] * slot.light.ambient.r;
+                    out[1] += diffuse[1] * slot.light.diffuse.g * nl + ambientSrc[1] * slot.light.ambient.g;
+                    out[2] += diffuse[2] * slot.light.diffuse.b * nl + ambientSrc[2] * slot.light.ambient.b;
+                }
+            }
+            for (int k = 0; k < 3; ++k) sum[k] += std::clamp(out[k], 0.0f, 1.0f);
+            sum[3] += lit ? diffuse[3] : c1[3];
+        }
+        for (int k = 0; k < 4; ++k) p.colour[k] = float(sum[k] / std::max(vertexCount, 1u));
+    }
     // The fog it is drawn with (the game's sky may draw its clouds with or without).
     p.fogColour[0] = ((m_rs[d3d::RS_FOGCOLOR] >> 16) & 0xFF) / 255.0f;
     p.fogColour[1] = ((m_rs[d3d::RS_FOGCOLOR] >> 8) & 0xFF) / 255.0f;
@@ -678,7 +722,7 @@ void Device::MarchCloudPuffs(VkCommandBuffer cmd, const std::vector<std::pair<fl
         const float storm = std::clamp(m_rain, 0.0f, 1.0f);
         const float grey = (p.colour[0] + p.colour[1] + p.colour[2]) / 3.0f;
         for (int k = 0; k < 3; ++k)
-            cf.colour[k] = (p.colour[k] + (grey - p.colour[k]) * 0.6f * storm) * (1.0f - 0.5f * storm) * m_cloudParams.brightness;
+            cf.colour[k] = (p.colour[k] + (grey - p.colour[k]) * 0.6f * storm) * (1.0f - 0.25f * storm) * m_cloudParams.brightness;
         cf.colour[3] = std::clamp(p.colour[3], 0.0f, 1.0f);
         // The sun into mesh space (a direction: the inverse's 3x3; normalised in the shader).
         for (int j = 0; j < 3; ++j)
