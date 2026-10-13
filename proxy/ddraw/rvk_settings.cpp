@@ -148,6 +148,7 @@ Setting g_settings[] = {
     {"RVK_CloudsOn",   "Volumetric clouds (the game's clouds given depth; needs HDR)", "Experimental", Bool,  0, 1, 1, 0, nullptr, 0},
     {"RVK_CloudThick", "Clouds: how thick",                                        "Experimental",     Float, 0.1f, 4, 0.1f, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudBright", "Clouds: how light",                                       "Experimental",     Float, 0.25f, 3, 0.05f, 1, nullptr, 0, "RVK_CloudsOn"},
+    {"RVK_CloudNight",  "Clouds: how light at night (x the above)",                 "Experimental",     Float, 0.25f, 2, 0.05f, 0.8f, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudDetail", "Clouds: billows and wisps (0 smooth)",                    "Experimental",     Float, 0, 2, 0.1f, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudHalf",   "Clouds: drawn at half resolution (much cheaper)",         "Experimental",     Bool,  0, 1, 1, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudShadow", "Clouds: their shadows on the ground (0 none)",            "Experimental",     Float, 0, 1, 0.05f, 0.6f, nullptr, 0, "RVK_CloudsOn"},
@@ -511,6 +512,7 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
         c.enable = V("RVK_CloudsOn") != 0.0f;
         c.density = V("RVK_CloudThick");
         c.brightness = V("RVK_CloudBright");
+        c.night = V("RVK_CloudNight");
         c.detail = V("RVK_CloudDetail");
         c.steps = uint32_t(V("RVK_CloudSteps"));
         c.half = V("RVK_CloudHalf") != 0.0f;

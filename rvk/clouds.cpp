@@ -1352,7 +1352,14 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
         for (int k = 0; k < 3; ++k) lf.tint[k] = (l + (m_cloudTint[k] - l) * 0.3f) * lift;
     }
     const float storm = std::clamp(m_rain, 0.0f, 1.0f);
-    lf.tint[3] = m_cloudParams.brightness * (1.0f - 0.4f * storm);
+    {
+        // RVK_CloudNight: by night (as the shaders' Night(): by the sun's true height) their brightness x more.
+        const float l = std::max(std::sqrt(m_trueSunDir[0] * m_trueSunDir[0] + m_trueSunDir[1] * m_trueSunDir[1] +
+                                           m_trueSunDir[2] * m_trueSunDir[2]), 1e-6f);
+        const float t = std::clamp((-m_trueSunDir[1] / l + 0.2f) / 0.23f, 0.0f, 1.0f);
+        const float night = 1.0f - t * t * (3.0f - 2.0f * t);
+        lf.tint[3] = m_cloudParams.brightness * (1.0f + (m_cloudParams.night - 1.0f) * night) * (1.0f - 0.4f * storm);
+    }
     // The sky's light: its hue (the haze's, a quarter: whiter clouds), about unit brightness - the tint carries how light.
     const float luma = std::max(0.3f * m_cloudHaze[0] + 0.59f * m_cloudHaze[1] + 0.11f * m_cloudHaze[2], 1e-3f);
     for (int k = 0; k < 3; ++k) lf.ambient[k] = 0.75f + 0.25f * m_cloudHaze[k] / luma;

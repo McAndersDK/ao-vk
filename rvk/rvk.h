@@ -575,6 +575,7 @@ public:
         bool enable = false;                     // RVK_CloudsOn
         float density = 1.0f;                    // RVK_CloudThick: how thick, x
         float brightness = 1.0f;                 // RVK_CloudBright: their colour, x
+        float night = 0.8f;                      // RVK_CloudNight: ... at night, x more (eased in as the sun goes down)
         float detail = 1.0f;                     // RVK_CloudDetail: how much the noise frays them (0: smooth)
         uint32_t steps = 32;                     // RVK_CloudSteps: the march's steps through a puff
         bool half = true;                        // RVK_CloudHalf: marched at half resolution

@@ -1446,6 +1446,7 @@ float g_cloudHeight = 900.0f;     // --cloud-height X: RVK_CloudHeight
 float g_cloudLow = 1.0f;          // --cloud-low X: RVK_CloudLow
 float g_cloudSheet = 1.0f;        // --cloud-sheet X: RVK_CloudSheet
 float g_cloudShadow = 0.6f;       // --cloud-shadow X: RVK_CloudShadow
+float g_cloudNight = 0.8f;        // --cloud-night X: RVK_CloudNight
 float g_moonLight = 1.0f;         // --moon-light X: RVK_MoonLight
 float g_nightDark = 1.0f;         // --night-dark X: RVK_NightDark
 bool g_cloudLayer = true;         // --cloud-puffs: RVK_CloudLayer off (a volume per puff)
@@ -3019,6 +3020,7 @@ int main(int argc, char** argv)
         else if (a == "--cloud-low" && i + 1 < argc) g_cloudLow = float(std::atof(argv[++i]));
         else if (a == "--cloud-sheet" && i + 1 < argc) g_cloudSheet = float(std::atof(argv[++i]));
         else if (a == "--cloud-shadow" && i + 1 < argc) g_cloudShadow = float(std::atof(argv[++i]));
+        else if (a == "--cloud-night" && i + 1 < argc) g_cloudNight = float(std::atof(argv[++i]));
         else if (a == "--fixed-clock" && i + 1 < argc) { g_fixedClock = true; Device::SetFixedClock(std::atof(argv[++i]) * 1e-3); }
         else if (a == "--cache-test" && i + 1 < argc) { cacheTest = std::atoi(argv[++i]); shadowTest = shadows = true; }
         else if (a == "--dump" && i + 1 < argc) dump = argv[++i];
@@ -3234,6 +3236,7 @@ int main(int argc, char** argv)
         clouds.low = g_cloudLow;
         clouds.sheet = g_cloudSheet;
         clouds.shadow = g_cloudShadow;
+        clouds.night = g_cloudNight;
         dev.SetCloudParams(clouds);
     }
     if (g_smoke) {
