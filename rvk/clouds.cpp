@@ -78,7 +78,7 @@ struct WeatherFrame {
 
 struct LayerFrame {
     d3d::Matrix invViewProj;
-    float eye[4], layer[4], weather[4], shape[4], wind[4], tint[4], ambient[4], haze[4], view[4], sub[4];
+    float eye[4], layer[4], weather[4], shape[4], wind[4], tint[4], ambient[4], haze[4], view[4], sub[4], horizon[4];
 };
 
 struct ResolveFrame {
@@ -1273,6 +1273,7 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
         hazeNow[k] = fogWeight > 0.0f ? fogColour[k] / fogWeight
                    : sceneFog[3] > 0.5f ? sceneFog[k] : (m_terrainAmbient[3] > 0.5f ? m_terrainAmbient[k] : 0.35f);
     }
+    const float foggedNow = weight > 0.0f ? fogged / weight : 0.0f;
     {
         const double gap = m_cloudColourClock < 0.0 ? 1e9 : m_frameClock - m_cloudColourClock;
         const float k = gap > 5.0 ? 1.0f : 1.0f - std::exp(-float(gap) / 3.0f);
@@ -1280,8 +1281,11 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
             m_cloudTint[i] += (tintNow[i] - m_cloudTint[i]) * k;
             m_cloudHaze[i] += (hazeNow[i] - m_cloudHaze[i]) * k;
         }
+        m_cloudFogged += (foggedNow - m_cloudFogged) * k;
         m_cloudColourClock = m_frameClock;
     }
+    // Towards the horizon the clouds become the fog's colour as far as the game's are fogged (a little at least).
+    lf.horizon[0] = std::clamp(0.25f + 0.75f * m_cloudFogged, 0.0f, 1.0f);
     std::memcpy(lf.tint, m_cloudTint, 12);
     const float storm = std::clamp(m_rain, 0.0f, 1.0f);
     lf.tint[3] = m_cloudParams.brightness * (1.0f - 0.4f * storm);

@@ -17,10 +17,13 @@ layout(set = 0, binding = 0, std140) uniform LayerFrame {
     vec4 wind;          // xyz: the noise's drift (world), w: the pre-pass's clear depth
     vec4 tint;          // rgb: the game's cloud colour, w: brightness
     vec4 ambient;       // rgb: the sky's light; w: rain (0..1)
-    vec4 haze;          // rgb: the distance's colour (the game's fog); w: the haze's distance (world)
+    vec4 haze;          // rgb: the distance's colour (the fog the game draws its clouds in); w: the haze's distance
+                        // (world)
     vec4 view;          // xy: the half-size target's size, z: steps, w: steps towards the sun
     vec4 sub;           // reused over frames (cloud_resolve.frag): xy this frame's pixel in each 2x2, z: 2 (one of each
                         // 2x2 marched, into a quarter-size target) or 1 (every pixel)
+    vec4 horizon;       // x: how much the game fogs its clouds (0..1: towards the horizon they become the fog's colour,
+                        // as the game's do - the fogged ground meets them seamlessly)
 } L;
 layout(set = 0, binding = 1) uniform sampler2D weatherMap;
 layout(set = 0, binding = 2) uniform sampler3D shapeNoise;
@@ -215,8 +218,11 @@ void main()
     // Haze: the cloud's distance (where along the ray it is) blends it into the game's distance colour; the very
     // far fades out (the march's reach is no horizon).
     float dist = depthSum / max(weightSum, 1e-6);
-    float haze = 1.0 - exp(-dist / L.haze.w);
-    light = mix(light, L.haze.rgb * alpha, haze * 0.6);
+    float haze = (1.0 - exp(-dist / L.haze.w)) * 0.6;
+    // Low in the sky, as much of the fog's colour as the game's fogged clouds show: wholly at the horizon (where the
+    // fogged ground meets the sky), fading out up to ~25 degrees.
+    haze = max(haze, L.horizon.x * (1.0 - smoothstep(0.0, 0.42, dir.y)));
+    light = mix(light, L.haze.rgb * alpha, haze);
     float fade = 1.0 - smoothstep(0.7 * L.layer.w, L.layer.w, dist);
     outScene = vec4(light, alpha) * fade;
 }

@@ -1650,6 +1650,7 @@ private:
     double m_cloudWeatherClock = -1.0;
     float m_cloudTint[3] = {0.8f, 0.8f, 0.8f}, m_cloudHaze[3] = {0.5f, 0.5f, 0.5f};   // eased (MarchCloudLayer)
     double m_cloudColourClock = -1.0;
+    float m_cloudFogged = 0.0f;                  // how fogged the game's clouds are (0..1), eased
     float m_cloudDrift[3] = {};                  // the clouds' drift (world x, z) and evolution (UpdateCloudDrift)
     float m_cloudWindDir[2] = {0.8f, 0.6f};
     double m_cloudDriftClock = -1.0;
