@@ -1291,8 +1291,9 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
         m_cloudFogged += (foggedNow - m_cloudFogged) * k;
         m_cloudColourClock = m_frameClock;
     }
-    // Towards the horizon the clouds become the fog's colour as far as the game's are fogged (a little at least).
-    lf.horizon[0] = std::clamp(0.25f + 0.75f * m_cloudFogged, 0.0f, 1.0f);
+    // Towards the horizon the clouds become the fog's colour as far as the game's are fogged (over half at least: the
+    // far distance is hazy, as the game's sky).
+    lf.horizon[0] = std::clamp(0.55f + 0.45f * m_cloudFogged, 0.0f, 1.0f);
     lf.horizon[1] = std::clamp(m_cloudParams.shade, 0.25f, 4.0f);
     std::memcpy(lf.tint, m_cloudTint, 12);
     const float storm = std::clamp(m_rain, 0.0f, 1.0f);
@@ -1307,7 +1308,7 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
             double(m_cloudTint[0]), double(m_cloudTint[1]), double(m_cloudTint[2]),
             double(weight > 0.0f ? 100.0f * fogged / weight : 0.0f), double(m_cloudHaze[0]),
             double(m_cloudHaze[1]), double(m_cloudHaze[2]));
-    lf.haze[3] = 16000.0f;
+    lf.haze[3] = 12000.0f;
     lf.view[0] = float(hw);
     lf.view[1] = float(hh);
     lf.view[2] = float(std::clamp(m_cloudParams.steps * 3u, 32u, 192u));

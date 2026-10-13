@@ -234,10 +234,11 @@ void main()
     // Haze: the cloud's distance (where along the ray it is) blends it into the game's distance colour; the very
     // far fades out (the march's reach is no horizon).
     float dist = depthSum / max(weightSum, 1e-6);
-    float haze = (1.0 - exp(-dist / L.haze.w)) * 0.6;
-    // Low in the sky, as much of the fog's colour as the game's fogged clouds show: wholly at the horizon (where the
-    // fogged ground meets the sky), fading out up to ~25 degrees.
-    haze = max(haze, L.horizon.x * (1.0 - smoothstep(0.0, 0.42, dir.y)));
+    float haze = (1.0 - exp(-dist / L.haze.w)) * 0.8;
+    // Low in the sky, the far distance's haze (as the game's sky has it), the more the more the game fogs its clouds:
+    // most at the horizon (where the fogged ground meets the sky), fading out up to ~30 degrees.
+    float low = 1.0 - smoothstep(0.0, 0.5, dir.y);
+    haze = max(haze, L.horizon.x * low * low * (3.0 - 2.0 * low));
     light = mix(light, L.haze.rgb * alpha, haze);
     float fade = 1.0 - smoothstep(0.7 * L.layer.w, L.layer.w, dist);
     outScene = vec4(light, alpha) * fade;
