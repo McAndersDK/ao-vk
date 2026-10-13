@@ -204,7 +204,54 @@ vec4 Deck(vec3 eye, vec3 dir, float jitter)
 }
 
 
-#ifdef RVK_CLOUD_SHADOW
+#ifdef RVK_CLOUD_SUNRAY
+// How much sunlight the clouds let through to the eye (rvk/clouds.cpp MakeCloudSunRay): 16 rays from the eye towards
+// the sun (spread over ~2 degrees round it: a patch of sky, not one point), each marched through the layer and the
+// low deck as the scene's are - in the world, whatever the camera looks at or what land is in front of it (measured
+// on the screen, a wall before the sun left the clouds' cover unknown - user). Low, the frame's sun is dimmed by it.
+void main()
+{
+    gWind = L.wind.xyz;
+    gDetailWind = L.wind.xyz * 1.7;
+    vec3 eye = L.eye.xyz;
+    float R = L.layer.z;
+    gCentre = vec3(eye.x, eye.y - R, eye.z);
+    gInner = R + (L.layer.x - eye.y);
+    float outer = R + (L.layer.y - eye.y);
+    gThick = outer - gInner;
+    vec3 sunL = normalize(FL.sunTrue.xyz + vec3(0.0, 1e-6, 0.0));
+    vec3 up = abs(sunL.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 u = normalize(cross(up, sunL)), v = cross(sunL, u);
+    float i = floor(gl_FragCoord.x), rr = 0.018 * sqrt((i + 0.5) / 16.0), a = i * 2.3999632;
+    vec3 dir = normalize(sunL + rr * (cos(a) * u + sin(a) * v));
+    dir.y = max(dir.y, 0.005);                   // (a sun at or under the horizon: along it)
+    dir = normalize(dir);
+    float od = 0.0;
+    // The layer: from leaving its inner sphere to leaving its outer one (the eye under it), or from the eye (in it).
+    vec2 si = Sphere(eye, dir, gCentre, gInner), so = Sphere(eye, dir, gCentre, outer);
+    float r0 = length(eye - gCentre);
+    float t0 = r0 < gInner ? si.y : 0.0, t1 = min(so.y, L.layer.w);
+    if (t1 > t0) {
+        const int kSteps = 32;
+        float dt = (t1 - t0) / float(kSteps);
+        for (int k = 0; k < kSteps; ++k)
+            od += Density(eye + dir * (t0 + dt * (float(k) + 0.5)), true) * dt;   // (as seen: the edges eroded)
+    }
+    // The low deck (below the layer).
+    if (L.deck.x > 0.0) {
+        float b = (L.deck.y - eye.y) / dir.y, c = (L.deck.z - eye.y) / dir.y;
+        b = max(b, 0.0);
+        c = min(c, L.layer.w);
+        if (c > b) {
+            float dt = (c - b) / 8.0;
+            for (int k = 0; k < 8; ++k)
+                od += DeckDensity(eye + dir * (b + dt * (float(k) + 0.5))) * dt * 0.9;
+        }
+    }
+    float through = exp(-od * L.shape.w);
+    outScene = vec4(through, through, through, 1.0);
+}
+#elif defined(RVK_CLOUD_SHADOW)
 // The clouds' shadow map (rvk/clouds.cpp MakeCloudLayerShadow): top down, in a plane through the layer - for each
 // texel, the sunlight through the layer along the sun's way (a few samples through its height): 1 clear. Ground
 // shadows (ffp_main, grass, water) and the light shafts read it where the sun's ray through a point meets the plane.

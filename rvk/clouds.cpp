@@ -59,6 +59,9 @@ const uint32_t kCloudLayerFragSpirv[] = {
 const uint32_t kCloudLayerShadowFragSpirv[] = {   // cloud_layer.frag built with RVK_CLOUD_SHADOW
 #include "cloud_layer_shadow.frag.inc"
 };
+const uint32_t kCloudLayerSunRayFragSpirv[] = {   // ... with RVK_CLOUD_SUNRAY
+#include "cloud_layer_sunray.frag.inc"
+};
 const uint32_t kCloudResolveFragSpirv[] = {
 #include "cloud_resolve.frag.inc"
 };
@@ -390,7 +393,7 @@ bool Device::CreateCloudResources(std::string* error)
         VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         m_sunVisStride = std::max<VkDeviceSize>(256, m_props.limits.minStorageBufferOffsetAlignment);
         bi.size = m_sunVisStride * kFramesInFlight;
-        bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         VmaAllocationCreateInfo ac{};
         ac.usage = VMA_MEMORY_USAGE_AUTO;
         ac.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
@@ -486,11 +489,15 @@ bool Device::CreateCloudResources(std::string* error)
                     m_cloudLayerLayout, &halfFormat, 1, VK_FORMAT_UNDEFINED, &m_cloudLayerPipeline) &&
            pipeline(kFullscreenVertSpirv, sizeof(kFullscreenVertSpirv), kCloudLayerShadowFragSpirv,
                     sizeof(kCloudLayerShadowFragSpirv), m_cloudLayerLayout, &shadowFormat, 1, VK_FORMAT_UNDEFINED,
-                    &m_cloudLayerShadowPipeline);
+                    &m_cloudLayerShadowPipeline) &&
+           pipeline(kFullscreenVertSpirv, sizeof(kFullscreenVertSpirv), kCloudLayerSunRayFragSpirv,
+                    sizeof(kCloudLayerSunRayFragSpirv), m_cloudLayerLayout, &shadowFormat, 1, VK_FORMAT_UNDEFINED,
+                    &m_cloudSunRayPipeline);
 }
 
 void Device::DestroyCloudResources()
 {
+    if (m_cloudSunRay) { DestroyTexture(m_cloudSunRay); m_cloudSunRay = nullptr; }
     if (m_sunPipeline) { vkDestroyPipeline(m_device, m_sunPipeline, nullptr); m_sunPipeline = VK_NULL_HANDLE; }
     if (m_sunVisPipeline) { vkDestroyPipeline(m_device, m_sunVisPipeline, nullptr); m_sunVisPipeline = VK_NULL_HANDLE; }
     if (m_sunVisLayout) { vkDestroyPipelineLayout(m_device, m_sunVisLayout, nullptr); m_sunVisLayout = VK_NULL_HANDLE; }
@@ -500,7 +507,7 @@ void Device::DestroyCloudResources()
     if (m_sunLayout) { vkDestroyPipelineLayout(m_device, m_sunLayout, nullptr); m_sunLayout = VK_NULL_HANDLE; }
     for (VkPipeline* p : {&m_cloudPipeline, &m_cloudHalfPipeline, &m_cloudUpPipeline, &m_cloudUpScenePipeline,
                           &m_cloudShadowPipeline, &m_cloudLayerNoisePipeline, &m_cloudWeatherPipeline, &m_cloudLayerPipeline,
-                          &m_cloudResolvePipeline, &m_cloudLayerShadowPipeline})
+                          &m_cloudResolvePipeline, &m_cloudLayerShadowPipeline, &m_cloudSunRayPipeline})
         if (*p) { vkDestroyPipeline(m_device, *p, nullptr); *p = VK_NULL_HANDLE; }
     for (VkPipelineLayout* l : {&m_cloudLayerNoiseLayout, &m_cloudWeatherLayout, &m_cloudLayerLayout, &m_cloudResolveLayout})
         if (*l) { vkDestroyPipelineLayout(m_device, *l, nullptr); *l = VK_NULL_HANDLE; }
@@ -818,6 +825,8 @@ void Device::DrawClouds(VkCommandBuffer cmd)
     };
     if (layer)
         MakeCloudWeather(work, eyeNow);          // (the layer's shadow and march read it)
+    if (layer && (own || half || shadow))
+        MakeCloudSunRay(work);                   // (outside any rendering: the sun's light through the clouds)
     if (shadow) {
         if (layer)
             MakeCloudLayerShadow(work, eyeNow);
@@ -1368,13 +1377,16 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
 // RVK_CloudLayer: the layer marched over the half-size target (inside its rendering), one fullscreen pass. The world
 // camera: the frame's (the first scene draw writing depth), else the draw's that set the clouds off (the first after
 // the sky).
-void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float sub[4], const float* shadowArea)
+void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float sub[4], const float* shadowArea,
+                             bool sunRay)
 {
     Frame& f = m_frames[m_frameIndex];
     const uint32_t hw = (m_scene->m_width + 1) / 2, hh = (m_scene->m_height + 1) / 2;
     uint32_t tw = sub[2] > 1.5f ? (hw + 1) / 2 : hw, th = sub[2] > 1.5f ? (hh + 1) / 2 : hh;   // the target's
     if (shadowArea)
         tw = th = kShadowSize;                   // (the shadow map: cloud_layer_shadow.frag)
+    if (sunRay)
+        tw = kSunRays, th = 1;                   // (the rays to the sun: cloud_layer_sunray.frag)
     const d3d::Matrix& view = m_aoProjValid ? m_aoView : m_view;
     const d3d::Matrix& proj = m_aoProjValid ? m_aoProj : m_proj;
     LayerFrame lf{};
@@ -1510,7 +1522,8 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     VkRect2D scissor{{0, 0}, {tw, th}};
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowArea ? m_cloudLayerShadowPipeline : m_cloudLayerPipeline);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      sunRay ? m_cloudSunRayPipeline : shadowArea ? m_cloudLayerShadowPipeline : m_cloudLayerPipeline);
     VkDescriptorBufferInfo blockInfo{f.ring, offset, sizeof(LayerFrame)};
     VkDescriptorBufferInfo lightsInfo{f.ring, m_frameLightsOffset, sizeof(FrameLights)};
     VkDescriptorImageInfo weatherInfo{m_cloudClampSampler, m_cloudWeather->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -1671,6 +1684,52 @@ void Device::MakeCloudLayerShadow(VkCommandBuffer cmd, const float eye[3])
     Transition(cmd, m_cloudShadowMap, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     std::memcpy(m_cloudShadowArea, shadowArea, sizeof(m_cloudShadowArea));
     m_cloudShadowFrame = m_frameNumber;
+}
+
+// How much sunlight the clouds let through to the eye (cloud_layer_sunray.frag: kSunRays rays towards the sun through
+// the layer and the deck), copied for the CPU (sun.cpp DrawSun reads it when this frame slot comes round again): low,
+// the frame's sun is dimmed by it - in the world, whatever the camera sees (RenderShadowMap).
+void Device::MakeCloudSunRay(VkCommandBuffer cmd)
+{
+    m_sunRayMeasured[m_frameIndex] = false;
+    if (!m_cloudSunRayPipeline || !m_sunVisBuffer)
+        return;
+    if (!m_cloudSunRay) {
+        m_cloudSunRay = CreateImage(kSunRays, 1, Format::RGBA8, 1, true);
+        if (!m_cloudSunRay)
+            return;
+    }
+    Transition(cmd, m_cloudSunRay, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    color.imageView = m_cloudSunRay->m_view;
+    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    ri.renderArea = {{0, 0}, {kSunRays, 1}};
+    ri.layerCount = 1;
+    ri.colorAttachmentCount = 1;
+    ri.pColorAttachments = &color;
+    vkCmdBeginRendering(cmd, &ri);
+    const float sub[4] = {0.0f, 0.0f, 1.0f, 0.0f};
+    MarchCloudLayer(cmd, false, sub, nullptr, true);
+    vkCmdEndRendering(cmd);
+    Transition(cmd, m_cloudSunRay, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    VkBufferImageCopy region{};
+    region.bufferOffset = m_sunVisStride * m_frameIndex + kSunRayOffset;
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {kSunRays, 1, 1};
+    vkCmdCopyImageToBuffer(cmd, m_cloudSunRay->m_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, m_sunVisBuffer, 1, &region);
+    VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    mb.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    mb.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+    mb.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
+    VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dep.memoryBarrierCount = 1;
+    dep.pMemoryBarriers = &mb;
+    vkCmdPipelineBarrier2(cmd, &dep);
+    m_sunRayMeasured[m_frameIndex] = true;
 }
 
 VkImageView Device::CloudShadowView() const

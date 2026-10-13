@@ -993,8 +993,7 @@ private:
     bool m_sunVisMeasured[kFramesInFlight] = {};
     uint32_t m_sunVisCount[kFramesInFlight] = {};
     float m_sunSeen[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-    float m_sunClear[4] = {1.0f, 1.0f, 1.0f, 1.0f};   // ... how much of each the clouds alone let through (eased)
-    float m_sunThrough = 1.0f;                   // ... the one nearest the light's way (its light let through)
+    float m_sunThrough = 1.0f, m_sunThroughTarget = 1.0f;   // the sunlight the clouds let through (eased; MakeCloudSunRay)
     float m_frameSunLuma = 0.0f;                 // the frame sun's brightness before that (the clouds' own light)
     double m_sunSeenClock = -1.0;
     void MeasureSunVisibility(VkCommandBuffer cmd, Texture* clouds);
@@ -1788,7 +1787,15 @@ private:
     void UpdateCloudDrift();
     double m_cloudBaseClock = -1.0;
     void MakeCloudWeather(VkCommandBuffer cmd, const float eye[3]);
-    void MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float sub[4], const float* shadowArea = nullptr);
+    void MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float sub[4], const float* shadowArea = nullptr,
+                         bool sunRay = false);
+    // The sunlight the clouds let through to the eye (cloud_layer_sunray.frag; sun.cpp reads it, shadow.cpp dims the
+    // low frame sun by it): kSunRays rays' transmittance, copied into the sun visibility buffer's slot at kSunRayOffset.
+    static constexpr uint32_t kSunRays = 16, kSunRayOffset = 64;
+    VkPipeline m_cloudSunRayPipeline = VK_NULL_HANDLE;
+    Texture* m_cloudSunRay = nullptr;
+    bool m_sunRayMeasured[kFramesInFlight] = {};
+    void MakeCloudSunRay(VkCommandBuffer cmd);
     void MakeCloudLayerShadow(VkCommandBuffer cmd, const float eye[3]);
     VkPipeline m_cloudLayerShadowPipeline = VK_NULL_HANDLE;
     // ... reused over frames (cloud_resolve.frag): one half-size pixel of each 2x2 marched a frame (into the quarter-
