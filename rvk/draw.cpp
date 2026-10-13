@@ -2080,7 +2080,8 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
         return;                                  // replaced by a volume (DrawClouds)
     if (IsTerrain(fvf) && IsMultiplyPass())
         m_terrainLitPassCur = true;
-    if (IsTerrain(fvf) && m_scenePhase && m_target == m_scene && !m_external) {
+    // (The terrain's base pass: its light pass multiplies, its fog white - not the scene's fog colour.)
+    if (IsTerrain(fvf) && !IsMultiplyPass() && m_scenePhase && m_target == m_scene && !m_external) {
         RenderStateFog(m_sceneFogColour, m_sceneFogParams);
         m_sceneFogFrame = m_frameNumber;
     }

@@ -65,9 +65,14 @@ vec3 Afterglow(vec3 sunL)
 vec4 Aerial(vec3 light, float alpha, float dist, vec3 dir)
 {
     float air = 1.0 - exp(-dist / L.haze.w);
-    float low = 1.0 - smoothstep(0.0, 0.5, dir.y);
-    float haze = max(min(air * 1.2, 1.0), L.horizon.x * low * low * (3.0 - 2.0 * low));
-    light = mix(light, L.haze.rgb * alpha, haze);
+    float low = 1.0 - smoothstep(0.0, 0.22, dir.y);   // (the horizon's band: up to ~12 degrees)
+    low = L.horizon.x * low * low * (3.0 - 2.0 * low);
+    float haze = max(min(air * 1.1, 1.0), low);
+    // (The air's colour: the game's fog colour at the horizon, where the clouds meet its sky; above, paler and
+    // whiter - the game's teal fog made the whole layer teal, user: whiter.)
+    float grey = dot(L.haze.rgb, vec3(0.3, 0.59, 0.11));
+    vec3 airColour = mix(mix(vec3(grey), L.haze.rgb, 0.35) * 1.25, L.haze.rgb, low);
+    light = mix(light, airColour * alpha, haze);
     return vec4(light, alpha) * (1.0 - smoothstep(0.6 * L.layer.w, L.layer.w, dist));
 }
 

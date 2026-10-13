@@ -1341,8 +1341,10 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     // The game's colour for its clouds, mostly whitened: its brightness kept, a little of its hue (the zones' teal
     // skies made them very blue - user: whiter).
     {
+        // (And no darker than 0.62 by day: the game's fogged puffs are grey - ours white by day, dimmer at night.)
         const float l = 0.3f * m_cloudTint[0] + 0.59f * m_cloudTint[1] + 0.11f * m_cloudTint[2];
-        for (int k = 0; k < 3; ++k) lf.tint[k] = l + (m_cloudTint[k] - l) * 0.3f;
+        const float lift = l > 1e-3f ? std::max(1.0f, 0.62f * std::clamp(m_daylight / 0.35f, 0.0f, 1.0f) / l) : 1.0f;
+        for (int k = 0; k < 3; ++k) lf.tint[k] = (l + (m_cloudTint[k] - l) * 0.3f) * lift;
     }
     const float storm = std::clamp(m_rain, 0.0f, 1.0f);
     lf.tint[3] = m_cloudParams.brightness * (1.0f - 0.4f * storm);
@@ -1356,7 +1358,7 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
             double(m_cloudTint[0]), double(m_cloudTint[1]), double(m_cloudTint[2]),
             double(weight > 0.0f ? 100.0f * fogged / weight : 0.0f), double(m_cloudHaze[0]),
             double(m_cloudHaze[1]), double(m_cloudHaze[2]));
-    lf.haze[3] = 12000.0f;
+    lf.haze[3] = 18000.0f;
     lf.view[0] = float(hw);
     lf.view[1] = float(hh);
     lf.view[2] = float(std::clamp(m_cloudParams.steps * 3u, 32u, 192u));
