@@ -205,7 +205,9 @@ Setting g_settings[] = {
     {"RVK_VolLand",    "Haze over distant land (cool, as the air makes it)",       "HDR and effects",  Float, 0, 1, 0.05f, 0.4f, nullptr, 0},
     {"RVK_Atmos",      "Air: haze by height, bluer far off, the sun's glow (off: flat haze)", "HDR and effects", Bool, 0, 1, 1, 1, nullptr, 0},
     {"RVK_Mist",       "Air: valley mist at night and dawn, x (0 none; needs the above)", "HDR and effects", Float, 0, 2, 0.1f, 1, nullptr, 0},
-    {"RVK_Sun",        "The sun's disc in the sky, how bright (0 none: the game's glow only)", "HDR and effects", Float, 0, 2, 0.1f, 1, nullptr, 0, "RVK_Hdr"},
+    {"RVK_Sun",        "The suns in the sky, how bright (0 none: the game's glow only)", "HDR and effects", Float, 0, 2, 0.1f, 1, nullptr, 0, "RVK_Hdr"},
+    {"RVK_SunSize",    "The suns' size (1: the game's own; less: tamer)", "HDR and effects", Float, 0.3f, 1.5f, 0.05f, 0.75f, nullptr, 0, "RVK_Sun"},
+    {"RVK_SunBleed",   "How much of the suns' glow shows through thick cloud (0 none)", "HDR and effects", Float, 0, 1, 0.05f, 0.3f, nullptr, 0, "RVK_Sun"},
     {"RVK_GameSun",    "The game's own sun glow sprites (off: only the suns above)", "HDR and effects", Bool, 0, 1, 1, 0, nullptr, 0},
     {"RVK_SsrOn",      "Reflections (screen-space)",                               "HDR and effects",  Bool,  0, 1, 1, 1, nullptr, 0},
     {"RVK_Ssr",        "Strength",                                                 "HDR and effects",  Float, 0.25f, 2, 0.25f, 1, nullptr, 0, "RVK_SsrOn"},
@@ -462,6 +464,8 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
     else if (is("RVK_Mist")) d->SetMist(V(n));
     else if (is("RVK_Sun")) d->SetSun(V(n));
     else if (is("RVK_GameSun")) d->SetGameSun(V(n) != 0.0f);
+    else if (is("RVK_SunSize")) d->SetSunSize(V(n));
+    else if (is("RVK_SunBleed")) d->SetSunBleed(V(n));
     else if (is("RVK_Contact")) d->SetContactShadows(V(n));
     else if (is("RVK_Ao") || is("RVK_AoRadius")) d->SetAo(V("RVK_Ao"), V("RVK_AoRadius"));
     else if (is("RVK_Gi") || is("RVK_GiRadius")) d->SetGi(V("RVK_Gi"), V("RVK_GiRadius"));

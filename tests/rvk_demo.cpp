@@ -1537,7 +1537,8 @@ void DrawDemoPuffs(D& dev, Vector eye, float yaw, Texture* const* puffTex, const
             fan[0] = VtxDiffuseTex{c.x, c.y, c.z, fn.colour, 0.5f, 0.5f};
             for (int i = 0; i < 32; ++i) {
                 const float a = float(i) / 32.0f * 2.0f * kPi;
-                const float r = fn.size * (0.3f + 0.7f * float((i * 37 + f * 11) % 13) / 12.0f);   // (rays of many lengths)
+                const float h = float((i * 37 + f * 11) % 13) / 12.0f;   // (spikes long and short, each its own)
+                const float r = fn.size * ((i & 1) ? 0.5f + 0.2f * h : 0.8f + 0.2f * h);
                 const float x = std::cos(a) * r, y = std::sin(a) * r;
                 fan[1 + i] = VtxDiffuseTex{c.x + side.x * x + up.x * y, c.y + side.y * x + up.y * y,
                                            c.z + side.z * x + up.z * y, fn.colour & 0x00FFFFFFu, 0.5f + 0.5f * std::cos(a),

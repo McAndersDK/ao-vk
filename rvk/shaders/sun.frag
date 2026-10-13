@@ -1,20 +1,24 @@
 #version 450
-// The sun's disc (rvk/sun.cpp DrawSun): drawn into the sky where the game draws its sun's ray sprites, before its cloud
-// sheets and the cloud layer - which then cover it as they are thick (premultiplied over: a thin cloud lets a bright
-// smear through, a thick one hides it). About twice the real sun's size; darker towards its edge (limb darkening); a
-// soft halo; its corona (the game's flare made anew: soft, flowing); a faint starburst. Added to the scene (HDR: the
-// bloom its glare).
+// The suns (rvk/sun.cpp DrawSuns), as AO's rather than real ones: drawn into the sky where the game draws its sun's
+// ray sprites, before its cloud sheets and the cloud layer - which then cover them as they are thick (premultiplied
+// over: a thin cloud lets a bright smear through, a thick one hides it) - and a share of their glow again over the
+// clouds at the sky's end (RVK_SunBleed). Each: a big spiky star of the game's own sprite outline (its biggest
+// sprite's), soft towards its tips; a white-hot core of its small sprite's outline; a few broad soft beams; a faint
+// wide haze. Alive: the spikes swell and shrink each at its own pace, the star turns very slowly, the beams turn and
+// breathe. Added to the scene (HDR: the bloom its glare).
 layout(push_constant) uniform Params {
     mat4 invViewProj;   // clip -> world, the sky's camera (raw D3DMATRIX memory, as cloud_layer.frag)
-    vec4 toSun;         // xyz: towards the sun (world), w: the disc's angular radius (radians)
-    vec4 colour;        // rgb: the disc's light (HDR), w: the halo's strength
-    vec4 view;          // xy: the target's size, z: the starburst's strength, w: the halo's angular width
-    vec4 rays;          // the corona (the game's flare made anew): x the clock (s), y strength, z this sun's seed, w reach
+    vec4 toSun;         // xyz: towards the sun (world), w: the glow's reach (radians: its outline's longest spike)
+    vec4 colour;        // rgb: its light, w: the core's reach over the glow's
+    vec4 view;          // xy: the target's size, z: 1 over the clouds (the bleed alone), 0 under, w: the bleed's share
+    vec4 anim;          // x: the clock (s), y: this sun's seed
+    uvec4 glowShape[2]; // the glow's outline: 32 reaches (over toSun.w) round the sun, 8 bits each, 4 to a word
+    uvec4 coreShape[2]; // the core's
 } P;
 
 float Hash(float n) { return fract(sin(n * 12.9898 + 4.1414) * 43758.5453); }
 
-// Smooth value noise on a cylinder: x wraps every 'period' cells (round the sun), y runs outward.
+// Smooth value noise on a cylinder: x wraps every 'period' cells, y runs on.
 float Noise(vec2 p, float period, float seed)
 {
     vec2 i = floor(p), f = p - i;
@@ -25,21 +29,22 @@ float Noise(vec2 p, float period, float seed)
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
-// The corona round the sun at angle phi (radians) about it, 'angle' out from its rim: a soft glow whose reach swells
-// and shrinks round it in broad lobes - smooth noise flowing slowly outward and round, the whole breathing gently.
-// No streaks (user, 2026-10-13: the rays "look strange"). 0..~1.
-float Corona(float phi, float angle)
+// One spike's reach (0..1 of the glow's), swelling and shrinking (+-15%), each at its own pace.
+float Spike(int i, bool core)
 {
-    float t = P.rays.x, seed = P.rays.z;
-    float a = fract(phi / 6.2831853);
-    float out1 = angle / P.rays.w;
-    // (two scales: broad lobes (7 round), finer wisps (17 round); each drifting round and flowing outward)
-    float n1 = Noise(vec2(a * 7.0 + t * 0.010, out1 * 1.2 - t * 0.05), 7.0, seed);
-    float n2 = Noise(vec2(a * 17.0 - t * 0.006, out1 * 2.5 - t * 0.09), 17.0, seed + 31.0);
-    float n = n1 * 0.7 + n2 * 0.3;
-    float reach = P.rays.w * (0.45 + 0.9 * n);
-    float breathe = 0.85 + 0.15 * sin(t * 0.21 + seed) * sin(t * 0.13 + seed * 0.7);
-    return exp(-angle / reach) * (0.55 + 0.45 * n) * breathe;
+    i = (i + 32) & 31;
+    uint w = core ? P.coreShape[i >> 4][(i >> 2) & 3] : P.glowShape[i >> 4][(i >> 2) & 3];
+    float r = float((w >> (8u * uint(i & 3))) & 255u) / 255.0;
+    float h = Hash(float(i) * 3.1 + P.anim.y + (core ? 50.0 : 0.0));
+    return r * (1.0 + 0.15 * sin(P.anim.x * (0.3 + 0.5 * h) + h * 31.0));
+}
+
+// The outline's reach at angle phi (radians) round the sun: between two spikes a straight edge, near enough.
+float Outline(float phi, bool core)
+{
+    float b = fract(phi / 6.2831853 + 0.5) * 32.0 - 0.5;
+    float i = floor(b);
+    return mix(Spike(int(i), core), Spike(int(i) + 1, core), b - i);
 }
 
 layout(location = 0) out vec4 outScene;
@@ -51,30 +56,36 @@ layout(location = 4) out vec4 outAlbedo;
 void main()
 {
     outGlow = outLocal = outMotion = outAlbedo = vec4(0.0);
+    outScene = vec4(0.0);
     vec2 ndc = vec2(gl_FragCoord.x / P.view.x * 2.0 - 1.0, 1.0 - gl_FragCoord.y / P.view.y * 2.0);
     vec4 a = P.invViewProj * vec4(ndc, 0.0, 1.0), b = P.invViewProj * vec4(ndc, 1.0, 1.0);
     vec3 dir = normalize(b.xyz / b.w - a.xyz / a.w);
-    float cosA = clamp(dot(dir, P.toSun.xyz), -1.0, 1.0);
-    float angle = acos(cosA);
-    if (angle > 0.6) {
-        outScene = vec4(0.0);
+    float angle = acos(clamp(dot(dir, P.toSun.xyz), -1.0, 1.0));
+    float reach = P.toSun.w;
+    if (angle > reach * 6.0)
         return;
-    }
-    float r = angle / P.toSun.w;
-    // The disc: edge smoothed over a pixel or so; darker towards the rim (limb darkening, the sun's u ~ 0.6).
-    float edge = 1.0 - smoothstep(0.92, 1.0, r);
-    float mu = sqrt(max(1.0 - r * r, 0.0));
-    vec3 light = P.colour.rgb * (edge * (0.4 + 0.6 * mu));
-    // The halo: the light scattered round it, falling off with the angle (a tight core, a wide skirt).
-    float halo = exp(-angle / (0.15 * P.view.w)) * 0.6 + exp(-angle / P.view.w) * 0.4;
-    light += P.colour.rgb * (P.colour.w * halo * 0.02);
-    // The starburst: six thin streaks round it, fading out quickly (glare, faint).
+    float outer = smoothstep(6.0, 3.5, angle / reach);   // (the haze and beams gone smoothly by 6 reaches)
+    // (phi: as sun.cpp's outline - u = up x toSun, v = toSun x u)
     vec3 up = abs(P.toSun.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
     vec3 u = normalize(cross(up, P.toSun.xyz)), v = cross(P.toSun.xyz, u);
     float phi = atan(dot(dir, v), dot(dir, u));
-    float streak = pow(abs(cos(3.0 * phi)), 60.0) * exp(-angle / (4.0 * P.toSun.w));
-    light += P.colour.rgb * (P.view.z * streak * 0.05);
-    // The corona (outside the disc, falling off from its rim).
-    light += P.colour.rgb * (P.rays.y * Corona(phi, max(angle - P.toSun.w, 0.0)) * 0.03 * smoothstep(0.8, 1.2, r));
-    outScene = vec4(light, 0.0);                 // (added: over with alpha 0)
+    float t = P.anim.x, seed = P.anim.y;
+    float turned = phi + t * 0.006;              // (the star turning, very slowly)
+    // The star: the glow's outline, full and bright (its middle over white), fading evenly out to its tips.
+    float s = angle / max(reach * Outline(turned, false), 1e-5);
+    float star = clamp(1.0 - s, 0.0, 1.0);
+    // The core: the small sprite's outline, white-hot (well over the tone map's white).
+    float sc = angle / max(reach * Outline(turned, true), 1e-5);
+    float core = pow(clamp(1.0 - sc, 0.0, 1.0), 0.8);
+    // The beams: a few broad soft ones past the star's tips, two sets turning opposite ways, breathing.
+    float at = fract(phi / 6.2831853 + 0.5);
+    float b1 = smoothstep(0.4, 0.95, Noise(vec2(at * 6.0 + t * 0.004, t * 0.03), 6.0, seed + 7.0));
+    float b2 = smoothstep(0.45, 0.95, Noise(vec2(at * 9.0 - t * 0.003, t * 0.04), 9.0, seed + 19.0));
+    float beams = (b1 * 0.5 + b2 * 0.3) * exp(-angle / (reach * 0.9)) * outer;
+    // A faint wide haze round it all.
+    float haze = 0.15 * exp(-angle / (reach * 1.2)) * outer;
+    float glow = star * 2.4 + beams + haze;
+    float bleed = clamp(P.view.w, 0.0, 1.0);
+    float light = P.view.z > 0.5 ? glow * bleed : core * 5.0 + glow * (1.0 - bleed);
+    outScene = vec4(P.colour.rgb * light, 0.0);  // (added: over with alpha 0)
 }

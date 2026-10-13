@@ -434,6 +434,9 @@ public:
     void SetMist(float s) { m_mist = s; }
     // The sun's disc (sun.cpp; 0 none, 1 as planned: its brightness).
     void SetSun(float s) { m_sun = s; }
+    // Their size (x the game's sun sprites) and the share of their glow over the clouds (sun.cpp).
+    void SetSunSize(float s) { m_sunSize = s; }
+    void SetSunBleed(float s) { m_sunBleed = s; }
     // The game's own sun sprites (its glow, VisualSunRays_t), shown or not.
     void SetGameSun(bool on) { m_gameSun = on; }
     // Tests: the sky weather's clock (seconds, as UTC; < 0 the wall clock).
@@ -973,16 +976,25 @@ private:
     bool m_atmos = true;                         // RVK_Atmos
     // Valley mist (mist.cpp, RVK_Mist).
     float m_mist = 1.0f;                         // RVK_Mist, x (0: none)
-    float m_sun = 1.0f;                          // RVK_Sun: the sun's disc, x (0: none; sun.cpp)
+    float m_sun = 1.0f;                          // RVK_Sun: the suns' brightness, x (0: none; sun.cpp)
+    float m_sunSize = 0.75f;                     // RVK_SunSize: their size, x the game's sprites
+    float m_sunBleed = 0.3f;                     // RVK_SunBleed: the share of their glow over the clouds
     uint64_t m_sunDrawnFrame = ~0ull;            // ... drawn this frame (once: the first of the game's sun sprites)
+    uint64_t m_sunOverFrame = ~0ull;             // ... their glow over the clouds drawn this frame (the sky's end)
     bool m_gameSun = false;                      // RVK_GameSun: the game's sun sprites drawn (off: our suns alone)
     // The game's sun sprites seen this frame / the last (sun.cpp): where, how big, their colour - grouped into suns.
-    struct SunSprite { float dir[3], size, colour[3]; uint32_t hub; };
+    static constexpr int kSunBins = 32;          // a sprite's outline: its reach (radians) at 32 angles round its hub
+    struct SunSprite { float dir[3], size, colour[3]; uint32_t hub; float rim[kSunBins]; };
+    // The suns as drawn this frame (DrawSun under the clouds, then their glow over them: DrawSunOver).
+    struct SunDrawn { float dir[3], colour[3], reach, core; uint32_t glowShape[8], coreShape[8]; };
+    std::vector<SunDrawn> m_sunsDrawn;
     std::vector<SunSprite> m_sunSprites;
     uint64_t m_sunSpritesFrame = 0;
     void NoteSunSprite(uint32_t fvf, const void* vertices, uint32_t vertexCount, const uint16_t* indices,
                        uint32_t indexCount);
     void DrawSun();
+    void DrawSunOver();
+    void DrawSuns(bool over);
     std::vector<float> m_mistSamples;            // this frame's terrain heights near the eye
     float m_mistFloor = 0.0f, m_mistAmount = 0.0f, m_mistWet = 0.0f, m_mistSunPrev = 0.0f, m_mistSunTrend = 0.0f;
     bool m_mistFloorSet = false;

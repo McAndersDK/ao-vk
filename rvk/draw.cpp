@@ -2091,6 +2091,10 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     if (!m_cloudPuffs.empty() && !m_cloudsDrawn && m_scenePhase && m_target == m_scene && !m_external &&
         VisualKind(m_drawVisualKind) != VisualKind::Sky && (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZRHW)
         DrawClouds(m_frames[m_frameIndex].main);
+    // The suns' glow over the clouds (sun.cpp, RVK_SunBleed): at the sky's end, after the cloud layer.
+    if (m_sunDrawnFrame == m_frameNumber && m_sunOverFrame != m_frameNumber && m_scenePhase && m_target == m_scene &&
+        !m_external && VisualKind(m_drawVisualKind) != VisualKind::Sky && (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZRHW)
+        DrawSunOver();
     double since = (m_frameNumber & 15) == 0 ? ProfileCpu() : 0.0;   // per-draw CPU sections (profiling)
     m_drawIsLabel = !m_external && IsLabel(primitive, fvf, vertexCount);
     // The interface hidden (screenshots): its draws - pre-transformed, onto the frame or into the interface layer,
