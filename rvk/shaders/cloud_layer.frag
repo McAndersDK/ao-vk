@@ -22,8 +22,7 @@ layout(set = 0, binding = 0, std140) uniform LayerFrame {
                         // (world)
     vec4 view;          // xy: the half-size target's size, z: steps, w: steps towards the sun
     vec4 sub;           // reused over frames (cloud_resolve.frag): xy this frame's pixel in each 2x2, z: 2 (one of each
-                        // 2x2 marched, into a quarter-size target) or 1 (every pixel); w: the shadow map's - how
-                        // cloudy the sky is
+                        // 2x2 marched, into a quarter-size target) or 1 (every pixel)
     vec4 horizon;       // x: how much the game fogs its clouds (0..1: towards the horizon they become the fog's colour,
                         // as the game's do - the fogged ground meets them seamlessly); y: contrast (RVK_CloudShade)
     vec4 shadowArea;    // the shadow map (RVK_CLOUD_SHADOW): its corner x, z (world), its size, the plane it lies in
@@ -220,7 +219,7 @@ void main()
     float od = 0.0, span = (L.layer.y - L.layer.x) / float(kSamples);
     for (int k = 0; k < kSamples; ++k) {
         float y = L.layer.x + span * (float(k) + 0.5);
-        od += Density(p + sunL * ((y - p.y) / sunL.y), false);
+        od += Density(p + sunL * ((y - p.y) / sunL.y), true);   // (with the billows: the clouds' own edges)
     }
     od *= span / sunL.y * L.shape.w;
     if (L.deck.x > 0.0) {                         // (and the low deck's)
@@ -232,24 +231,6 @@ void main()
         od += ds * dspan / sunL.y * L.shape.w * 0.9;
     }
     float light = exp(-od * 0.25);                // (softened: thin cloud a light shade, thick cloud dark)
-    // Shadow patches finer than the clouds (user's choice, 2026-10-13): the layer's cells are about a kilometre, so
-    // the land in view - a few hundred units - lay wholly in one cloud's shadow or none. Patches of ~60-150 units,
-    // fixed in the world and drifting with the layer's wind (a noise tile of ~320 units, 4 cells a tile), as many as the sky is cloudy (L.sub.w; the weather map's
-    // cover is near all or nothing at a point), soft-edged.
-    {
-        vec3 c = p + sunL * ((L.layer.x + 0.35 * (L.layer.y - L.layer.x) - p.y) / sunL.y);
-        float cover = 0.8 * L.sub.w;
-        vec3 q = vec3((c.x + L.wind.x) * L.shape.x * 14.0, 0.43, (c.z + L.wind.z) * L.shape.x * 14.0);
-        vec4 n = textureLod(shapeNoise, q, 0.0);
-        // (Worley fbm at 4 and 8 cells a tile: values bunched in ~0.45..0.63 - the threshold that leaves `cover` of
-        // the ground above it, fitted to their spread.)
-        float v = n.g * 0.7 + n.b * 0.3;
-        float t = 0.61 - 0.27 * cover;
-        float patchy = smoothstep(t - 0.012, t + 0.018, v);
-        // (The layer's own shadow only a gentle dimming: dense, it lay over all the land in view - the patches hidden
-        // in it, the setting dimming everything (user, 2026-10-13). The patches carry the shadows' shape.)
-        light = mix(1.0, light, 0.35) * (1.0 - 0.85 * patchy);
-    }
     // The game's sheets (RVK_CloudSheet, L.deck.w): a faint veil's shadow - fixed in the world, drifting with the wind
     // (the sheets themselves are kept round the eye: their own shadow would slide with the player), high up, fibrous.
     if (L.deck.w > 0.0) {

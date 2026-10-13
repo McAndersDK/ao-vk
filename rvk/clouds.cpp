@@ -1543,8 +1543,7 @@ void Device::MakeCloudLayerShadow(VkCommandBuffer cmd, const float eye[3])
     ri.colorAttachmentCount = 1;
     ri.pColorAttachments = &color;
     vkCmdBeginRendering(cmd, &ri);
-    // (w: how cloudy the sky is - the shadow's fine patches, as many: cloud_layer.frag RVK_CLOUD_SHADOW.)
-    const float sub[4] = {0.0f, 0.0f, 1.0f, std::clamp(m_cloudCloudy + 0.5f * m_cloudParams.cover, 0.0f, 1.0f)};
+    const float sub[4] = {0.0f, 0.0f, 1.0f, 0.0f};
     MarchCloudLayer(cmd, false, sub, shadowArea);
     vkCmdEndRendering(cmd);
     Transition(cmd, m_cloudShadowMap, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
