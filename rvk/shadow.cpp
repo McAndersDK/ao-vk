@@ -778,15 +778,19 @@ void Device::UpdateCasterCache()
                 float d = std::max(std::max(e.boundsMin[j] - m_frameEye[j], 0.0f), m_frameEye[j] - e.boundsMax[j]);
                 d2 += d * d;
             }
-            // The game draws whatever reaches into the view. A box test against the view is loose near the edges
-            // (it reports boxes just off screen as partly visible), so only the box's centre on screen counts as
-            // "the game would draw it": if it then wasn't drawn, it's gone.
+            // In view and not drawn may mean gone (removed, or replaced by another level of detail) - or only left out
+            // by the game. A box test against the view is loose near the edges (it reports boxes just off screen as
+            // partly visible), so only the box's centre on screen counts as in view.
             float centre[3];
             for (int j = 0; j < 3; ++j) centre[j] = 0.5f * (e.boundsMin[j] + e.boundsMax[j]);
             if (d2 > 16.0f * kCasterCacheRange * kCasterCacheRange) {
                 ++m_forgottenFar;
                 ForgetCachedCaster(it);
-            } else if (m_frameViewProjValid && BoxInClip(centre, centre, m_frameViewProj, true) == 1) {
+            } else if (m_frameViewProjValid && d2 < 20.0f * 20.0f && m_frameNumber - e.lastSeen >= 60 &&
+                       BoxInClip(centre, centre, m_frameViewProj, true) == 1) {
+                // (Gone only when near - within 20 units - and unseen in view a second: the game doesn't draw all it
+                // has in view - its occlusion culling and levels of detail leave out a wall's top a little off -
+                // and forgotten after one frame unseen, those pieces' shadows went missing, user 2026-10-13.)
                 ++m_forgottenInView;
                 if (m_cacheTraceLines < 300) {   // (churn: forgotten as unseen in view, remembered again later)
                     ++m_cacheTraceLines;
