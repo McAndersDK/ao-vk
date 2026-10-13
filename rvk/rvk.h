@@ -983,10 +983,9 @@ private:
     uint64_t m_sunOverFrame = ~0ull;             // ... their glow over the clouds drawn this frame (the sky's end)
     bool m_gameSun = false;                      // RVK_GameSun: the game's sun sprites drawn (off: our suns alone)
     // The game's sun sprites seen this frame / the last (sun.cpp): where, how big, their colour - grouped into suns.
-    static constexpr int kSunBins = 32;          // a sprite's outline: its reach (radians) at 32 angles round its hub
-    struct SunSprite { float dir[3], size, colour[3]; uint32_t hub; float rim[kSunBins]; };
-    // The suns as drawn this frame (DrawSun under the clouds, then their glow over them: DrawSunOver).
-    struct SunDrawn { float dir[3], colour[3], reach, core; uint32_t glowShape[8], coreShape[8]; };
+    struct SunSprite { float dir[3], size, colour[3], rimFade; uint32_t hub; };
+    // The sprites as drawn this frame (DrawSun under the clouds, then their glow over them: DrawSunOver).
+    struct SunDrawn { float dir[3], size, colour[3], rimFade, seed; };
     std::vector<SunDrawn> m_sunsDrawn;
     std::vector<SunSprite> m_sunSprites;
     uint64_t m_sunSpritesFrame = 0;

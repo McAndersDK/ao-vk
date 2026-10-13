@@ -1510,8 +1510,8 @@ template <typename D>
 void DrawDemoPuffs(D& dev, Vector eye, float yaw, Texture* const* puffTex, const std::vector<VtxMesh>& puffMesh,
                    const std::vector<uint16_t>& puffIdx, float scale)
 {
-    // (The game's sun sprites, as stand-ins: four fans of 32 rays of many lengths round a hub, two a sun - a white
-    // sun the light's way, a bluish purple one 14 degrees to its side; where the renderer draws its suns, sun.cpp.)
+    // (The game's sun sprites, as stand-ins: four round fans of 32 triangles round a hub, two a sun - one the light's
+    // way, one 14 degrees to its side; where the renderer draws its suns, sun.cpp.)
     dev.SetDrawVisual(uint32_t(VisualKind::Sky), "VisualSunRays_t");
     dev.SetTransform(World, Translate(eye.x, eye.y, eye.z));
     {
@@ -1526,8 +1526,9 @@ void DrawDemoPuffs(D& dev, Vector eye, float yaw, Texture* const* puffTex, const
         const float c14 = std::cos(0.244f), s14 = std::sin(0.244f);
         const Vector to2 = Normalize(Vector{to.x * c14 + side.x * s14, to.y * c14 + side.y * s14, to.z * c14 + side.z * s14});
         struct Fan { Vector dir; float size; uint32_t colour; };
-        const Fan fans[] = {{to, 60.0f, 0xFFFFFFF0u}, {to, 140.0f, 0xFFC8C8C0u}, {to2, 45.0f, 0xFF6496FFu},
-                            {to2, 100.0f, 0xFF7864C8u}};
+        // (as the game's, logged 2026-10-13: an orange and a blue sprite a sun, of very different sizes)
+        const Fan fans[] = {{to, 180.0f, 0xFF639CFFu}, {to, 540.0f, 0xFFFF9C38u}, {to2, 90.0f, 0xFFFF9C38u},
+                            {to2, 270.0f, 0xFF639CFFu}};
         std::vector<VtxDiffuseTex> fan(33);
         std::vector<uint16_t> fanIdx;
         for (uint16_t i = 0; i < 32; ++i) fanIdx.insert(fanIdx.end(), {0, uint16_t(1 + i), uint16_t(1 + (i + 1) % 32)});
@@ -1537,11 +1538,10 @@ void DrawDemoPuffs(D& dev, Vector eye, float yaw, Texture* const* puffTex, const
             fan[0] = VtxDiffuseTex{c.x, c.y, c.z, fn.colour, 0.5f, 0.5f};
             for (int i = 0; i < 32; ++i) {
                 const float a = float(i) / 32.0f * 2.0f * kPi;
-                const float h = float((i * 37 + f * 11) % 13) / 12.0f;   // (spikes long and short, each its own)
-                const float r = fn.size * ((i & 1) ? 0.5f + 0.2f * h : 0.8f + 0.2f * h);
+                const float r = fn.size;         // (round: the rays are in the texture)
                 const float x = std::cos(a) * r, y = std::sin(a) * r;
                 fan[1 + i] = VtxDiffuseTex{c.x + side.x * x + up.x * y, c.y + side.y * x + up.y * y,
-                                           c.z + side.z * x + up.z * y, fn.colour & 0x00FFFFFFu, 0.5f + 0.5f * std::cos(a),
+                                           c.z + side.z * x + up.z * y, fn.colour, 0.5f + 0.5f * std::cos(a),
                                            0.5f + 0.5f * std::sin(a)};
             }
             dev.DrawIndexedPrimitive(TriangleList, kFvfDiffuseTex, fan.data(), 33, fanIdx.data(), uint32_t(fanIdx.size()));

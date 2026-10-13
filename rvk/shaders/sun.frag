@@ -1,50 +1,40 @@
 #version 450
-// The suns (rvk/sun.cpp DrawSuns), as AO's rather than real ones: drawn into the sky where the game draws its sun's
-// ray sprites, before its cloud sheets and the cloud layer - which then cover them as they are thick (premultiplied
-// over: a thin cloud lets a bright smear through, a thick one hides it) - and a share of their glow again over the
-// clouds at the sky's end (RVK_SunBleed). Each: a big spiky star of the game's own sprite outline (its biggest
-// sprite's), soft towards its tips; a white-hot core of its small sprite's outline; a few broad soft beams; a faint
-// wide haze. Alive: the spikes swell and shrink each at its own pace, the star turns very slowly, the beams turn and
-// breathe. Added to the scene (HDR: the bloom its glare).
+// A sun sprite (rvk/sun.cpp DrawSuns), the game's VisualSunRays_t made anew: its texture (newsun_frame01.png) drawn
+// procedurally - measured from it: white to ~0.13 of the sprite's radius, that edge serrated (~14 teeth, +-10%), a
+// pinkish glow falling off as exp(-(r - 0.12) / 0.2), gone by ~0.8, faint thin rays - in the sprite's tint, added. In
+// HDR its core glares (the bloom); alive: the teeth swell and shrink each at its own pace, the rays shimmer and turn
+// slowly. Drawn into the sky before the game's cloud sheets and the cloud layer - which cover it as they are thick -
+// and a share of its glow again over the clouds at the sky's end (RVK_SunBleed).
 layout(push_constant) uniform Params {
     mat4 invViewProj;   // clip -> world, the sky's camera (raw D3DMATRIX memory, as cloud_layer.frag)
-    vec4 toSun;         // xyz: towards the sun (world), w: the glow's reach (radians: its outline's longest spike)
-    vec4 colour;        // rgb: its light, w: the core's reach over the glow's
+    vec4 toSun;         // xyz: towards the sprite's middle (world), w: its radius (radians)
+    vec4 colour;        // rgb: its tint (premultiplied, HDR), w: its rim's tint over its middle's (Gouraud)
     vec4 view;          // xy: the target's size, z: 1 over the clouds (the bleed alone), 0 under, w: the bleed's share
-    vec4 anim;          // x: the clock (s), y: this sun's seed
-    uvec4 glowShape[2]; // the glow's outline: 32 reaches (over toSun.w) round the sun, 8 bits each, 4 to a word
-    uvec4 coreShape[2]; // the core's
+    vec4 anim;          // x: the clock (s), y: this sprite's seed
 } P;
 
 float Hash(float n) { return fract(sin(n * 12.9898 + 4.1414) * 43758.5453); }
 
-// Smooth value noise on a cylinder: x wraps every 'period' cells, y runs on.
-float Noise(vec2 p, float period, float seed)
+// The core's serrated edge at angle a (0..1 round): 14 teeth, each its own height, swelling and shrinking. ~+-1.
+float Teeth(float a)
 {
-    vec2 i = floor(p), f = p - i;
-    f = f * f * (3.0 - 2.0 * f);
-    float x0 = mod(i.x, period), x1 = mod(i.x + 1.0, period);
-    float a = Hash(x0 + i.y * 57.0 + seed), b = Hash(x1 + i.y * 57.0 + seed);
-    float c = Hash(x0 + (i.y + 1.0) * 57.0 + seed), d = Hash(x1 + (i.y + 1.0) * 57.0 + seed);
-    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+    float t = P.anim.x, seed = P.anim.y;
+    float x = a * 14.0, i = floor(x), f = x - i;
+    float h = Hash(mod(i, 14.0) + seed);
+    float height = (0.55 + 0.45 * h) * (1.0 + 0.3 * sin(t * (0.4 + 0.6 * h) + h * 40.0));
+    return (1.0 - 2.0 * abs(f - 0.5)) * height * 2.0 - 1.0;
 }
 
-// One spike's reach (0..1 of the glow's), swelling and shrinking (+-15%), each at its own pace.
-float Spike(int i, bool core)
+// The faint rays at angle a (0..1 round), r out: 48 thin streaks, each its own brightness and length, shimmering.
+float Rays(float a, float r)
 {
-    i = (i + 32) & 31;
-    uint w = core ? P.coreShape[i >> 4][(i >> 2) & 3] : P.glowShape[i >> 4][(i >> 2) & 3];
-    float r = float((w >> (8u * uint(i & 3))) & 255u) / 255.0;
-    float h = Hash(float(i) * 3.1 + P.anim.y + (core ? 50.0 : 0.0));
-    return r * (1.0 + 0.15 * sin(P.anim.x * (0.3 + 0.5 * h) + h * 31.0));
-}
-
-// The outline's reach at angle phi (radians) round the sun: between two spikes a straight edge, near enough.
-float Outline(float phi, bool core)
-{
-    float b = fract(phi / 6.2831853 + 0.5) * 32.0 - 0.5;
-    float i = floor(b);
-    return mix(Spike(int(i), core), Spike(int(i) + 1, core), b - i);
+    float t = P.anim.x, seed = P.anim.y + 91.0;
+    float x = a * 48.0, i = floor(x), f = x - i;
+    float h = Hash(mod(i, 48.0) + seed), g = Hash(mod(i, 48.0) + seed + 7.0);
+    float peak = exp(-pow((f - 0.5) / 0.12, 2.0));
+    float len = 0.3 + 0.6 * g * g;
+    float shimmer = 0.65 + 0.35 * sin(t * (0.5 + h) + g * 30.0);
+    return peak * h * h * shimmer * smoothstep(len, 0.12, r);
 }
 
 layout(location = 0) out vec4 outScene;
@@ -60,32 +50,27 @@ void main()
     vec2 ndc = vec2(gl_FragCoord.x / P.view.x * 2.0 - 1.0, 1.0 - gl_FragCoord.y / P.view.y * 2.0);
     vec4 a = P.invViewProj * vec4(ndc, 0.0, 1.0), b = P.invViewProj * vec4(ndc, 1.0, 1.0);
     vec3 dir = normalize(b.xyz / b.w - a.xyz / a.w);
-    float angle = acos(clamp(dot(dir, P.toSun.xyz), -1.0, 1.0));
-    float reach = P.toSun.w;
-    if (angle > reach * 6.0)
+    float r = acos(clamp(dot(dir, P.toSun.xyz), -1.0, 1.0)) / P.toSun.w;   // (0 the middle, 1 the rim)
+    if (r > 0.9)
         return;
-    float outer = smoothstep(6.0, 3.5, angle / reach);   // (the haze and beams gone smoothly by 6 reaches)
-    // (phi: as sun.cpp's outline - u = up x toSun, v = toSun x u)
     vec3 up = abs(P.toSun.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
     vec3 u = normalize(cross(up, P.toSun.xyz)), v = cross(P.toSun.xyz, u);
     float phi = atan(dot(dir, v), dot(dir, u));
-    float t = P.anim.x, seed = P.anim.y;
-    float turned = phi + t * 0.006;              // (the star turning, very slowly)
-    // The star: the glow's outline, full and bright (its middle over white), fading evenly out to its tips.
-    float s = angle / max(reach * Outline(turned, false), 1e-5);
-    float star = clamp(1.0 - s, 0.0, 1.0);
-    // The core: the small sprite's outline, white-hot (well over the tone map's white).
-    float sc = angle / max(reach * Outline(turned, true), 1e-5);
-    float core = pow(clamp(1.0 - sc, 0.0, 1.0), 0.8);
-    // The beams: a few broad soft ones past the star's tips, two sets turning opposite ways, breathing.
-    float at = fract(phi / 6.2831853 + 0.5);
-    float b1 = smoothstep(0.4, 0.95, Noise(vec2(at * 6.0 + t * 0.004, t * 0.03), 6.0, seed + 7.0));
-    float b2 = smoothstep(0.45, 0.95, Noise(vec2(at * 9.0 - t * 0.003, t * 0.04), 9.0, seed + 19.0));
-    float beams = (b1 * 0.5 + b2 * 0.3) * exp(-angle / (reach * 0.9)) * outer;
-    // A faint wide haze round it all.
-    float haze = 0.15 * exp(-angle / (reach * 1.2)) * outer;
-    float glow = star * 2.4 + beams + haze;
+    float turn = P.anim.x * 0.004 * (fract(P.anim.y * 0.37) < 0.5 ? 1.0 : -1.0);   // (turning slowly, either way)
+    float at = fract(phi / 6.2831853 + 0.5 + turn);
+    // The core: white-hot to its serrated edge.
+    float edge = 0.135 * (1.0 + 0.1 * Teeth(at));
+    float core = smoothstep(edge * 1.12, edge * 0.88, r);
+    // The glow: white near the core, pinkish further out; its rays.
+    float glow = min(exp(-(r - 0.12) / 0.2), 1.0) * smoothstep(0.85, 0.6, r);
+    vec3 hue = mix(vec3(1.0), vec3(1.0, 0.78, 0.86), smoothstep(0.1, 0.25, r));
+    float rays = 0.18 * Rays(at, r) * step(0.1, r);
+    float fade = mix(1.0, P.colour.w, clamp(r, 0.0, 1.0));   // (the vertex tint across the fan)
+    vec3 outer = (hue * glow * (1.0 - core) + vec3(rays)) * 1.2 * fade;
     float bleed = clamp(P.view.w, 0.0, 1.0);
-    float light = P.view.z > 0.5 ? glow * bleed : core * 5.0 + glow * (1.0 - bleed);
-    outScene = vec4(P.colour.rgb * light, 0.0);  // (added: over with alpha 0)
+    // (the core whiter than the tint: the game's sprites, added in 8 bits, clip to white where they're hot)
+    vec3 hot = P.colour.rgb + 0.6 * max(P.colour.r, max(P.colour.g, P.colour.b));
+    vec3 light = P.view.z > 0.5 ? P.colour.rgb * outer * bleed
+                                : hot * core * 4.0 + P.colour.rgb * outer * (1.0 - bleed);
+    outScene = vec4(light, 0.0);                 // (added: over with alpha 0)
 }
