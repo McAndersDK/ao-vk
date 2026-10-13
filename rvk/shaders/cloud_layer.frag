@@ -19,6 +19,8 @@ layout(set = 0, binding = 0, std140) uniform LayerFrame {
     vec4 ambient;       // rgb: the sky's light; w: rain (0..1)
     vec4 haze;          // rgb: the distance's colour (the game's fog); w: the haze's distance (world)
     vec4 view;          // xy: the half-size target's size, z: steps, w: steps towards the sun
+    vec4 sub;           // reused over frames (cloud_resolve.frag): xy this frame's pixel in each 2x2, z: 2 (one of each
+                        // 2x2 marched, into a quarter-size target) or 1 (every pixel)
 } L;
 layout(set = 0, binding = 1) uniform sampler2D weatherMap;
 layout(set = 0, binding = 2) uniform sampler3D shapeNoise;
@@ -75,16 +77,17 @@ float Density(vec3 p, bool detail)
     vec4 n = textureLod(shapeNoise, q, 0.0);
     float fbm = n.g * 0.625 + n.b * 0.25 + n.a * 0.125;
     float body = Remap(n.r, fbm - 1.0, 1.0, 0.0, 1.0) * Profile(h, w.g);
-    // Billows: the body bumped by its own cells three times finer (cauliflower tops rather than smooth blobs) - more
-    // towards the top, where cumulus heap up.
-    if (detail) {
-        float billow = textureLod(shapeNoise, q * 3.1 + 0.17, 0.0).g;
-        body = Remap(body, (1.0 - billow) * mix(0.15, 0.35, clamp(h * 2.0, 0.0, 1.0)), 1.0, 0.0, 1.0);
-    }
     // Coverage eats into the body from its thin parts: little cover, only the cores remain.
     float d = clamp(Remap(body, 1.0 - cover, 1.0, 0.0, 1.0), 0.0, 1.0) * cover;
-    if (d <= 0.0 || !detail)
+    if (d <= 0.0 || !detail)                     // (the detail below only takes away)
         return d * w.b;
+    // Billows: the body bumped by its own cells three times finer (cauliflower tops rather than smooth blobs) - more
+    // towards the top, where cumulus heap up.
+    float billow = textureLod(shapeNoise, q * 3.1 + 0.17, 0.0).g;
+    body = Remap(body, (1.0 - billow) * mix(0.15, 0.35, clamp(h * 2.0, 0.0, 1.0)), 1.0, 0.0, 1.0);
+    d = clamp(Remap(body, 1.0 - cover, 1.0, 0.0, 1.0), 0.0, 1.0) * cover;
+    if (d <= 0.0)
+        return 0.0;
     // The edges eroded by finer cells, swirled by the body's own noise (wisps curl rather than tile), at two scales.
     vec3 swirl = (n.gba - 0.5) * 0.35;
     vec3 dq = (p + L.wind.xyz * 1.7) * L.shape.y + swirl;
@@ -100,9 +103,11 @@ float HG(float c, float g) { return (1.0 - g * g) / (4.0 * kPi * pow(1.0 + g * g
 
 void main()
 {
+    // The half-size pixel marched (one of each 2x2 when reused over frames).
+    vec2 hp = L.sub.z > 1.5 ? floor(gl_FragCoord.xy) * 2.0 + L.sub.xy + 0.5 : gl_FragCoord.xy;
     // The four scene pixels under this one: none of them sky - an opaque surface is drawn there later.
     if (L.weather.w > 0.5) {
-        ivec2 at = ivec2(gl_FragCoord.xy) * 2, last = textureSize(sceneDepth, 0) - 1;
+        ivec2 at = ivec2(hp) * 2, last = textureSize(sceneDepth, 0) - 1;
         bool open = false;
         for (int k = 0; k < 4; ++k)
             open = open || texelFetch(sceneDepth, min(at + ivec2(k & 1, k >> 1), last), 0).r == L.wind.w;
@@ -110,7 +115,7 @@ void main()
             discard;
     }
     // The view ray (the scene's flipped viewport; the TAA's jitter taken out as the scene's draws put it in).
-    vec2 ndc = vec2(gl_FragCoord.x / L.view.x * 2.0 - 1.0, 1.0 - gl_FragCoord.y / L.view.y * 2.0) - FL.taa.xy;
+    vec2 ndc = vec2(hp.x / L.view.x * 2.0 - 1.0, 1.0 - hp.y / L.view.y * 2.0) - FL.taa.xy;
     vec4 a = L.invViewProj * vec4(ndc, 0.0, 1.0), b = L.invViewProj * vec4(ndc, 1.0, 1.0);
     vec3 eye = L.eye.xyz;
     vec3 dir = normalize(b.xyz / b.w - a.xyz / a.w);
@@ -141,7 +146,7 @@ void main()
     }
     // Steps growing with the distance (short near the eye: the near clouds' detail; long far off), at most L.view.z.
     int steps = int(L.view.z);
-    float jitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))) + FL.taa.z);
+    float jitter = fract(52.9829189 * fract(dot(hp, vec2(0.06711056, 0.00583715))) + FL.taa.z);
     vec3 sunL = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
     float sunUp = smoothstep(-0.08, 0.12, sunL.y);
     float cosT = dot(dir, sunL);
@@ -157,17 +162,21 @@ void main()
         vec3 p = eye + dir * t;
         t += dt;
         float d = Density(p, true);
-        if (d <= 0.001)
+        if (d <= 0.001) {
+            t += dt;                             // (clear air: on twice as far)
             continue;
+        }
         float tHere = t - dt;
-        // The sun through the cloud: a few steps towards it, longer each.
+        // The sun through the cloud: a few steps towards it, longer each (far off, fewer and longer).
         float od = 0.0;
-        float ls = gThick * 0.06;
+        bool far = tHere > 8000.0;
+        int lightSteps = far ? 2 : int(L.view.w);
+        float ls = gThick * (far ? 0.15 : 0.06), grow = far ? 2.5 : 1.6;
         vec3 lp = p;
-        for (int k = 0; k < int(L.view.w); ++k) {
+        for (int k = 0; k < lightSteps; ++k) {
             lp += sunL * ls;
             od += Density(lp, false) * ls;
-            ls *= 1.6;
+            ls *= grow;
         }
         od *= sigma;
         // Several scattering orders (each dimmer, reaching deeper, less forward): light inside thick cloud; a strong

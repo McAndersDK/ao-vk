@@ -1407,6 +1407,7 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
 int g_waterScene = 0;             // 1 = --water-lake, 2 = --water-coast
 float g_waterStyle = 0.5f;        // --water-style S (0 = enhanced AO, 1 = realistic)
 float g_waterYaw = 0.0f;          // --water-yaw R: the camera turned R radians from the scene's default
+float g_waterTurn = 0.0f;         // --water-turn R: ... and R more each frame (turning)
 float g_waterPitch = -10.0f;      // --water-pitch R: looking R radians down (negative: up; default per scene)
 float g_waterHeight = -1.0f;      // --water-height H: the eye this high above the water (default per scene)
 float g_waterWaves = 1.0f;        // --water-waves W
@@ -1707,7 +1708,7 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
         const float ex = coast ? 2.0f : 0.0f, ez = g_waterZ > -1e5f ? g_waterZ : coast ? 22.0f : -25.0f;
         const float eyeY = g_waterHeight >= 0.0f ? g_waterHeight : std::max(height(ex, ez), 0.0f) + 1.8f;
         const float pitch = g_waterPitch > -5.0f ? g_waterPitch : (coast ? 0.1f : 0.16f);
-        const float yaw = kPi * 0.5f + g_waterYaw;           // +z
+        const float yaw = kPi * 0.5f + g_waterYaw + g_waterTurn * float(frame);   // +z (--water-turn: turning)
         Vector eye{ex, eyeY, ez};
         if (g_waterEyeSet)
             eye = {g_waterEye[0] - g_waterMeshAt[0], g_waterEye[1] - g_waterMeshAt[1], g_waterEye[2] - g_waterMeshAt[2] + 60.0f};
@@ -3060,6 +3061,7 @@ int main(int argc, char** argv)
         else if (a == "--water-shadows") shadows = true;   // (the coast's camera then goes wrong from frame 2: not the water's)
         else if (a == "--water-style" && i + 1 < argc) g_waterStyle = float(std::atof(argv[++i]));
         else if (a == "--water-yaw" && i + 1 < argc) g_waterYaw = float(std::atof(argv[++i]));
+        else if (a == "--water-turn" && i + 1 < argc) g_waterTurn = float(std::atof(argv[++i]));
         else if (a == "--water-pitch" && i + 1 < argc) g_waterPitch = float(std::atof(argv[++i]));
         else if (a == "--water-height" && i + 1 < argc) g_waterHeight = float(std::atof(argv[++i]));
         else if (a == "--water-waves" && i + 1 < argc) g_waterWaves = float(std::atof(argv[++i]));

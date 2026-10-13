@@ -50,6 +50,9 @@ const uint32_t kCloudWeatherFragSpirv[] = {
 const uint32_t kCloudLayerFragSpirv[] = {
 #include "cloud_layer.frag.inc"
 };
+const uint32_t kCloudResolveFragSpirv[] = {
+#include "cloud_resolve.frag.inc"
+};
 
 constexpr uint32_t kShadowSize = 256;           // the clouds' shadow map (pixels a side)
 constexpr float kShadowArea = 3000.0f;          // ... over this much of the world round the camera
@@ -75,8 +78,21 @@ struct WeatherFrame {
 
 struct LayerFrame {
     d3d::Matrix invViewProj;
-    float eye[4], layer[4], weather[4], shape[4], wind[4], tint[4], ambient[4], haze[4], view[4];
+    float eye[4], layer[4], weather[4], shape[4], wind[4], tint[4], ambient[4], haze[4], view[4], sub[4];
 };
+
+struct ResolveFrame {
+    d3d::Matrix invViewProj, prevViewProj;
+    float size[4], sub[4];
+};
+
+// The view-projection of the camera's rotation alone (its translation dropped): directions to clip space.
+d3d::Matrix RotationViewProj(const d3d::Matrix& view, const d3d::Matrix& proj)
+{
+    d3d::Matrix v = view;
+    v.m[3][0] = v.m[3][1] = v.m[3][2] = 0.0f;
+    return MulMatrix(v, proj);
+}
 constexpr uint32_t kMaxPuffs = 256;             // drawn a frame at most
 
 // The per-puff block (cloud.vert/.frag CloudFrame, std140).
@@ -382,7 +398,13 @@ bool Device::CreateCloudResources(std::string* error)
                                                 {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, frag, nullptr},
                                                 {5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, frag, nullptr}};
     const VkFormat weatherFormat = GetFormatInfo(Format::RGBA8).vk;
+    const VkDescriptorSetLayoutBinding rb[3] = {{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, frag, nullptr},
+                                                {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, frag, nullptr},
+                                                {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, frag, nullptr}};
     return setLayout(wb, 2, &m_cloudWeatherSetLayout, &m_cloudWeatherLayout) &&
+           setLayout(rb, 3, &m_cloudResolveSetLayout, &m_cloudResolveLayout) &&
+           pipeline(kFullscreenVertSpirv, sizeof(kFullscreenVertSpirv), kCloudResolveFragSpirv, sizeof(kCloudResolveFragSpirv),
+                    m_cloudResolveLayout, &halfFormat, 1, VK_FORMAT_UNDEFINED, &m_cloudResolvePipeline) &&
            setLayout(lb, 6, &m_cloudLayerSetLayout, &m_cloudLayerLayout) &&
            // (Written whole: blended over with alpha 1 / over a cleared target.)
            pipeline(kFullscreenVertSpirv, sizeof(kFullscreenVertSpirv), kCloudWeatherFragSpirv, sizeof(kCloudWeatherFragSpirv),
@@ -394,11 +416,12 @@ bool Device::CreateCloudResources(std::string* error)
 void Device::DestroyCloudResources()
 {
     for (VkPipeline* p : {&m_cloudPipeline, &m_cloudHalfPipeline, &m_cloudUpPipeline, &m_cloudUpScenePipeline,
-                          &m_cloudShadowPipeline, &m_cloudLayerNoisePipeline, &m_cloudWeatherPipeline, &m_cloudLayerPipeline})
+                          &m_cloudShadowPipeline, &m_cloudLayerNoisePipeline, &m_cloudWeatherPipeline, &m_cloudLayerPipeline,
+                          &m_cloudResolvePipeline})
         if (*p) { vkDestroyPipeline(m_device, *p, nullptr); *p = VK_NULL_HANDLE; }
-    for (VkPipelineLayout* l : {&m_cloudLayerNoiseLayout, &m_cloudWeatherLayout, &m_cloudLayerLayout})
+    for (VkPipelineLayout* l : {&m_cloudLayerNoiseLayout, &m_cloudWeatherLayout, &m_cloudLayerLayout, &m_cloudResolveLayout})
         if (*l) { vkDestroyPipelineLayout(m_device, *l, nullptr); *l = VK_NULL_HANDLE; }
-    for (VkDescriptorSetLayout* l : {&m_cloudWeatherSetLayout, &m_cloudLayerSetLayout})
+    for (VkDescriptorSetLayout* l : {&m_cloudWeatherSetLayout, &m_cloudLayerSetLayout, &m_cloudResolveSetLayout})
         if (*l) { vkDestroyDescriptorSetLayout(m_device, *l, nullptr); *l = VK_NULL_HANDLE; }
     for (CloudVolume* v : {&m_cloudShape, &m_cloudDetail}) {
         if (v->view) vkDestroyImageView(m_device, v->view, nullptr);
@@ -406,6 +429,9 @@ void Device::DestroyCloudResources()
         *v = CloudVolume{};
     }
     if (m_cloudWeather) { DestroyTexture(m_cloudWeather); m_cloudWeather = nullptr; }
+    for (Texture** t : {&m_cloudQuarter, &m_cloudHistory[0], &m_cloudHistory[1]})
+        if (*t) { DestroyTexture(*t); *t = nullptr; }
+    m_cloudHistoryValid = false;
     if (m_cloudShadowLayout) { vkDestroyPipelineLayout(m_device, m_cloudShadowLayout, nullptr); m_cloudShadowLayout = VK_NULL_HANDLE; }
     if (m_cloudShadowSetLayout) { vkDestroyDescriptorSetLayout(m_device, m_cloudShadowSetLayout, nullptr); m_cloudShadowSetLayout = VK_NULL_HANDLE; }
     if (m_cloudShadowMap) { DestroyTexture(m_cloudShadowMap); m_cloudShadowMap = nullptr; }
@@ -699,27 +725,28 @@ void Device::DrawClouds(VkCommandBuffer cmd)
             ImageBarrier(work, m_depth, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, tests, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                          VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-        if (layer)
-            MakeCloudWeather(work, eyeNow);
-        Transition(work, m_cloudHalf, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-        color.imageView = m_cloudHalf->m_view;
-        color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
-        ri.renderArea = {{0, 0}, {hw, hh}};
-        ri.layerCount = 1;
-        ri.colorAttachmentCount = 1;
-        ri.pColorAttachments = &color;
-        vkCmdBeginRendering(work, &ri);
         float lo[2] = {0.0f, 0.0f}, hi[2] = {float(fw), float(fh)};
-        if (layer)
-            MarchCloudLayer(work, skipCovered);
-        else
+        Texture* clouds = m_cloudHalf;           // the half-size clouds to filter up
+        if (layer) {
+            MakeCloudWeather(work, eyeNow);
+            clouds = ReusedCloudLayer(work, skipCovered, eyeNow);
+        } else {
+            Transition(work, m_cloudHalf, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+            color.imageView = m_cloudHalf->m_view;
+            color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+            ri.renderArea = {{0, 0}, {hw, hh}};
+            ri.layerCount = 1;
+            ri.colorAttachmentCount = 1;
+            ri.pColorAttachments = &color;
+            vkCmdBeginRendering(work, &ri);
             MarchCloudPuffs(work, order, true, skipCovered, lo, hi);
-        vkCmdEndRendering(work);
-        Transition(work, m_cloudHalf, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            vkCmdEndRendering(work);
+            Transition(work, m_cloudHalf, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        }
         if (skipCovered)
             ImageBarrier(work, m_depth, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                          VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, 0, tests,
@@ -756,7 +783,7 @@ void Device::DrawClouds(VkCommandBuffer cmd)
             vkCmdSetViewport(cmd, 0, 1, &full);
             vkCmdSetScissor(cmd, 0, 1, &area);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, own ? m_cloudUpScenePipeline : m_cloudUpPipeline);
-            VkDescriptorImageInfo image{m_cloudClampSampler, m_cloudHalf->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            VkDescriptorImageInfo image{m_cloudClampSampler, clouds->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
             w.dstBinding = 0;
             w.descriptorCount = 1;
@@ -1180,10 +1207,11 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
 // RVK_CloudLayer: the layer marched over the half-size target (inside its rendering), one fullscreen pass. The world
 // camera: the frame's (the first scene draw writing depth), else the draw's that set the clouds off (the first after
 // the sky).
-void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered)
+void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float sub[4])
 {
     Frame& f = m_frames[m_frameIndex];
     const uint32_t hw = (m_scene->m_width + 1) / 2, hh = (m_scene->m_height + 1) / 2;
+    const uint32_t tw = sub[2] > 1.5f ? (hw + 1) / 2 : hw, th = sub[2] > 1.5f ? (hh + 1) / 2 : hh;   // the target's
     const d3d::Matrix& view = m_aoProjValid ? m_aoView : m_view;
     const d3d::Matrix& proj = m_aoProjValid ? m_aoProj : m_proj;
     LayerFrame lf{};
@@ -1235,12 +1263,13 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered)
     lf.view[0] = float(hw);
     lf.view[1] = float(hh);
     lf.view[2] = float(std::clamp(m_cloudParams.steps * 3u, 32u, 192u));
-    lf.view[3] = 5.0f;
+    lf.view[3] = 4.0f;
+    std::memcpy(lf.sub, sub, sizeof(lf.sub));
     void* cpu = nullptr;
     const VkDeviceSize offset = Allocate(sizeof(LayerFrame), 256, &cpu);
     std::memcpy(cpu, &lf, sizeof(lf));
-    VkViewport viewport{0.0f, 0.0f, float(hw), float(hh), 0.0f, 1.0f};
-    VkRect2D scissor{{0, 0}, {hw, hh}};
+    VkViewport viewport{0.0f, 0.0f, float(tw), float(th), 0.0f, 1.0f};
+    VkRect2D scissor{{0, 0}, {tw, th}};
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudLayerPipeline);
@@ -1264,6 +1293,106 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered)
     w[4].pBufferInfo = &lightsInfo;
     vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudLayerLayout, 0, 6, w);
     vkCmdDraw(cmd, 3, 1, 0, 0);
+}
+
+// RVK_CloudLayer reused over frames: this frame marches one half-size pixel of each 2x2 (taking turns over four
+// frames) into the quarter-size target; cloud_resolve.frag rebuilds the half-size clouds from them and last frame's,
+// turned with the camera. Last frame's are dropped when there were none (a frame without clouds, a resize) or the
+// eye jumped (a teleport, a zone). Returns the half-size clouds (premultiplied).
+Texture* Device::ReusedCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float eye[3])
+{
+    Frame& f = m_frames[m_frameIndex];
+    const uint32_t hw = (m_scene->m_width + 1) / 2, hh = (m_scene->m_height + 1) / 2;
+    const uint32_t qw = (hw + 1) / 2, qh = (hh + 1) / 2;
+    auto ensure = [&](Texture*& t, uint32_t w, uint32_t h) {
+        if (t && t->m_width == w && t->m_height == h)
+            return;
+        if (t) DestroyTexture(t);
+        t = CreateImage(w, h, Format::RGBA16F, 1, true);
+        m_cloudHistoryValid = false;
+    };
+    ensure(m_cloudQuarter, qw, qh);
+    ensure(m_cloudHistory[0], hw, hh);
+    ensure(m_cloudHistory[1], hw, hh);
+    if (!m_cloudQuarter || !m_cloudHistory[0] || !m_cloudHistory[1] || !m_cloudResolvePipeline)
+        return m_cloudHalf;
+    const float jump = std::sqrt((eye[0] - m_cloudHistoryEye[0]) * (eye[0] - m_cloudHistoryEye[0]) +
+                                 (eye[1] - m_cloudHistoryEye[1]) * (eye[1] - m_cloudHistoryEye[1]) +
+                                 (eye[2] - m_cloudHistoryEye[2]) * (eye[2] - m_cloudHistoryEye[2]));
+    const bool valid = m_cloudHistoryValid && m_cloudHistoryFrame + 1 == m_frameNumber && jump < 100.0f;
+    // This frame's pixel of each 2x2 (all four over four frames, diagonals apart).
+    static const float kOrder[4][2] = {{0, 0}, {1, 1}, {1, 0}, {0, 1}};
+    const float* o = kOrder[m_frameNumber % 4];
+    const float sub[4] = {o[0], o[1], 2.0f, 0.0f};
+    auto begin = [&](Texture* t, uint32_t w, uint32_t h) {
+        Transition(cmd, t, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        color.imageView = t->m_view;
+        color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+        ri.renderArea = {{0, 0}, {w, h}};
+        ri.layerCount = 1;
+        ri.colorAttachmentCount = 1;
+        ri.pColorAttachments = &color;
+        vkCmdBeginRendering(cmd, &ri);
+    };
+    begin(m_cloudQuarter, qw, qh);
+    MarchCloudLayer(cmd, skipCovered, sub);
+    vkCmdEndRendering(cmd);
+    Transition(cmd, m_cloudQuarter, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    // The rebuild.
+    const d3d::Matrix& view = m_aoProjValid ? m_aoView : m_view;
+    const d3d::Matrix& proj = m_aoProjValid ? m_aoProj : m_proj;
+    const d3d::Matrix rotation = RotationViewProj(view, proj);
+    ResolveFrame rf{};
+    if (!InvertMatrix(rotation, &rf.invViewProj))
+        return m_cloudHalf;
+    rf.prevViewProj = m_cloudPrevRotation;
+    rf.size[0] = float(hw);
+    rf.size[1] = float(hh);
+    rf.size[2] = float(qw);
+    rf.size[3] = float(qh);
+    rf.sub[0] = o[0];
+    rf.sub[1] = o[1];
+    rf.sub[2] = valid ? 1.0f : 0.0f;
+    rf.sub[3] = 0.4f;
+    const uint32_t cur = m_cloudHistoryIndex ^ 1u, prev = m_cloudHistoryIndex;
+    void* cpu = nullptr;
+    const VkDeviceSize offset = Allocate(sizeof(ResolveFrame), 256, &cpu);
+    std::memcpy(cpu, &rf, sizeof(rf));
+    begin(m_cloudHistory[cur], hw, hh);
+    VkViewport viewport{0.0f, 0.0f, float(hw), float(hh), 0.0f, 1.0f};
+    VkRect2D scissor{{0, 0}, {hw, hh}};
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudResolvePipeline);
+    VkDescriptorBufferInfo blockInfo{f.ring, offset, sizeof(ResolveFrame)};
+    VkDescriptorImageInfo quarterInfo{m_cloudClampSampler, m_cloudQuarter->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    // (Last frame's only when it holds clouds - a target never drawn into has no layout to read.)
+    VkDescriptorImageInfo historyInfo{m_cloudClampSampler, valid ? m_cloudHistory[prev]->m_view : m_blackTexture->m_view,
+                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet w[3] = {};
+    for (uint32_t i = 0; i < 3; ++i) {
+        w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[i].dstBinding = i;
+        w[i].descriptorCount = 1;
+        w[i].descriptorType = i == 0 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    }
+    w[0].pBufferInfo = &blockInfo;
+    w[1].pImageInfo = &quarterInfo;
+    w[2].pImageInfo = &historyInfo;
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudResolveLayout, 0, 3, w);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRendering(cmd);
+    Transition(cmd, m_cloudHistory[cur], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    m_cloudPrevRotation = rotation;
+    m_cloudHistoryIndex = cur;
+    m_cloudHistoryValid = true;
+    m_cloudHistoryFrame = m_frameNumber;
+    std::memcpy(m_cloudHistoryEye, eye, sizeof(m_cloudHistoryEye));
+    return m_cloudHistory[cur];
 }
 
 VkImageView Device::CloudShadowView() const
