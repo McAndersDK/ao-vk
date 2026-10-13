@@ -149,14 +149,16 @@ bool Device::CreateHdrResources(std::string* error)
         !setLayout(4, &m_bloomSetLayout) || !pipelineLayout(m_bloomSetLayout, &m_bloomLayout))
         return false;
     {
-        // Volumetric light: depth, the sun shadow cascades, the frame lights (binding 4, as in the scene shaders).
-        VkDescriptorSetLayoutBinding b[3] = {
+        // Volumetric light: depth, the sun shadow cascades, the clouds' shadow map (clouds.cpp), the frame lights
+        // (binding 4, as in the scene shaders).
+        VkDescriptorSetLayoutBinding b[4] = {
             {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
             {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
             {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
         VkDescriptorSetLayoutCreateInfo sl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         sl.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-        sl.bindingCount = 3;
+        sl.bindingCount = 4;
         sl.pBindings = b;
         if (!Check(vkCreateDescriptorSetLayout(m_device, &sl, nullptr, &m_volumeSetLayout), "volume set layout", error) ||
             !pipelineLayout(m_volumeSetLayout, &m_volumeLayout))
@@ -848,12 +850,17 @@ bool Device::RenderVolume(VkCommandBuffer cmd)
     VkDescriptorImageInfo depth{m_pointSampler, m_depthView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkDescriptorImageInfo shadow{m_shadowSampler, m_shadowView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkDescriptorBufferInfo lights{frame.post, 0, sizeof(FrameLights)};
-    VkWriteDescriptorSet wr[3] = {};
+    // (No clouds' shadow map: any image - the frame lights say there is none.)
+    const bool cloudMap = m_cloudShadowMap && m_cloudShadowMap->m_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkDescriptorImageInfo clouds{m_linearSampler, cloudMap ? m_cloudShadowMap->m_view : m_blackTexture->m_view,
+                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet wr[4] = {};
     for (auto& x : wr) { x.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; x.descriptorCount = 1; }
     wr[0].dstBinding = 0; wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[0].pImageInfo = &depth;
     wr[1].dstBinding = 1; wr[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[1].pImageInfo = &shadow;
     wr[2].dstBinding = 4; wr[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; wr[2].pBufferInfo = &lights;
-    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_volumeLayout, 0, 3, wr);
+    wr[3].dstBinding = 2; wr[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[3].pImageInfo = &clouds;
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_volumeLayout, 0, 4, wr);
     vkCmdPushConstants(cmd, m_volumeLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRendering(cmd);

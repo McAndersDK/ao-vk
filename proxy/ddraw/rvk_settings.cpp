@@ -150,6 +150,7 @@ Setting g_settings[] = {
     {"RVK_CloudBright", "Clouds: how light",                                       "Experimental",     Float, 0.25f, 3, 0.05f, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudDetail", "Clouds: billows and wisps (0 smooth)",                    "Experimental",     Float, 0, 2, 0.1f, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudHalf",   "Clouds: drawn at half resolution (much cheaper)",         "Experimental",     Bool,  0, 1, 1, 1, nullptr, 0, "RVK_CloudsOn"},
+    {"RVK_CloudShadow", "Clouds: their shadows on the ground (0 none)",            "Experimental",     Float, 0, 1, 0.05f, 0.6f, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudSteps",  "Clouds: quality (steps through a cloud)",                 "Experimental",     Int,   8, 96, 4, 32, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_SmokeGame",  "Smoke: the game's smoke sprites too",                     "Experimental",     Bool,  0, 1, 1, 0, nullptr, 0, "RVK_SmokeOn"},
 
@@ -500,6 +501,7 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
         c.detail = V("RVK_CloudDetail");
         c.steps = uint32_t(V("RVK_CloudSteps"));
         c.half = V("RVK_CloudHalf") != 0.0f;
+        c.shadow = V("RVK_CloudShadow");
         d->SetCloudParams(c);
     }
     else if (std::strncmp(n, "RVK_Vol", 7) == 0) d->SetVolume(V("RVK_Volume"), V("RVK_VolHaze"), V("RVK_VolShafts"));

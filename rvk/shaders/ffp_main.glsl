@@ -221,9 +221,29 @@ float GrassShadowVisibility(vec3 posW, vec3 n, float nl)
 // under a field, a character's legs in it: in full, a sunlit field would be far darker than before it cast).
 const float kGrassShadowStrength = 0.45;
 float SunVisibilityCasters(vec3 posW, vec3 n);
+
+// The clouds' shadow (rvk clouds.cpp): the sunlight through the cloud layer above the point - its shadow map, made in
+// the layer's plane, read where the sun's ray through the point crosses it. 1 = no cloud.
+float CloudShadow(vec3 posW)
+{
+    uint slot = floatBitsToUint(FL.clouds.w);
+    vec3 L = -FL.sunDir.xyz;
+    if ((slot & 0xFFFFFu) == 0u || L.y < 0.05)
+        return 1.0;
+    vec2 at = posW.xz + (FL.clouds2.x - posW.y) * L.xz / L.y;
+    vec2 uv = (at - FL.clouds.xy) * FL.clouds.z;
+    vec2 edge = min(uv, 1.0 - uv);
+    float inside = smoothstep(0.0, 0.08, min(edge.x, edge.y));
+    if (inside <= 0.0)
+        return 1.0;
+    uint img = (slot & 0xFFFFFu) - 1u, smp = (slot >> 20) & 0xFFu;
+    float t = textureLod(sampler2D(texImages[img], bindlessSamplers[smp]), uv, 0.0).r;
+    return mix(1.0, t, FL.clouds2.y * inside);
+}
+
 float SunVisibility(vec3 posW, vec3 n)
 {
-    float v = SunVisibilityCasters(posW, n);
+    float v = SunVisibilityCasters(posW, n) * CloudShadow(posW);
     if (v > 0.0 && (C.flags.x & F_SHADOWCHEAP) == 0u) {
         bool hasN = dot(n, n) > 0.0;
         vec3 nn = hasN ? normalize(n) : n;

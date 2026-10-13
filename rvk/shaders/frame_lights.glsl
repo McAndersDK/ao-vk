@@ -29,5 +29,8 @@ layout(set = 0, binding = 4, std140) uniform FrameLights {
     vec4 pusherBorn[4];         // ... and seconds since each point was made (4 a vector)
     vec4 leaves;                // leaves (leaves.cpp): branch sway, sprig flutter, gusts, canopy core cut
     vec4 leafView;              // ... their distance (none beyond; thinning out from half of it), on, falling leaves
+    vec4 clouds;                // the clouds' shadow map (rvk clouds.cpp): corner x, z, 1 / size, its bindless image + 1 |
+                                // sampler << 20 (as the float's bits; 0 = none)
+    vec4 clouds2;               // ... the cloud layer's height (world y), the shadow's strength
     Light lights[64];
 } FL;

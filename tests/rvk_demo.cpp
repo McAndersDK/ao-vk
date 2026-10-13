@@ -1456,6 +1456,68 @@ float g_rainForce = 0.0f;         // --rain F: rain this hard (0..1; RVK_RainFor
 bool g_waterLamp = false;         // --water-lamp: a warm point light by the camera, as a character's lamp (with
                                   // --light-override, so the frame's lights carry it)
 
+// --clouds: the puffs' textures (two shapes) and their sheet: 10 x 10 bulging towards the viewer (+z here, turned to
+// face the camera), 2 x 1 across.
+template <typename D>
+void MakeDemoPuffs(D& dev, Texture** puffTex, std::vector<VtxMesh>& puffMesh, std::vector<uint16_t>& puffIdx)
+{
+    for (int k = 0; k < 2; ++k) {
+        auto px = CloudPuff(256, 7u + uint32_t(k) * 31u);
+        puffTex[k] = dev.CreateTexture(256, 256, px.data());
+    }
+    for (int j = 0; j < 10; ++j)
+        for (int i = 0; i < 10; ++i) {
+            const float u = i / 9.0f, v = j / 9.0f, x = u * 2 - 1, y = v * 2 - 1;
+            puffMesh.push_back({x, y * 0.5f, -0.25f * (1 - x * x) * (1 - y * y), 0, 0, -1, 0xFFFFFFFF, u, 1 - v});
+        }
+    for (int j = 0; j < 9; ++j)
+        for (int i = 0; i < 9; ++i) {
+            const uint16_t a = uint16_t(j * 10 + i);
+            puffIdx.insert(puffIdx.end(), {a, uint16_t(a + 1), uint16_t(a + 11), a, uint16_t(a + 11), uint16_t(a + 10)});
+        }
+}
+
+// --clouds: the sky's puffs (as the game: drawn first, the sky, then the scene), each a sheet turned to the camera,
+// around `yaw` (the view's direction); `scale` shrinks the sky for small scenes.
+template <typename D>
+void DrawDemoPuffs(D& dev, Vector eye, float yaw, Texture* const* puffTex, const std::vector<VtxMesh>& puffMesh,
+                   const std::vector<uint16_t>& puffIdx, float scale)
+{
+    dev.SetDrawVisual(uint32_t(VisualKind::Sky), "VisualSingleCloud_t");
+    dev.SetRenderState(RS_LIGHTING, 1);
+    dev.SetRenderState(RS_ALPHABLENDENABLE, 1);
+    dev.SetRenderState(RS_SRCBLEND, BLEND_SRCALPHA);
+    dev.SetRenderState(RS_DESTBLEND, BLEND_INVSRCALPHA);
+    dev.SetRenderState(RS_ZWRITEENABLE, 0);
+    dev.SetTextureStageState(0, TSS_COLOROP, TOP_MODULATE);
+    dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_MODULATE);
+    dev.SetTextureStageState(0, TSS_ALPHAARG2, TA_DIFFUSE);
+    Material cloudMat{{1, 1, 1, 1}, {1, 1, 1, 1}, {0, 0, 0, 0}, {0.72f, 0.72f, 0.75f, 1}, 0.0f};
+    dev.SetMaterial(cloudMat);
+    struct Place { float yaw, dist, height, width; };
+    const Place places[] = {{-0.55f, 520, 150, 150}, {-0.2f, 700, 210, 220}, {0.12f, 450, 120, 120},
+                            {0.45f, 620, 180, 190}, {0.75f, 400, 140, 110}, {-0.85f, 380, 110, 100},
+                            {0.3f, 900, 260, 260}, {-0.4f, 950, 300, 240}, {0.05f, 90, 200, 160},
+                            {-0.3f, 160, 230, 150}};
+    int k = 0;
+    for (const Place& pl : places) {
+        const float a = yaw + pl.yaw;
+        const float px = eye.x + std::cos(a) * pl.dist * scale, pz = eye.z + std::sin(a) * pl.dist * scale;
+        const float face = std::atan2(eye.x - px, eye.z - pz);   // its -z towards the camera
+        const float w = pl.width * scale;
+        Matrix m = Mul(Mul(Matrix{{{w, 0, 0, 0}, {0, w, 0, 0}, {0, 0, w, 0}, {0, 0, 0, 1}}}, RotateY(face + kPi)),
+                       Translate(px, eye.y + pl.height * scale, pz));
+        dev.SetTransform(World, m);
+        dev.SetTexture(0, puffTex[k++ & 1]);
+        dev.DrawIndexedPrimitive(TriangleList, kFvfMesh, puffMesh.data(), uint32_t(puffMesh.size()), puffIdx.data(),
+                                 uint32_t(puffIdx.size()));
+    }
+    dev.SetTransform(World, Identity());
+    dev.SetRenderState(RS_ZWRITEENABLE, 1);
+    dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG1);
+    dev.SetDrawVisual(0, nullptr);
+}
+
 template <typename D>
 void RunWaterScene(D& dev, int frames, const std::string& shot)
 {
@@ -1482,23 +1544,8 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
     Texture* puffTex[2] = {nullptr, nullptr};
     std::vector<VtxMesh> puffMesh;
     std::vector<uint16_t> puffIdx;
-    if (g_clouds) {
-        for (int k = 0; k < 2; ++k) {
-            auto px = CloudPuff(256, 7u + uint32_t(k) * 31u);
-            puffTex[k] = dev.CreateTexture(256, 256, px.data());
-        }
-        // The puff: a 10 x 10 sheet bulging towards the viewer (+z here, turned to face the camera), 2 x 1 across.
-        for (int j = 0; j < 10; ++j)
-            for (int i = 0; i < 10; ++i) {
-                const float u = i / 9.0f, v = j / 9.0f, x = u * 2 - 1, y = v * 2 - 1;
-                puffMesh.push_back({x, y * 0.5f, -0.25f * (1 - x * x) * (1 - y * y), 0, 0, -1, 0xFFFFFFFF, u, 1 - v});
-            }
-        for (int j = 0; j < 9; ++j)
-            for (int i = 0; i < 9; ++i) {
-                const uint16_t a = uint16_t(j * 10 + i);
-                puffIdx.insert(puffIdx.end(), {a, uint16_t(a + 1), uint16_t(a + 11), a, uint16_t(a + 11), uint16_t(a + 10)});
-            }
-    }
+    if (g_clouds)
+        MakeDemoPuffs(dev, puffTex, puffMesh, puffIdx);
     struct VtxTerrain { float x, y, z, nx, ny, nz, u0, v0, u1, v1; };
     const uint32_t kFvfTerrain = FVF_XYZ | FVF_NORMAL | (2 << 8);
     auto height = [&](float x, float z) {
@@ -1701,40 +1748,9 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
         dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG1);
         dev.SetTextureStageState(0, TSS_ALPHAARG1, TA_TEXTURE);
         // --clouds: the sky's puffs first (as the game: the sky, then the scene), each a sheet turned to the camera.
-        if (g_clouds) {
-            dev.SetDrawVisual(uint32_t(VisualKind::Sky), "VisualSingleCloud_t");
-            dev.SetRenderState(RS_LIGHTING, 1);
-            dev.SetRenderState(RS_ALPHABLENDENABLE, 1);
-            dev.SetRenderState(RS_SRCBLEND, BLEND_SRCALPHA);
-            dev.SetRenderState(RS_DESTBLEND, BLEND_INVSRCALPHA);
-            dev.SetRenderState(RS_ZWRITEENABLE, 0);
-            dev.SetTextureStageState(0, TSS_COLOROP, TOP_MODULATE);
-            dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_MODULATE);
-            dev.SetTextureStageState(0, TSS_ALPHAARG2, TA_DIFFUSE);
-            Material cloudMat{{1, 1, 1, 1}, {1, 1, 1, 1}, {0, 0, 0, 0}, {0.72f, 0.72f, 0.75f, 1}, 0.0f};
-            dev.SetMaterial(cloudMat);
-            struct Place { float yaw, dist, height, width; };
-            const Place places[] = {{-0.55f, 520, 150, 150}, {-0.2f, 700, 210, 220}, {0.12f, 450, 120, 120},
-                                    {0.45f, 620, 180, 190}, {0.75f, 400, 140, 110}, {-0.85f, 380, 110, 100},
-                                    {0.3f, 900, 260, 260}, {-0.4f, 950, 300, 240}};
-            int k = 0;
-            for (const Place& pl : places) {
-                const float a = kPi * 0.5f + g_waterYaw + pl.yaw;
-                const float px = eye.x + std::cos(a) * pl.dist, pz = eye.z + std::sin(a) * pl.dist;
-                const float face = std::atan2(eye.x - px, eye.z - pz);   // its -z towards the camera
-                Matrix m = Mul(Mul(Matrix{{{pl.width, 0, 0, 0}, {0, pl.width, 0, 0}, {0, 0, pl.width, 0}, {0, 0, 0, 1}}},
-                                   RotateY(face + kPi)), Translate(px, eye.y + pl.height, pz));
-                dev.SetTransform(World, m);
-                dev.SetTexture(0, puffTex[k++ & 1]);
-                dev.DrawIndexedPrimitive(TriangleList, kFvfMesh, puffMesh.data(), uint32_t(puffMesh.size()),
-                                         puffIdx.data(), uint32_t(puffIdx.size()));
-            }
-            dev.SetTransform(World, Identity());
-            dev.SetMaterial(mat);
-            dev.SetRenderState(RS_ZWRITEENABLE, 1);
-            dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG1);
-            dev.SetDrawVisual(0, nullptr);
-        }
+        if (g_clouds)
+            DrawDemoPuffs(dev, eye, kPi * 0.5f + g_waterYaw, puffTex, puffMesh, puffIdx, 1.0f);
+        dev.SetMaterial(mat);
         // The ground: base pass, then the light pass (lightmap + ambient, multiplied).
         dev.SetRenderState(RS_LIGHTING, 0);
         dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
@@ -1916,6 +1932,11 @@ void RunShadowTest(D& dev, int frames, const std::string& shot, int cacheTest, i
     Texture* labelTex = dev.CreateTexture(64, 16, labelPixels.data());
     Texture* lightmap = dev.CreateTexture(8, 8, lightmapPixels.data());
     Texture* blobTex = dev.CreateTexture(8, 8, blobPixels.data());
+    Texture* puffTex[2] = {nullptr, nullptr};
+    std::vector<VtxMesh> puffMesh;
+    std::vector<uint16_t> puffIdx;
+    if (g_clouds)
+        MakeDemoPuffs(dev, puffTex, puffMesh, puffIdx);
     for (int frame = 0; frame < frames; ++frame) {
         if (g_grassFieldOn && frame == 5)
             dev.SetGrassField(true, g_grassFieldDist, 7.0f, 0.5f, g_grassFieldTex);   // a change rebuilds the tiles
@@ -1964,6 +1985,12 @@ void RunShadowTest(D& dev, int frames, const std::string& shot, int cacheTest, i
         sun.direction = {0.55f, -0.7f, 0.45f};
         dev.SetLight(0, sun);
         dev.LightEnable(0, true);
+        if (g_clouds) {                          // (--clouds: the sky's puffs, the sky shrunk to the scene)
+            DrawDemoPuffs(dev, Vector{0, 9, -14}, kPi * 0.5f, puffTex, puffMesh, puffIdx, 0.03f);
+            dev.SetMaterial(mat);
+            dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
+            dev.SetTextureStageState(0, TSS_COLOROP, TOP_MODULATE);
+        }
         if (g_walkerLight && g_grassWalk >= -10.0f) {   // the character's own light, as the game's (range ~6)
             Light own{};
             own.type = LIGHT_POINT;

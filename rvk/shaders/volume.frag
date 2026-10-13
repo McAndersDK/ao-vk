@@ -7,6 +7,7 @@
 #include "frame_lights.glsl"
 layout(set = 0, binding = 0) uniform sampler2D depthTex;
 layout(set = 0, binding = 1) uniform sampler2DArrayShadow shadowMap;
+layout(set = 0, binding = 2) uniform sampler2D cloudShadow;   // the clouds' (rvk clouds.cpp; FL.clouds: where, if any)
 layout(push_constant) uniform Push {
     mat4 invViewProj;   // the world camera's clip -> world (raw D3DMATRIX memory)
     vec4 eye;           // camera position; w = longest ray (world units)
@@ -30,6 +31,21 @@ float SunVisible(float t)
         return texture(shadowMap, vec4(ndc.xy * 0.5 + 0.5, float(c), ndc.z));
     }
     return 1.0;
+}
+
+// The sunlight through the clouds at a point (1: none in the way): their shadow map, in the cloud layer's plane, where
+// the sun's ray through the point crosses it - light shafts through the gaps between them.
+float CloudLight(vec3 q)
+{
+    vec3 L = -FL.sunDir.xyz;
+    if (floatBitsToUint(FL.clouds.w) == 0u || L.y < 0.05 || q.y >= FL.clouds2.x)
+        return 1.0;
+    vec2 uv = (q.xz + (FL.clouds2.x - q.y) * L.xz / L.y - FL.clouds.xy) * FL.clouds.z;
+    vec2 edge = min(uv, 1.0 - uv);
+    float inside = smoothstep(0.0, 0.08, min(edge.x, edge.y));
+    if (inside <= 0.0)
+        return 1.0;
+    return mix(1.0, textureLod(cloudShadow, uv, 0.0).r, FL.clouds2.y * inside);
 }
 
 void main()
@@ -67,7 +83,7 @@ void main()
             // the sky leave it soon (the sky isn't washed out), air near the ground - where shadows fall - keeps it.
             float density = exp(-max(q.y - (P.eye.y - 2.0), 0.0) / kHazeHeight);
             float w = (2.0 * u) * exp(-kExtinction * t) * density;
-            lit += SunVisible(t) * w;
+            lit += SunVisible(t) * CloudLight(q) * w;
             open += w;
         }
         // Shafts are contrast: a ray partly in shadow is darkened by a power of its lit fraction, a fully lit one

@@ -113,6 +113,9 @@ struct FrameLights {               // binding 4: per-frame data (constants.glsl 
     float pusherBorn[kPushers];    // seconds since each point was made (a character walking on makes new ones)
     float leaves[4];               // leaves (leaves.cpp): branch sway, sprig flutter, gusts, canopy core cut
     float leafView[4];             // ... their distance (none beyond; thinning out from half of it), on, falling leaves
+    float clouds[4];               // the clouds' shadow map (clouds.cpp): its corner x, z (world), 1 / its size, its
+                                   // bindless image + 1 | sampler << 20 (as the float's bits; 0 = none)
+    float clouds2[4];              // ... the cloud layer's height (world y), the shadow's strength
     GpuLight lights[kFrameLights];
 };
 

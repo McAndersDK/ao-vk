@@ -327,6 +327,21 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
             env = (image + 1) | sampler << 20 | uint32_t(std::lround(std::clamp(m_pbr.probe, 0.0f, 1.0f) * 15.0f)) << 28;
     }
     std::memcpy(&fl->pbr2[3], &env, 4);
+    // The clouds' shadow map (clouds.cpp), when made this frame or the last.
+    uint32_t clouds = 0;
+    std::memset(fl->clouds, 0, sizeof(fl->clouds) + sizeof(fl->clouds2));
+    if (m_cloudShadowMap && m_cloudShadowFrame + 1 >= m_frameNumber && m_cloudParams.enable && m_cloudParams.shadow > 0.0f) {
+        const uint32_t image = BindlessImage(m_cloudShadowMap), sampler = FixedSamplerSlot(2, m_linearSampler);
+        if (image != ~0u && image < (1u << 20) - 1 && sampler < 256) {
+            clouds = (image + 1) | sampler << 20;
+            fl->clouds[0] = m_cloudShadowArea[0];
+            fl->clouds[1] = m_cloudShadowArea[1];
+            fl->clouds[2] = 1.0f / m_cloudShadowArea[2];
+            fl->clouds2[0] = m_cloudShadowArea[3];
+            fl->clouds2[1] = std::clamp(m_cloudParams.shadow, 0.0f, 1.0f);
+        }
+    }
+    std::memcpy(&fl->clouds[3], &clouds, 4);
     fl->prevView = m_prevView;                   // the world camera last frame (motion vectors)
     fl->prevProj = m_prevProj;
     m_frameLightIndices.clear();
