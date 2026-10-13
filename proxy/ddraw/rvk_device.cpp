@@ -708,9 +708,14 @@ void NoteVisual(rvk::ThreadedDevice* dev)
     // Whatever is drawn in render list 0 is the sky: its layers (clouds) and the far scenery that hangs in it -
     // placed around the camera, not where it appears, so it neither casts nor receives the sun's shadows.
     using Kind = rnative::scene::Kind;
-    if (visual && list == 0 && info.kind != Kind::Character && info.kind != Kind::CharacterPart)
+    // (Named by the class chain: the sky's meshes are generic, its objects known by what holds them - rvk's clouds
+    // take the game's cloud layers and puffs by it.)
+    const char* name = info.className;
+    if (visual && list == 0 && info.kind != Kind::Character && info.kind != Kind::CharacterPart) {
         info.kind = Kind::Sky;
-    dev->SetDrawVisual(uint32_t(info.kind), info.className, uint32_t(reinterpret_cast<uintptr_t>(info.owner)),
+        name = rnative::scene::ClassChain(visual);
+    }
+    dev->SetDrawVisual(uint32_t(info.kind), name, uint32_t(reinterpret_cast<uintptr_t>(info.owner)),
                        uint32_t(reinterpret_cast<uintptr_t>(visual)));
 }
 

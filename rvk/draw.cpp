@@ -1371,7 +1371,9 @@ void Device::SetDrawVisual(uint32_t kind, const char* className, uint32_t owner,
 {
     m_drawVisualKind = kind;
     m_drawVisualName = className ? className : "";
-    m_drawIsCloudPuff = className && std::strcmp(className, "VisualSingleCloud_t") == 0;
+    // (A sky visual is named by its class chain, "VisualSingleCloud_t<...".)
+    m_drawIsCloudPuff = className && std::strncmp(className, "VisualSingleCloud_t", 19) == 0 &&
+                        (className[19] == 0 || className[19] == '<');
     m_drawOwner = owner;
     m_drawVisual = visual;
 }

@@ -516,7 +516,11 @@ void Device::DrawClouds(VkCommandBuffer cmd)
         cf.high[3] = float(std::clamp(m_cloudParams.steps, 8u, 96u));
         std::memcpy(cf.uvU, p.uvU, sizeof(cf.uvU));
         std::memcpy(cf.uvV, p.uvV, sizeof(cf.uvV));
-        for (int k = 0; k < 3; ++k) cf.colour[k] = p.colour[k] * m_cloudParams.brightness;
+        // Rain (rvk rain.cpp: how hard, eased): the clouds heavier - darker, greyer, denser.
+        const float storm = std::clamp(m_rain, 0.0f, 1.0f);
+        const float grey = (p.colour[0] + p.colour[1] + p.colour[2]) / 3.0f;
+        for (int k = 0; k < 3; ++k)
+            cf.colour[k] = (p.colour[k] + (grey - p.colour[k]) * 0.6f * storm) * (1.0f - 0.5f * storm) * m_cloudParams.brightness;
         cf.colour[3] = std::clamp(p.colour[3], 0.0f, 1.0f);
         // The sun into mesh space (a direction: the inverse's 3x3; normalised in the shader).
         for (int j = 0; j < 3; ++j)
@@ -525,7 +529,7 @@ void Device::DrawClouds(VkCommandBuffer cmd)
         cf.sunColour[0] = m_frameSunColor[0];
         cf.sunColour[1] = m_frameSunColor[1];
         cf.sunColour[2] = m_frameSunColor[2];
-        cf.sunColour[3] = m_cloudParams.density;
+        cf.sunColour[3] = m_cloudParams.density * (1.0f + storm);
         if (m_terrainAmbient[3] > 0.5f)
             std::memcpy(cf.ambient, m_terrainAmbient, 12);
         else
