@@ -964,6 +964,7 @@ private:
     float m_moonColour[3] = {};                  // its light now (0: none)
     float m_moonFade = 0.0f;                     // 0..1: how much the moon lights (night x its height x the setting)
     float m_shadowLightDir[3] = {0.0f, -1.0f, 0.0f};   // what the shadow map is drawn from: the sun, or the moon
+    float m_trueSunDir[3] = {0.0f, -1.0f, 0.0f};   // the sun's light's way, below the horizon too (last seen)
     bool m_shadowIsMoon = false;                 // ... the moon (FrameLights moon.w)
     bool m_drawIsSkyMesh = false;                // the current visual is a mesh in the sky (a moon?)
     void NoteSkyMesh(uint32_t fvf, const void* vertices, uint32_t vertexCount);

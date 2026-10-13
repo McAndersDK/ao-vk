@@ -1149,6 +1149,10 @@ void Device::DrawShadowItem(VkCommandBuffer cmd, ShadowBind& bind, ShadowItem& i
 void Device::RenderShadowMap(VkCommandBuffer cmd)
 {
     bool haveSun = m_sunLuminance > 0.0f && m_sunDir[1] < -0.05f;   // below the horizon / grazing: none
+    // The sun's true direction (FrameLights sunTrue), kept: frame lights written before this frame's sun is seen
+    // read it (the cloud layer's: with the shadow light's direction - the moon's, above the horizon - it took night for
+    // day and its clouds went dark).
+    if (m_sunLuminance > 0.0f) std::memcpy(m_trueSunDir, m_sunDir, sizeof(m_trueSunDir));
     // With the sun down, the moon's light (night.cpp) - the map drawn from it.
     UpdateMoon();
     const bool moon = !haveSun && MoonOn();

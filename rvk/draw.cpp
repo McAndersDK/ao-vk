@@ -316,9 +316,10 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
     for (int i = 0; i < 3; ++i) fl->moon[i] = m_moonColour[i];
     fl->moon[3] = m_shadowValid && m_shadowIsMoon ? 1.0f : 0.0f;
     {
-        float l = std::sqrt(m_sunDir[0] * m_sunDir[0] + m_sunDir[1] * m_sunDir[1] + m_sunDir[2] * m_sunDir[2]);
-        const bool known = m_sunLuminance > 0.0f && l > 0.0f;
-        for (int i = 0; i < 3; ++i) fl->sunTrue[i] = known ? -m_sunDir[i] / l : -m_frameSunDir[i];
+        // (This frame's sun once seen, else the last frame's - never the shadow light's: by night that's the moon.)
+        const float* d = m_sunLuminance > 0.0f ? m_sunDir : m_trueSunDir;
+        const float l = std::max(std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]), 1e-6f);
+        for (int i = 0; i < 3; ++i) fl->sunTrue[i] = -d[i] / l;
         fl->sunTrue[3] = night;
     }
     fl->pbr[0] = m_pbr.specular;
