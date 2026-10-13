@@ -29,6 +29,8 @@ layout(location = 4) out vec4 outAlbedo;
 
 const float kPi = 3.14159265;
 
+const float kEdgeFade = 0.2;    // the band along the box's walls and top the smoke thins out over (box units)
+
 float Wisps(vec3 q) { return texture(wispNoise, q * 0.125).r; }
 
 // The wisps at a point: noise carried along by the flow there, for one cycle, then started again - two cycles half a
@@ -117,6 +119,16 @@ void main()
         float dens = now.x;
         if (dens < 1e-4)
             continue;
+        // Near the box's walls and top (where the simulation lets smoke out - a character carries it there) it thins
+        // out over the outer fifth, raggedly, the edge drifting with time: no straight cut along the box.
+        vec2 side = min(uvw.xz, 1.0 - uvw.xz);
+        float edge = min(min(side.x, side.y), 1.0 - uvw.y);   // (the floor is the ground: none there)
+        if (edge < kEdgeFade) {
+            float rag = texture(wispNoise, p * 0.09 + vec3(0.0, -0.03, 0.0) * FL.wind.z).r;
+            dens *= smoothstep(0.0, kEdgeFade, edge - (rag - 0.5) * kEdgeFade * 1.2);
+            if (dens < 1e-4)
+                continue;
+        }
         // Wisps: thin smoke frays right through, thick keeps more of its body (the average kept: 2 x the noise's 0.5).
         float fray = S.detail.x * mix(0.55, 1.0, 1.0 - smoothstep(0.0, 0.6, dens));
         if (fray > 0.0)
