@@ -1431,6 +1431,8 @@ std::vector<std::string> g_meshPieces;   // --mesh-piece FILE: a piece dumped fr
 bool g_clouds = false;            // --clouds: cloud puffs in the sky, as the game's (VisualSingleCloud_t)
 bool g_cloudsGame = false;
 float g_cloudCover = 0.0f;        // --cloud-cover X: RVK_CloudCover
+float g_sunDir[3] = {}, g_sunColour[3] = {};   // --sun-dir X Y Z, --sun-colour R G B: the water scenes' sun
+bool g_sunDirSet = false, g_sunColourSet = false;
 float g_cloudThick = 1.0f;        // --cloud-thick X: RVK_CloudThick
 bool g_cloudLayer = true;         // --cloud-puffs: RVK_CloudLayer off (a volume per puff)
 bool g_cloudsHalf = true;         // --clouds-full: RVK_CloudHalf off        // --clouds-game: ... drawn as the game draws them (RVK_CloudsOn off)
@@ -1736,6 +1738,8 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
         sun.type = LIGHT_DIRECTIONAL;
         sun.diffuse = g_waterNight ? Color{0.1f, 0.12f, 0.2f, 1} : Color{1.0f, 0.93f, 0.8f, 1};
         sun.direction = {0.35f, -0.55f, 0.75f};             // the sun ahead of the camera, low: a glint on the water
+        if (g_sunDirSet) sun.direction = {g_sunDir[0], g_sunDir[1], g_sunDir[2]};
+        if (g_sunColourSet) sun.diffuse = {g_sunColour[0], g_sunColour[1], g_sunColour[2], 1};
         dev.SetLight(0, sun);
         dev.LightEnable(0, true);
         if (g_waterLamp) {
@@ -2992,6 +2996,8 @@ int main(int argc, char** argv)
         else if (a == "--clouds-game") { g_clouds = g_cloudsGame = true; hdr = true; }
         else if (a == "--clouds-full") g_cloudsHalf = false;
         else if (a == "--cloud-puffs") g_cloudLayer = false;
+        else if (a == "--sun-dir" && i + 3 < argc) { for (float& x : g_sunDir) x = float(std::atof(argv[++i])); g_sunDirSet = true; }
+        else if (a == "--sun-colour" && i + 3 < argc) { for (float& x : g_sunColour) x = float(std::atof(argv[++i])); g_sunColourSet = true; }
         else if (a == "--cloud-cover" && i + 1 < argc) g_cloudCover = float(std::atof(argv[++i]));
         else if (a == "--cloud-thick" && i + 1 < argc) g_cloudThick = float(std::atof(argv[++i]));
         else if (a == "--fixed-clock" && i + 1 < argc) { g_fixedClock = true; Device::SetFixedClock(std::atof(argv[++i]) * 1e-3); }

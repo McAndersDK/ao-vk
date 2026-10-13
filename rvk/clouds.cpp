@@ -1203,9 +1203,9 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered)
     lf.weather[2] = 1.0f / m_cloudWeatherArea[2];
     lf.weather[3] = skipCovered ? 1.0f : 0.0f;
     lf.shape[0] = 1.0f / 4500.0f;                // (4 cells a tile: cloud cells about a kilometre)
-    lf.shape[1] = 1.0f / 700.0f;
-    lf.shape[2] = 0.55f * m_cloudParams.detail;
-    lf.shape[3] = 0.012f * m_cloudParams.density;
+    lf.shape[1] = 1.0f / 260.0f;
+    lf.shape[2] = 0.65f * m_cloudParams.detail;
+    lf.shape[3] = 0.02f * m_cloudParams.density;
     // The wind carries the shapes (and they evolve: up through the noise) - UpdateCloudDrift.
     lf.wind[0] = m_cloudDrift[0];
     lf.wind[1] = m_cloudDrift[2];
@@ -1231,10 +1231,10 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered)
     for (int k = 0; k < 3; ++k) lf.ambient[k] = 0.5f + 0.5f * sky[k] / luma;
     lf.ambient[3] = storm;
     for (int k = 0; k < 3; ++k) lf.haze[k] = fog[3] > 0.5f ? fog[k] : sky[k];
-    lf.haze[3] = 9000.0f;
+    lf.haze[3] = 16000.0f;
     lf.view[0] = float(hw);
     lf.view[1] = float(hh);
-    lf.view[2] = float(std::clamp(m_cloudParams.steps * 2u, 24u, 128u));
+    lf.view[2] = float(std::clamp(m_cloudParams.steps * 3u, 32u, 192u));
     lf.view[3] = 5.0f;
     void* cpu = nullptr;
     const VkDeviceSize offset = Allocate(sizeof(LayerFrame), 256, &cpu);

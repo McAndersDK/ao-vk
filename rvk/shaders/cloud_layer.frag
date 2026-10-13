@@ -75,12 +75,22 @@ float Density(vec3 p, bool detail)
     vec4 n = textureLod(shapeNoise, q, 0.0);
     float fbm = n.g * 0.625 + n.b * 0.25 + n.a * 0.125;
     float body = Remap(n.r, fbm - 1.0, 1.0, 0.0, 1.0) * Profile(h, w.g);
+    // Billows: the body bumped by its own cells three times finer (cauliflower tops rather than smooth blobs) - more
+    // towards the top, where cumulus heap up.
+    if (detail) {
+        float billow = textureLod(shapeNoise, q * 3.1 + 0.17, 0.0).g;
+        body = Remap(body, (1.0 - billow) * mix(0.15, 0.35, clamp(h * 2.0, 0.0, 1.0)), 1.0, 0.0, 1.0);
+    }
     // Coverage eats into the body from its thin parts: little cover, only the cores remain.
     float d = clamp(Remap(body, 1.0 - cover, 1.0, 0.0, 1.0), 0.0, 1.0) * cover;
     if (d <= 0.0 || !detail)
         return d * w.b;
-    vec3 e = textureLod(detailNoise, (p + L.wind.xyz * 1.7) * L.shape.y, 0.0).rgb;
+    // The edges eroded by finer cells, swirled by the body's own noise (wisps curl rather than tile), at two scales.
+    vec3 swirl = (n.gba - 0.5) * 0.35;
+    vec3 dq = (p + L.wind.xyz * 1.7) * L.shape.y + swirl;
+    vec3 e = textureLod(detailNoise, dq, 0.0).rgb;
     float ef = e.r * 0.625 + e.g * 0.25 + e.b * 0.125;
+    ef = mix(ef, textureLod(detailNoise, dq * 2.7 + 0.31, 0.0).r, 0.3);
     ef = mix(ef, 1.0 - ef, clamp(h * 4.0, 0.0, 1.0));   // wispy underneath, billowy above
     d = clamp(Remap(d, ef * L.shape.z, 1.0, 0.0, 1.0), 0.0, 1.0);
     return d * w.b;
@@ -129,8 +139,8 @@ void main()
         outScene = vec4(0.0);
         return;
     }
+    // Steps growing with the distance (short near the eye: the near clouds' detail; long far off), at most L.view.z.
     int steps = int(L.view.z);
-    float dt = (t1 - t0) / float(steps);
     float jitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))) + FL.taa.z);
     vec3 sunL = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
     float sunUp = smoothstep(-0.08, 0.12, sunL.y);
@@ -140,12 +150,16 @@ void main()
     float transmit = 1.0;
     vec3 light = vec3(0.0);
     float depthSum = 0.0, weightSum = 0.0;      // (where the cloud is along the ray: its haze)
-    for (int i = 0; i < steps && transmit > 0.01; ++i) {
-        float t = t0 + (float(i) + jitter) * dt;
+    float minStep = gThick * 0.012, along = (t1 - t0) / float(steps);
+    float t = t0 + jitter * clamp(t0 * 0.012, minStep, along);
+    for (int i = 0; i < steps && transmit > 0.01 && t < t1; ++i) {
+        float dt = clamp(t * 0.012, minStep, max(along, minStep));
         vec3 p = eye + dir * t;
+        t += dt;
         float d = Density(p, true);
         if (d <= 0.001)
             continue;
+        float tHere = t - dt;
         // The sun through the cloud: a few steps towards it, longer each.
         float od = 0.0;
         float ls = gThick * 0.06;
@@ -156,24 +170,28 @@ void main()
             ls *= 1.6;
         }
         od *= sigma;
-        // Several scattering orders (each dimmer, reaching deeper, less forward): light inside thick cloud.
+        // Several scattering orders (each dimmer, reaching deeper, less forward): light inside thick cloud; a strong
+        // forward lobe - the silver edges looking towards the sun.
         float sun = 0.0;
         float aa = 1.0, bb = 1.0, cc = 1.0;
         for (int o = 0; o < 3; ++o) {
-            float phase = mix(HG(cosT, 0.6 * cc), HG(cosT, -0.25 * cc), 0.3) * 4.0 * kPi;
+            // (Half even - light bounced about inside the cloud comes out every way: sunlit sides are bright with the
+            // sun behind the eye too - half the two lobes.)
+            float phase = mix(1.0, mix(HG(cosT, 0.75 * cc), HG(cosT, -0.25 * cc), 0.35) * 4.0 * kPi, 0.5);
             sun += aa * exp(-od * bb) * phase;
             aa *= 0.5; bb *= 0.4; cc *= 0.5;
         }
         // Powder: an edge facing the sun is darker than the inside it lights (light enters, doesn't come back out).
         float powder = 1.0 - 0.5 * exp(-d * sigma * gThick * 0.08);
         float h = Height(p);
-        // The sky's light: lighter at the tops, and dimmed by the cloud over the point (the sun's way through it
-        // stands in for up: thick storm clouds get dark bases).
-        vec3 sky = L.ambient.rgb * mix(0.55, 1.15, h) * mix(0.35, 1.0, exp(-od * 0.35));
-        vec3 S = (sunColour * sun * powder + sky) * L.tint.rgb * L.tint.w;
+        // The sky's light: the sky's colour from above (lighter at the tops), less and warmer from below (the ground
+        // lit by it), dimmed by the cloud over the point (the sun's way through it stands in for up: dark storm bases).
+        vec3 skyTop = L.ambient.rgb * 1.15, skyLow = L.ambient.rgb * vec3(0.66, 0.62, 0.58);
+        vec3 sky = mix(skyLow, skyTop, smoothstep(0.0, 0.8, h)) * mix(0.4, 1.0, exp(-od * 0.3));
+        vec3 S = (sunColour * sun * powder * 1.5 + sky) * L.tint.rgb * L.tint.w;
         float stepT = exp(-d * sigma * dt);
         light += transmit * (1.0 - stepT) * S;
-        depthSum += transmit * (1.0 - stepT) * t;
+        depthSum += transmit * (1.0 - stepT) * tHere;
         weightSum += transmit * (1.0 - stepT);
         transmit *= stepT;
     }
@@ -186,7 +204,7 @@ void main()
     // far fades out (the march's reach is no horizon).
     float dist = depthSum / max(weightSum, 1e-6);
     float haze = 1.0 - exp(-dist / L.haze.w);
-    light = mix(light, L.haze.rgb * alpha, haze * 0.85);
+    light = mix(light, L.haze.rgb * alpha, haze * 0.6);
     float fade = 1.0 - smoothstep(0.7 * L.layer.w, L.layer.w, dist);
     outScene = vec4(light, alpha) * fade;
 }
