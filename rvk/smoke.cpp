@@ -98,9 +98,23 @@ float Puff(double t, uint64_t key)
 }
 
 struct SimPush {
-    float a[4], b[4], c[4], d[4], e[4], f[4], g[4];   // smoke_sim.comp Params
+    float a[4], b[4], c[4], d[4], e[4], f[4], g[4], h[4];   // smoke_sim.comp Params
 };
-static_assert(sizeof(SimPush) == 112, "push constants");
+static_assert(sizeof(SimPush) == 128, "push constants");
+
+// A box's cells a side: RVK_SmokeRes per world unit, a multiple of 4, at most RVK_SmokeQual's.
+uint32_t SmokeCells(float size, const Device::SmokeParams& P)
+{
+    const uint32_t most = P.quality <= 1 ? 64u : P.quality == 2 ? 96u : 128u;
+    const float want = std::ceil(size * std::max(P.resolution, 1.0f) / 4.0f) * 4.0f;
+    return uint32_t(std::clamp(want, 32.0f, float(most)));
+}
+
+// Drift clouds: smoke a character carries out of a source's box goes on in a box of its own following them.
+constexpr float kDriftSpeed = 0.8f;             // a character moving at least this fast (world / s) through a box
+constexpr uint32_t kDriftPerSource = 2;         // ... gets one, at most this many a source
+constexpr float kEdgeFade = 0.2f;               // the band along a box's walls and top its smoke leaves over (box
+                                                // units; smoke.frag thins it out there, a drift cloud takes it)
 
 // The half-size smoke's upsampling (smoke_up.frag).
 struct SmokeUpPush {
@@ -245,6 +259,7 @@ void Device::SmokeSourceFrame(uint64_t key, const SmokeSource& source)
             v = oldest;
         }
         v->key = key;
+        v->parent = 0;
         v->fresh = true;
         v->age = 0.0f;
         float wind[2];
@@ -513,6 +528,103 @@ void Device::DestroySmokeResources()
     if (m_smokeRepeatSampler) { vkDestroySampler(m_device, m_smokeRepeatSampler, nullptr); m_smokeRepeatSampler = VK_NULL_HANDLE; }
 }
 
+// Drift clouds. A character moving through a source's box (or just past it) gets a smaller box of its own following
+// them, at the source's cell size, without a source: in it the smoke they carry out through the source's walls goes on
+// (smoke_sim.comp stage 9 takes over what the source's box lets go of there), stirred by them, trailing behind, fading
+// with the source's life. While the character is near the source the cloud is kept; after that it follows them until
+// its smoke is gone (the volume is then given back like a gone source's).
+void Device::UpdateSmokeDrift(double now)
+{
+    if (m_smokeParams.stir <= 0.0f)
+        return;
+    std::vector<bool> taken(m_waterBodies.size(), false);
+    // The clouds there are follow the character nearest them (each its own).
+    for (SmokeVolume& d : m_smokeVolumes) {
+        if (!d.key || !d.parent)
+            continue;
+        int best = -1;
+        float bestDist = d.source.size * 0.6f;
+        for (size_t i = 0; i < m_waterBodies.size(); ++i) {
+            const WaterBody& b = m_waterBodies[i];
+            const float dist = std::hypot(b.x - d.source.pos[0], b.z - d.source.pos[2]);
+            if (!taken[i] && dist < bestDist) { best = int(i); bestDist = dist; }
+        }
+        if (best < 0)
+            continue;                            // (left behind: stays where it is, fading)
+        taken[size_t(best)] = true;
+        const WaterBody& b = m_waterBodies[size_t(best)];
+        d.source.pos[0] = b.x;
+        d.source.pos[1] = b.minY;
+        d.source.pos[2] = b.z;
+        // Kept alive while its source is near (it may still hand smoke over); then its smoke's life runs out.
+        for (const SmokeVolume& p : m_smokeVolumes)
+            if (p.key == d.parent && std::hypot(b.x - (p.corner[0] + p.source.size * 0.5f),
+                                                b.z - (p.corner[2] + p.source.size * 0.5f)) < p.source.size)
+                d.lastSeen = now;
+    }
+    // New ones: a character moving through a source's box with none following them.
+    for (size_t i = 0; i < m_waterBodies.size(); ++i) {
+        const WaterBody& b = m_waterBodies[i];
+        if (taken[i] || b.speed < kDriftSpeed)
+            continue;
+        for (size_t k = 0; k < m_smokeVolumes.size(); ++k) {
+            const SmokeVolume& p = m_smokeVolumes[k];
+            if (!p.key || p.parent || p.age < kWarmUp || now - p.lastSeen > 0.25)
+                continue;
+            const float* c = p.corner;
+            const float sz = p.source.size;
+            if (b.x < c[0] - 0.5f || b.x > c[0] + sz + 0.5f || b.z < c[2] - 0.5f || b.z > c[2] + sz + 0.5f ||
+                b.centreY < c[1] || b.minY > c[1] + sz)
+                continue;
+            uint32_t count = 0;
+            for (const SmokeVolume& x : m_smokeVolumes)
+                if (x.key && x.parent == p.key) ++count;
+            if (count >= kDriftPerSource)
+                break;
+            // Its volume: a free one with images of its size, else a new one, else any free one (made again - the GPU
+            // waited for: a hitch).
+            const float size = std::clamp(p.source.size * 0.7f, 2.5f, 5.0f);
+            const uint32_t n = SmokeCells(size, m_smokeParams);
+            const uint64_t parentKey = p.key;    // (p may move with the vector)
+            SmokeVolume* d = nullptr;
+            for (SmokeVolume& x : m_smokeVolumes)
+                if (!x.key && x.n == n) { d = &x; break; }
+            if (!d && m_smokeVolumes.size() < kSmokeMax)
+                d = &m_smokeVolumes.emplace_back();
+            for (SmokeVolume& x : m_smokeVolumes)
+                if (!d && !x.key) d = &x;
+            if (!d)
+                break;
+            d->parent = parentKey;
+            const SmokeVolume& src = *std::find_if(m_smokeVolumes.begin(), m_smokeVolumes.end(),
+                                                   [&](const SmokeVolume& x) { return x.key == d->parent && !x.parent; });
+            static uint64_t serial = 0;
+            d->key = (d->parent * 0x9E3779B97F4A7C15ull + ++serial) | (1ull << 63);   // (the game's keys: pointers)
+            d->source = src.source;
+            d->source.pos[0] = b.x;
+            d->source.pos[1] = b.minY;
+            d->source.pos[2] = b.z;
+            d->source.size = size;
+            d->source.rate = d->source.heat = d->source.speed = 0.0f;
+            d->source.radius = 0.05f;
+            d->fresh = true;
+            d->age = kWarmUp;                    // (no warming up: it starts from what it is handed)
+            d->simWait = 0.0f;
+            d->lastStep = 0.0f;
+            d->lastSeen = now;
+            float wind[2];
+            SmokeWind(d->source, m_rainWind, wind);
+            SmokeCorner(d->source, wind, d->corner);
+            taken[i] = true;
+            static uint32_t logged = 0;
+            if (logged < 20 && ++logged)
+                Log("smoke: drift cloud %u for a character at %.1f %.1f %.1f moving %.1f/s (source %llx, %u^3 a %.1f box)",
+                    logged, b.x, b.minY, b.z, b.speed, (unsigned long long)d->parent, n, size);
+            break;
+        }
+    }
+}
+
 // The smoke: simulated, then drawn over the finished scene (EndScene: its rendering just closed).
 void Device::RenderSmoke(VkCommandBuffer cmd)
 {
@@ -524,6 +636,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         LogSmokeResidual();
     if (!P.enable || !m_smokeSimPipeline || !m_smokePipeline || !m_scene || !m_hdr || m_smokeVolumes.empty())
         return;
+    UpdateSmokeDrift(now);
     // Gone sources whose smoke has faded give their volumes back.
     for (SmokeVolume& v : m_smokeVolumes)
         if (v.key && now - v.lastSeen > double(v.source.life) * 1.5 + 1.0)
@@ -549,11 +662,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
     // Each volume's cells a side: RVK_SmokeRes per world unit of its box (a long-lived source's tall box keeps its
     // detail), a multiple of 4, at most RVK_SmokeQual's. A volume whose count changed, or a scratch too small for
     // one, is made again - after the GPU is done with the old (rare: a source's box or the settings changed).
-    const uint32_t most = P.quality <= 1 ? 64u : P.quality == 2 ? 96u : 128u;
-    auto cells = [&](const SmokeVolume& v) {
-        const float want = std::ceil(v.source.size * std::max(P.resolution, 1.0f) / 4.0f) * 4.0f;
-        return uint32_t(std::clamp(want, 32.0f, float(most)));
-    };
+    auto cells = [&](const SmokeVolume& v) { return SmokeCells(v.source.size, P); };
     uint32_t scratch = 0;
     bool remake = false;
     for (auto& [d, v] : live) {
@@ -759,6 +868,18 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         p.f[3] = kExtinction * P.density;                     // (as thick to the sun as it is to the eye)
         p.g[0] = float(slot);
         p.g[1] = 1.0f / kFlowMax;
+        p.g[2] = kEdgeFade;
+        // A drift cloud: its source's box (stage 9 takes the smoke that box lets go of): this box's coordinates ->
+        // that one's, uvw * h.w + h.xyz; its density read through binding 10.
+        const SmokeVolume* parent = nullptr;
+        if (v.parent)
+            for (const auto& [pd, pv] : live)
+                if (pv->key == v.parent && !pv->parent && pv->n) parent = pv;
+        if (parent) {
+            for (int i = 0; i < 3; ++i)
+                p.h[i] = (corner[i] - parent->corner[i]) / parent->source.size;
+            p.h[3] = s.size / parent->source.size;
+        }
         // The characters in the box (last frame's, moved on by how they went), nearest the source first.
         SmokeBodies bodies{};
         bodies.info[1] = P.stir;
@@ -895,7 +1016,10 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         dispatch(5, v.vel[c], v.dens[c], v.vel[o], v.dens[o], p0, pr[0], v.vel[c], 0.0f);       // projected -> vel[o]
         dispatch(6, v.vel[o], v.dens[c], v.vel[c], v.dens[o], p0, pr[0], v.vel[c], 0.0f);       // density forward -> curl
         dispatch(8, v.vel[o], v.dens[c], v.vel[c], v.dens[o], p0, pr[0], v.vel[c], 0.0f);       // ... and back -> div
+        if (parent)
+            forwardView = parent->dens[parent->cur].view;   // (stage 9: the source's smoke, for a drift cloud)
         dispatch(9, v.vel[o], v.dens[c], v.vel[c], v.dens[o], p0, pr[0], v.vel[c], 0.0f);       // corrected -> dens[o]
+        forwardView = m_smokeCurl.view;
         forwardView = v.dens[c].view;            // (the state before this step, for the look's blend from it)
         dispatch(7, v.vel[o], v.dens[o], v.vel[c], v.dens[c], p0, pr[0], v.vel[c], 0.0f);       // sunlight -> look
         forwardView = m_smokeCurl.view;
@@ -1023,7 +1147,9 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         sf.detail[1] = 1.2f;
         sf.detail[2] = 2.5f;
         sf.detail[3] = float(v.key % 101u) * 0.137f;
-        sf.colour[3] = kExtinction * P.density * std::clamp(v.age / kWarmUp, 0.0f, 1.0f);   // (fading in while it warms up)
+        // (Fading in while it warms up; out over the last second before its volume is given back.)
+        const float ending = float(double(v.source.life) * 1.5 + 1.0 - (now - v.lastSeen));
+        sf.colour[3] = kExtinction * P.density * std::clamp(v.age / kWarmUp, 0.0f, 1.0f) * std::clamp(ending, 0.0f, 1.0f);
         if (m_terrainAmbient[3] > 0.5f)
             std::memcpy(sf.ambient, m_terrainAmbient, 12);
         else

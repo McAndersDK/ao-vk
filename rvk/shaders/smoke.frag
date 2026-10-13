@@ -29,7 +29,8 @@ layout(location = 4) out vec4 outAlbedo;
 
 const float kPi = 3.14159265;
 
-const float kEdgeFade = 0.2;    // the band along the box's walls and top the smoke thins out over (box units)
+const float kEdgeFade = 0.2;    // the band along the box's walls and top the smoke thins out over (box units; rvk
+                                // smoke.cpp kEdgeFade: a drift cloud takes the rest)
 
 float Wisps(vec3 q) { return texture(wispNoise, q * 0.125).r; }
 

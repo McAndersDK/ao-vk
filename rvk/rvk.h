@@ -1521,6 +1521,8 @@ private:
         float corner[3] = {0, 0, 0};             // the box's lowest corner (world)
         bool fresh = true;                       // its images to be cleared first
         float age = 0.0f;                        // seconds simulated (warming up: faster, fading in)
+        uint64_t parent = 0;                     // a drift cloud (smoke a character carries out of a source's box):
+                                                 // that source's key; 0 a source's own
         float simWait = 0.0f;                    // seconds since its last step (stepped every kSimStep or so)
         float lastStep = 0.0f;                   // ... and that step's (drawn between it and the state before)
         uint32_t cur = 0;                        // which of each pair holds the state
@@ -1556,6 +1558,7 @@ private:
     void DestroySmokeImages();
     bool MakeSmokeImage(VkFormat format, uint32_t n, SmokeImage& out);
     void RenderSmoke(VkCommandBuffer cmd);
+    void UpdateSmokeDrift(double now);
     void UpdateWaterReady();
     const WaterGrid* WaterGridFor(uint32_t segments);
     WaterMap* WaterMapFor(const WaterVertex* v, uint32_t count, const uint16_t* idx, uint32_t icount,
