@@ -1,7 +1,8 @@
 #version 450
 // The cloud layer's noise (rvk/clouds.cpp), made once, tiling. Mode 0, the shape (128^3): R Perlin-Worley (billowy
 // gradient noise, its low values carved by Worley cells), G B A Worley at 4, 8, 16 cells a side (their sum, weighted,
-// erodes R at the edges). Mode 1, the detail (32^3): R G B Worley fbm from 1, 2, 4 cells a side.
+// erodes R at the edges). Mode 1, the detail (64^3): R G B Worley fbm from 4, 8, 16 cells a side (many cells a tile:
+// one cell a tile repeats as a grid across the sky).
 layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 layout(set = 0, binding = 0, rgba8) uniform writeonly image3D noiseOut;
 
@@ -75,6 +76,6 @@ void main()
         float pw = clamp(Remap(g, w - 1.0, 1.0, 0.0, 1.0), 0.0, 1.0);
         imageStore(noiseOut, id, vec4(pw, WorleyFbm(u, 4, 41u), WorleyFbm(u, 8, 51u), WorleyFbm(u, 16, 61u)));
     } else {
-        imageStore(noiseOut, id, vec4(WorleyFbm(u, 1, 71u), WorleyFbm(u, 2, 81u), WorleyFbm(u, 4, 91u), 1.0));
+        imageStore(noiseOut, id, vec4(WorleyFbm(u, 4, 71u), WorleyFbm(u, 8, 81u), WorleyFbm(u, 16, 91u), 1.0));
     }
 }

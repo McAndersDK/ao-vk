@@ -66,7 +66,7 @@ struct ShadowFrame {
 
 constexpr uint32_t kNoiseSize = 64;             // the clouds' noise image (cells a side; tiling)
 // RVK_CloudLayer.
-constexpr uint32_t kShapeSize = 128, kDetailSize = 32;   // the layer's noise images (cells a side; tiling)
+constexpr uint32_t kShapeSize = 128, kDetailSize = 64;   // the layer's noise images (cells a side; tiling)
 constexpr uint32_t kWeatherSize = 256;          // the weather map (pixels a side)
 constexpr float kWeatherArea = 24000.0f;        // ... over this much of the world round the camera
 constexpr float kLayerThickness = 1300.0f;      // the layer's base to its top (world)
@@ -1153,6 +1153,9 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
     }
     wf.info[1] = m_cloudCloudy;
     wf.info[2] = m_cloudType;
+    static const float typeOverride = getenv("RANDYVK_CLOUD_TYPE") ? float(atof(getenv("RANDYVK_CLOUD_TYPE"))) : -1.0f;
+    if (typeOverride >= 0.0f)
+        wf.info[2] = typeOverride;               // (RANDYVK_CLOUD_TYPE: tests of a cloud type, 0 stratus .. 1 storm)
     wf.info[3] = 1.0f;
     wf.drift[0] = m_cloudDrift[0];             // (UpdateCloudDrift)
     wf.drift[1] = m_cloudDrift[1];
@@ -1187,7 +1190,9 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
     vkCmdSetScissor(cmd, 0, 1, &scissor);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudWeatherPipeline);
     VkDescriptorBufferInfo blockInfo{f.ring, offset, sizeof(WeatherFrame)};
-    VkDescriptorImageInfo noiseInfo{m_cloudRepeatSampler, m_cloudNoiseView, VK_IMAGE_LAYOUT_GENERAL};
+    // (The layer's shape noise, 128^3: smooth over many texels - v1's 64^3 has its finest cells a few texels wide, and
+    // its texel grid showed through as blocks, extruded through the layer as streaks.)
+    VkDescriptorImageInfo noiseInfo{m_cloudRepeatSampler, m_cloudShape.view, VK_IMAGE_LAYOUT_GENERAL};
     VkWriteDescriptorSet w[2] = {};
     for (uint32_t i = 0; i < 2; ++i) {
         w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1231,7 +1236,7 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     lf.weather[2] = 1.0f / m_cloudWeatherArea[2];
     lf.weather[3] = skipCovered ? 1.0f : 0.0f;
     lf.shape[0] = 1.0f / 4500.0f;                // (4 cells a tile: cloud cells about a kilometre)
-    lf.shape[1] = 1.0f / 260.0f;
+    lf.shape[1] = 1.0f / 900.0f;                 // (a tile of 4 .. 16 detail cells: ~225 .. 56 units each)
     lf.shape[2] = 0.65f * m_cloudParams.detail;
     lf.shape[3] = 0.02f * m_cloudParams.density;
     // The wind carries the shapes (and they evolve: up through the noise) - UpdateCloudDrift.

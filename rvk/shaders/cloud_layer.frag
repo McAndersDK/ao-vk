@@ -103,7 +103,8 @@ float Density(vec3 p, bool detail)
     vec3 dq = (p + L.wind.xyz * 1.7) * L.shape.y + swirl;
     vec3 e = textureLod(detailNoise, dq, 0.0).rgb;
     float ef = e.r * 0.625 + e.g * 0.25 + e.b * 0.125;
-    ef = mix(ef, textureLod(detailNoise, dq * 2.7 + 0.31, 0.0).r, 0.3);
+    ef = mix(ef, textureLod(detailNoise, dq.zxy * 1.37 + 0.31, 0.0).g, 0.35);   // (another scale, axes turned: no
+                                                                               // repeat lines up)
     ef = mix(ef, 1.0 - ef, clamp(h * 4.0, 0.0, 1.0));   // wispy underneath, billowy above
     d = clamp(Remap(d, ef * L.shape.z, 1.0, 0.0, 1.0), 0.0, 1.0);
     return d * w.b;
