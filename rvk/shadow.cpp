@@ -935,8 +935,11 @@ void Device::CollectShadowItems()
     }
     GroupShadowItems(drawOf);
     for (auto& [key, e] : m_casterCache) {
-        if (!m_shadowMemory)
+        if (m_shadowMemory == 0)
             break;                               // (RVK_ShadowMem off: only what the game drew this frame)
+        if (m_shadowMemory == 3 && std::max({e.boundsMax[0] - e.boundsMin[0], e.boundsMax[1] - e.boundsMin[1],
+                                             e.boundsMax[2] - e.boundsMin[2]}) < 3.0f)
+            continue;                            // (3: only big things)
         if (e.lastSeen == m_frameNumber && std::find(staleKeys.begin(), staleKeys.end(), key) == staleKeys.end())
             continue;                            // drawn this frame: in the list above
         ShadowItem it;
@@ -952,7 +955,7 @@ void Device::CollectShadowItems()
         it.texture = e.texture;
         it.texOffset = e.texOffset;
         it.alphaRef = e.alphaRef;
-        it.world = SwayPose(e);
+        it.world = m_shadowMemory == 2 ? e.world : SwayPose(e);   // (2: without the remembered sway)
         std::memcpy(it.boundsMin, e.boundsMin, sizeof(it.boundsMin));
         std::memcpy(it.boundsMax, e.boundsMax, sizeof(it.boundsMax));
         it.cached = true;
@@ -1468,6 +1471,19 @@ void Device::RenderShadowMap(VkCommandBuffer cmd)
 // After all shadow passes of the frame.
 void Device::FinishShadowFrame()
 {
+    if (m_memoryTraceFrames > 0) {
+        --m_memoryTraceFrames;
+        if (m_memoryTraceFrames % 4 == 0) {
+            uint32_t cached = 0, swaying = 0;
+            for (const ShadowItem& it : m_shadowItems)
+                if (it.cached) ++cached;
+            for (const auto& [key, e] : m_casterCache)
+                if (e.lastSeen != m_frameNumber && e.sway.size() >= 8) ++swaying;
+            Log("shadow memory trace (mode %u) frame %llu: %zu items (%u remembered, %u of them swaying), drew %u item-cascades "
+                "(%u remembered), culled %u", m_shadowMemory, (unsigned long long)m_frameNumber, m_shadowItems.size(), cached,
+                swaying, m_shadowDrawn, m_cachedCastersDrawn, m_shadowCulled);
+        }
+    }
     // Daylight for point shadows: the sun's brightness on flat ground, smoothed so a frame without it doesn't pop.
     float daylight = m_sunLuminance * std::max(0.0f, -m_sunDir[1]);
     m_daylight += (daylight - m_daylight) * 0.1f;

@@ -893,9 +893,9 @@ void ThreadedDevice::SetSunBleed(float s)
     Enqueue([this, s](const uint8_t*) { m_device.SetSunBleed(s); });
 }
 
-void ThreadedDevice::SetShadowMemory(bool on)
+void ThreadedDevice::SetShadowMemory(uint32_t mode)
 {
-    Enqueue([this, on](const uint8_t*) { m_device.SetShadowMemory(on); });
+    Enqueue([this, mode](const uint8_t*) { m_device.SetShadowMemory(mode); });
 }
 
 void ThreadedDevice::SetHillShade(bool on)

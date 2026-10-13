@@ -438,7 +438,9 @@ public:
     void SetSunSize(float s) { m_sunSize = s; }
     void SetSunBleed(float s) { m_sunBleed = s; }
     // Remembered shadow casters (things out of view still casting) and the terrain's shade from a low sun, on / off.
-    void SetShadowMemory(bool on) { m_shadowMemory = on; m_cacheTraceLines = 0; }   // (switched: the churn trace anew)
+    // (0 off, 1 on, 2 on without the remembered sway, 3 only big things; switched: the churn trace and a few seconds of
+    // the shadow items' counts anew - finding a blinking shadow)
+    void SetShadowMemory(uint32_t mode) { m_shadowMemory = mode; m_cacheTraceLines = 0; m_memoryTraceFrames = 240; }
     void SetHillShade(bool on) { m_hillShade = on; }
     // The game's own sun sprites (its glow, VisualSunRays_t), shown or not.
     void SetGameSun(bool on) { m_gameSun = on; }
@@ -1058,7 +1060,8 @@ private:
     float m_cacheRefusedFarD = 0.0f;
     uint32_t m_cacheKeptSolid = 0;               // (since start)
     uint32_t m_cacheTraceLines = 0;              // (the churn trace's lines so far: 300 at most)
-    bool m_shadowMemory = true;                  // RVK_ShadowMem: remembered casters drawn into the sun's shadows
+    uint32_t m_shadowMemory = 1;                 // RVK_ShadowMem: remembered casters drawn into the sun's shadows
+    uint32_t m_memoryTraceFrames = 0;            // (frames left of the counts' trace)
     bool m_hillShade = true;                     // RVK_HillShade: the terrain's shade from a low sun (terrain_sun.cpp)
     struct ArenaChunk;
     struct CachedCaster {
