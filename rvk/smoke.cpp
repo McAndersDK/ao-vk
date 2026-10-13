@@ -35,6 +35,15 @@ const uint32_t kSmokeVertSpirv[] = {
 const uint32_t kSmokeFragSpirv[] = {
 #include "smoke.frag.inc"
 };
+const uint32_t kSmokeHalfFragSpirv[] = {        // smoke.frag built with RVK_SMOKE_HALF: into the half-size target
+#include "smoke_half.frag.inc"
+};
+const uint32_t kFullscreenVertSpirv[] = {
+#include "fullscreen.vert.inc"
+};
+const uint32_t kSmokeUpFragSpirv[] = {
+#include "smoke_up.frag.inc"
+};
 
 constexpr uint32_t kSmokeMax = 8;               // volumes
 constexpr uint32_t kSmokeSimMax = 6;            // ... simulated a frame (the nearest)
@@ -92,6 +101,11 @@ struct SimPush {
     float a[4], b[4], c[4], d[4], e[4], f[4], g[4];   // smoke_sim.comp Params
 };
 static_assert(sizeof(SimPush) == 112, "push constants");
+
+// The half-size smoke's upsampling (smoke_up.frag).
+struct SmokeUpPush {
+    float proj[4];                              // D3D projection m[2][2], m[3][2]; the half-size target's width, height
+};
 
 constexpr uint32_t kLamps = 8;                  // lamps lighting a volume (those whose light reaches its box)
 constexpr VkDeviceSize kBoundsSlot = 32;        // a volume's in m_smokeBounds: uvec4 lowest, uvec4 highest cell
@@ -373,72 +387,107 @@ bool Device::CreateSmokeResources(std::string* error)
     pl.pSetLayouts = &m_smokeSetLayout;
     if (!Check(vkCreatePipelineLayout(m_device, &pl, nullptr, &m_smokeLayout), "smoke layout", error))
         return false;
+    // The half-size smoke's upsampling: 0 its colour, 1 its depths, 2 the scene's depth; push: SmokeUpPush.
+    {
+        VkDescriptorSetLayoutBinding u[3] = {};
+        for (uint32_t i = 0; i < 3; ++i)
+            u[i] = {i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        VkDescriptorSetLayoutCreateInfo ul{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        ul.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+        ul.bindingCount = 3;
+        ul.pBindings = u;
+        if (!Check(vkCreateDescriptorSetLayout(m_device, &ul, nullptr, &m_smokeUpSetLayout), "smoke up set", error))
+            return false;
+        VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(SmokeUpPush)};
+        VkPipelineLayoutCreateInfo upl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        upl.setLayoutCount = 1;
+        upl.pSetLayouts = &m_smokeUpSetLayout;
+        upl.pushConstantRangeCount = 1;
+        upl.pPushConstantRanges = &push;
+        if (!Check(vkCreatePipelineLayout(m_device, &upl, nullptr, &m_smokeUpLayout), "smoke up layout", error))
+            return false;
+    }
     auto module = [&](const uint32_t* code, size_t size, VkShaderModule* out) {
         VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
         ci.codeSize = size;
         ci.pCode = code;
         return Check(vkCreateShaderModule(m_device, &ci, nullptr, out), "smoke module", error);
     };
-    VkShaderModule vert = VK_NULL_HANDLE, frag = VK_NULL_HANDLE;
-    bool ok = module(kSmokeVertSpirv, sizeof(kSmokeVertSpirv), &vert) && module(kSmokeFragSpirv, sizeof(kSmokeFragSpirv), &frag);
-    if (ok) {
-        VkPipelineShaderStageCreateInfo stages[2] = {
-            {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vert, "main", nullptr},
-            {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, frag, "main", nullptr},
-        };
-        VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-        VkPipelineDynamicStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-        ds.dynamicStateCount = 2;
-        ds.pDynamicStates = dyn;
-        VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-        VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
-        vp.viewportCount = vp.scissorCount = 1;
-        VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-        rs.polygonMode = VK_POLYGON_MODE_FILL;
-        rs.cullMode = VK_CULL_MODE_NONE;         // (smoke.frag keeps the far faces)
-        rs.lineWidth = 1.0f;
-        VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-        VkPipelineDepthStencilStateCreateInfo dss{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-        // Premultiplied over every target alike (no independent blending); the shader gives the others nothing.
-        VkPipelineColorBlendAttachmentState att[5] = {};
-        for (auto& a : att) {
-            a.colorWriteMask = 0xF;
-            a.blendEnable = VK_TRUE;
-            a.srcColorBlendFactor = a.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-            a.dstColorBlendFactor = a.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-            a.colorBlendOp = a.alphaBlendOp = VK_BLEND_OP_ADD;
+    // A pipeline drawing premultiplied over its targets (the attachments `blended`; the others written as they are).
+    auto pipeline = [&](const uint32_t* vertCode, size_t vertSize, const uint32_t* fragCode, size_t fragSize,
+                        VkPipelineLayout layout, const VkFormat* formats, uint32_t count, uint32_t blended,
+                        VkPipeline* out) {
+        VkShaderModule vert = VK_NULL_HANDLE, frag = VK_NULL_HANDLE;
+        bool ok = module(vertCode, vertSize, &vert) && module(fragCode, fragSize, &frag);
+        if (ok) {
+            VkPipelineShaderStageCreateInfo stages[2] = {
+                {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vert, "main", nullptr},
+                {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, frag, "main", nullptr},
+            };
+            VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+            VkPipelineDynamicStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+            ds.dynamicStateCount = 2;
+            ds.pDynamicStates = dyn;
+            VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+            VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+            vp.viewportCount = vp.scissorCount = 1;
+            VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+            rs.polygonMode = VK_POLYGON_MODE_FILL;
+            rs.cullMode = VK_CULL_MODE_NONE;     // (smoke.frag keeps the far faces)
+            rs.lineWidth = 1.0f;
+            VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+            ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+            VkPipelineDepthStencilStateCreateInfo dss{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+            VkPipelineColorBlendAttachmentState att[5] = {};
+            for (uint32_t i = 0; i < count; ++i) {
+                VkPipelineColorBlendAttachmentState& a = att[i];
+                a.colorWriteMask = 0xF;
+                a.blendEnable = i < blended ? VK_TRUE : VK_FALSE;
+                a.srcColorBlendFactor = a.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                a.dstColorBlendFactor = a.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+                a.colorBlendOp = a.alphaBlendOp = VK_BLEND_OP_ADD;
+            }
+            VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+            cb.attachmentCount = count;
+            cb.pAttachments = att;
+            VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+            rendering.colorAttachmentCount = count;
+            rendering.pColorAttachmentFormats = formats;
+            VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+            ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+            ci.pNext = &rendering;
+            ci.stageCount = 2;
+            ci.pStages = stages;
+            ci.pVertexInputState = &vi;
+            ci.pInputAssemblyState = &ia;
+            ci.pViewportState = &vp;
+            ci.pRasterizationState = &rs;
+            ci.pMultisampleState = &ms;
+            ci.pDepthStencilState = &dss;
+            ci.pColorBlendState = &cb;
+            ci.pDynamicState = &ds;
+            ci.layout = layout;
+            ok = Check(vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &ci, nullptr, out),
+                       "vkCreateGraphicsPipelines (smoke)", error);
         }
-        VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-        cb.attachmentCount = 5;
-        cb.pAttachments = att;
-        VkFormat colorFormats[5] = {GetFormatInfo(Format::RGBA16F).vk, GetFormatInfo(Format::RGBA16F).vk,
-                                    GetFormatInfo(Format::RGBA8).vk, GetFormatInfo(Format::RGBA16F).vk,
-                                    GetFormatInfo(Format::A8R8G8B8).vk};
-        VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-        rendering.colorAttachmentCount = 5;
-        rendering.pColorAttachmentFormats = colorFormats;
-        VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-        VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-        ci.pNext = &rendering;
-        ci.stageCount = 2;
-        ci.pStages = stages;
-        ci.pVertexInputState = &vi;
-        ci.pInputAssemblyState = &ia;
-        ci.pViewportState = &vp;
-        ci.pRasterizationState = &rs;
-        ci.pMultisampleState = &ms;
-        ci.pDepthStencilState = &dss;
-        ci.pColorBlendState = &cb;
-        ci.pDynamicState = &ds;
-        ci.layout = m_smokeLayout;
-        ok = Check(vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &ci, nullptr, &m_smokePipeline),
-                   "vkCreateGraphicsPipelines (smoke)", error);
-    }
-    if (vert) vkDestroyShaderModule(m_device, vert, nullptr);
-    if (frag) vkDestroyShaderModule(m_device, frag, nullptr);
-    return ok;
+        if (vert) vkDestroyShaderModule(m_device, vert, nullptr);
+        if (frag) vkDestroyShaderModule(m_device, frag, nullptr);
+        return ok;
+    };
+    // The scene's targets: premultiplied over every one alike (no independent blending); the shaders give the others
+    // nothing (they fade behind the smoke) - and the local fraction its cover (see smoke.frag).
+    const VkFormat sceneFormats[5] = {GetFormatInfo(Format::RGBA16F).vk, GetFormatInfo(Format::RGBA16F).vk,
+                                      GetFormatInfo(Format::RGBA8).vk, GetFormatInfo(Format::RGBA16F).vk,
+                                      GetFormatInfo(Format::A8R8G8B8).vk};
+    // The half-size target: the smoke (premultiplied over) and the view depth each pixel marched to (written).
+    const VkFormat halfFormats[2] = {GetFormatInfo(Format::RGBA16F).vk, GetFormatInfo(Format::RG16F).vk};
+    return pipeline(kSmokeVertSpirv, sizeof(kSmokeVertSpirv), kSmokeFragSpirv, sizeof(kSmokeFragSpirv), m_smokeLayout,
+                    sceneFormats, 5, 5, &m_smokePipeline) &&
+           pipeline(kSmokeVertSpirv, sizeof(kSmokeVertSpirv), kSmokeHalfFragSpirv, sizeof(kSmokeHalfFragSpirv),
+                    m_smokeLayout, halfFormats, 2, 1, &m_smokeHalfPipeline) &&
+           pipeline(kFullscreenVertSpirv, sizeof(kFullscreenVertSpirv), kSmokeUpFragSpirv, sizeof(kSmokeUpFragSpirv),
+                    m_smokeUpLayout, sceneFormats, 5, 5, &m_smokeUpPipeline);
 }
 
 void Device::DestroySmokeResources()
@@ -447,7 +496,12 @@ void Device::DestroySmokeResources()
     DestroySmokeImages();
     m_smokeVolumes.clear();
     if (m_smokeBounds) { vmaDestroyBuffer(m_allocator, m_smokeBounds, m_smokeBoundsAllocation); m_smokeBounds = VK_NULL_HANDLE; }
-    if (m_smokePipeline) { vkDestroyPipeline(m_device, m_smokePipeline, nullptr); m_smokePipeline = VK_NULL_HANDLE; }
+    for (VkPipeline* p : {&m_smokePipeline, &m_smokeHalfPipeline, &m_smokeUpPipeline})
+        if (*p) { vkDestroyPipeline(m_device, *p, nullptr); *p = VK_NULL_HANDLE; }
+    if (m_smokeUpLayout) { vkDestroyPipelineLayout(m_device, m_smokeUpLayout, nullptr); m_smokeUpLayout = VK_NULL_HANDLE; }
+    if (m_smokeUpSetLayout) { vkDestroyDescriptorSetLayout(m_device, m_smokeUpSetLayout, nullptr); m_smokeUpSetLayout = VK_NULL_HANDLE; }
+    for (Texture** t : {&m_smokeHalf, &m_smokeHalfDepth})
+        if (*t) { DestroyTexture(*t); *t = nullptr; }
     if (m_smokeSimPipeline) { vkDestroyPipeline(m_device, m_smokeSimPipeline, nullptr); m_smokeSimPipeline = VK_NULL_HANDLE; }
     if (m_smokeLayout) { vkDestroyPipelineLayout(m_device, m_smokeLayout, nullptr); m_smokeLayout = VK_NULL_HANDLE; }
     if (m_smokeSimLayout) { vkDestroyPipelineLayout(m_device, m_smokeSimLayout, nullptr); m_smokeSimLayout = VK_NULL_HANDLE; }
@@ -837,34 +891,50 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
     EnsureRingSpace(live.size() * (sizeof(SmokeFrame) + 256) + sizeof(FrameLights) + 1024);
     if (m_frameLightsDirty || m_frameLightsGeneration != m_ringGeneration)
         WriteFrameLights();
-    Texture* targets[5] = {m_scene, m_glow, m_localFraction, m_motionVectors, m_albedo};
-    VkRenderingAttachmentInfo colors[5] = {};
-    for (int i = 0; i < 5; ++i) {
-        Transition(cmd, targets[i], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        colors[i].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        colors[i].imageView = targets[i]->m_view;
-        colors[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        colors[i].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-        colors[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    // RVK_SmokeHalf: marched into a half-size target (cleared), then upsampled over the scene's (smoke_up.frag).
+    const uint32_t fw = m_scene->m_width, fh = m_scene->m_height, hw = (fw + 1) / 2, hh = (fh + 1) / 2;
+    if (P.half && (!m_smokeHalf || m_smokeHalf->m_width != hw || m_smokeHalf->m_height != hh)) {
+        for (Texture** t : {&m_smokeHalf, &m_smokeHalfDepth})
+            if (*t) { DestroyTexture(*t); *t = nullptr; }
+        m_smokeHalf = CreateImage(hw, hh, Format::RGBA16F, 1, true);
+        m_smokeHalfDepth = CreateImage(hw, hh, Format::RG16F, 1, true);
     }
-    VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
-    ri.renderArea = {{0, 0}, {m_scene->m_width, m_scene->m_height}};
-    ri.layerCount = 1;
-    ri.colorAttachmentCount = 5;
-    ri.pColorAttachments = colors;
-    vkCmdBeginRendering(cmd, &ri);
-    const float sw = float(m_scene->m_width), sh = float(m_scene->m_height);
-    VkViewport viewport{0.5f, sh + 0.5f, sw, -sh, 0.0f, 1.0f};   // the scene draws into a flipped viewport
-    VkRect2D scissor{{0, 0}, {m_scene->m_width, m_scene->m_height}};
+    const bool half = P.half && m_smokeHalf && m_smokeHalfDepth;
+    Texture* targets[5] = {m_scene, m_glow, m_localFraction, m_motionVectors, m_albedo};
+    Texture* halfTargets[2] = {m_smokeHalf, m_smokeHalfDepth};
+    auto beginRendering = [&](Texture* const* t, uint32_t count, bool clear) {
+        VkRenderingAttachmentInfo colors[5] = {};
+        for (uint32_t i = 0; i < count; ++i) {
+            Transition(cmd, t[i], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            colors[i].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            colors[i].imageView = t[i]->m_view;
+            colors[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            colors[i].loadOp = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+            colors[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        }
+        VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+        ri.renderArea = {{0, 0}, {t[0]->m_width, t[0]->m_height}};
+        ri.layerCount = 1;
+        ri.colorAttachmentCount = count;
+        ri.pColorAttachments = colors;
+        vkCmdBeginRendering(cmd, &ri);
+    };
+    beginRendering(half ? halfTargets : targets, half ? 2 : 5, half);
+    // The scene draws into a flipped viewport (half size: the same, halved).
+    const float sw = float(fw), sh = float(fh), k = half ? 0.5f : 1.0f;
+    VkViewport viewport{0.5f * k, (sh + 0.5f) * k, sw * k, -sh * k, 0.0f, 1.0f};
+    VkRect2D scissor{{0, 0}, {half ? hw : fw, half ? hh : fh}};
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_smokePipeline);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, half ? m_smokeHalfPipeline : m_smokePipeline);
+    const d3d::Matrix viewProj = MulMatrix(m_view, m_proj);
+    float screenLo[2] = {sw, sh}, screenHi[2] = {0.0f, 0.0f};   // where the boxes are on screen (the upsampling's)
     // Far ones first (each blends over what is behind it).
     std::sort(live.begin(), live.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
     for (auto& [dist, vp] : live) {
         SmokeVolume& v = *vp;
         SmokeFrame sf{};
-        sf.viewProj = MulMatrix(m_view, m_proj);
+        sf.viewProj = viewProj;
         sf.view = m_view;
         sf.camera[0] = eye[0];
         sf.camera[1] = eye[1];
@@ -880,6 +950,24 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         sf.look[1] = v.lastStep > 0.0f ? std::clamp(v.simWait / v.lastStep, 0.0f, 1.0f) : 1.0f;
         sf.info[0] = uint32_t(&v - m_smokeVolumes.data());
         sf.info[2] = v.n;
+        for (int c = 0; c < 8; ++c) {
+            const float p[3] = {v.corner[0] + (c & 1 ? v.source.size : 0.0f), v.corner[1] + (c & 2 ? v.source.size : 0.0f),
+                                v.corner[2] + (c & 4 ? v.source.size : 0.0f)};
+            float clip[4];
+            for (int j = 0; j < 4; ++j)
+                clip[j] = p[0] * viewProj.m[0][j] + p[1] * viewProj.m[1][j] + p[2] * viewProj.m[2][j] + viewProj.m[3][j];
+            if (clip[3] < 0.05f) {               // (round the camera: anywhere)
+                screenLo[0] = screenLo[1] = 0.0f;
+                screenHi[0] = sw;
+                screenHi[1] = sh;
+                continue;
+            }
+            const float x = 0.5f + (clip[0] / clip[3] + 1.0f) * 0.5f * sw, y = sh + 0.5f - (clip[1] / clip[3] + 1.0f) * 0.5f * sh;
+            screenLo[0] = std::min(screenLo[0], x);
+            screenLo[1] = std::min(screenLo[1], y);
+            screenHi[0] = std::max(screenHi[0], x);
+            screenHi[1] = std::max(screenHi[1], y);
+        }
         // The lamps whose light reaches the box (point and spot; the nearest to its middle if more).
         {
             std::pair<float, uint32_t> reach[kFrameLights];
@@ -959,6 +1047,39 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         vkCmdDraw(cmd, 36, 1, 0, 0);
     }
     vkCmdEndRendering(cmd);
+    if (half) {
+        // Upsampled over the scene's targets where the boxes are: each pixel from the four half-size ones round it,
+        // weighed by how near their depths are to its own (an edge keeps the smoke on its side of it).
+        for (Texture* t : halfTargets)
+            Transition(cmd, t, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        const int x0 = std::max(int(std::floor(screenLo[0])) - 3, 0), y0 = std::max(int(std::floor(screenLo[1])) - 3, 0);
+        const int x1 = std::min(int(std::ceil(screenHi[0])) + 3, int(fw)), y1 = std::min(int(std::ceil(screenHi[1])) + 3, int(fh));
+        if (x1 > x0 && y1 > y0) {
+            beginRendering(targets, 5, false);
+            VkViewport full{0.0f, 0.0f, sw, sh, 0.0f, 1.0f};
+            VkRect2D area{{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}};
+            vkCmdSetViewport(cmd, 0, 1, &full);
+            vkCmdSetScissor(cmd, 0, 1, &area);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_smokeUpPipeline);
+            VkDescriptorImageInfo images[3] = {
+                {m_pointSampler, m_smokeHalf->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                {m_pointSampler, m_smokeHalfDepth->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                {m_pointSampler, m_depthView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+            VkWriteDescriptorSet w[3] = {};
+            for (uint32_t i = 0; i < 3; ++i) {
+                w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                w[i].dstBinding = i;
+                w[i].descriptorCount = 1;
+                w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                w[i].pImageInfo = &images[i];
+            }
+            vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_smokeUpLayout, 0, 3, w);
+            SmokeUpPush push{{m_proj.m[2][2], m_proj.m[3][2], float(hw), float(hh)}};
+            vkCmdPushConstants(cmd, m_smokeUpLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+            vkCmdEndRendering(cmd);
+        }
+    }
     ProfileMark("smoke");
 }
 

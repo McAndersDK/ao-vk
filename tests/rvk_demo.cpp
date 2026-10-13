@@ -22,7 +22,7 @@ using namespace rvk::d3d;
 namespace {
 
 constexpr uint32_t kTile = 320, kCols = 3, kRows = 3;
-constexpr uint32_t kWidth = kTile * kCols, kHeight = kTile * kRows;
+uint32_t g_width = kTile * kCols, g_height = kTile * kRows;   // --size W H (benchmarks at a game's resolution)
 constexpr float kPi = 3.14159265f;
 
 // ---- D3D-style matrix helpers (row vectors, left-handed) ----
@@ -644,11 +644,11 @@ double Benchmark(D& dev, int frames)
         LARGE_INTEGER r0, r1;
         QueryPerformanceCounter(&r0);
         dev.BeginFrame();
-        dev.SetViewport({0, 0, kWidth, kHeight, 0, 1});
+        dev.SetViewport({0, 0, g_width, g_height, 0, 1});
         dev.Clear(CLEAR_TARGET | CLEAR_ZBUFFER, 0xFF102030, 1.0f);
         dev.SetRenderState(RS_LIGHTING, 1);
         dev.SetTransform(View, LookAtLH({0, 2, -10}, {0, 0, 0}, {0, 1, 0}));
-        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(kWidth) / kHeight, 0.1f, 100.0f));
+        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.1f, 100.0f));
         for (int i = 0; i < 4; ++i) {
             l.position = {float(i) * 3 - 4, 2, -2};
             dev.SetLight(i, l);
@@ -998,7 +998,7 @@ void RunPbrTest(D& dev, int frames, const std::string& shot)
             dev.SetPbr(pbr);
         }
         dev.BeginFrame();
-        dev.SetViewport({0, 0, kWidth, kHeight, 0.0f, 1.0f});
+        dev.SetViewport({0, 0, g_width, g_height, 0.0f, 1.0f});
         dev.Clear(CLEAR_TARGET | CLEAR_ZBUFFER, 0xFF8098B8, 1.0f);
         dev.SetRenderState(RS_ZENABLE, 1);
         dev.SetRenderState(RS_ZWRITEENABLE, 1);
@@ -1044,7 +1044,7 @@ void RunPbrTest(D& dev, int frames, const std::string& shot)
         dev.SetTextureStageState(0, TSS_ADDRESS, TADDRESS_WRAP);
         dev.SetTextureStageState(1, TSS_COLOROP, TOP_DISABLE);
         dev.SetTransform(View, LookAtLH({0, 0.3f, -6.2f}, {0, -0.3f, 0}, {0, 1, 0}));
-        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(kWidth) / kHeight, 0.1f, 300.0f));
+        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.1f, 300.0f));
         Material plain{{1, 1, 1, 1}, {1, 1, 1, 1}, {0, 0, 0, 1}, {0, 0, 0, 0}, 0.0f};
         Material glossy{{1, 1, 1, 1}, {1, 1, 1, 1}, {0.6f, 0.6f, 0.6f, 1}, {0, 0, 0, 0}, 20.0f};
         dev.SetMaterial(plain);
@@ -1213,7 +1213,7 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
             dev.UpdateTexture(grassGround, 0, 0, 0, 64, 64, grassPixels.data(), 64 * 4);
         Texture* const groundNow = g_grassBenchLoadingNull && frame < g_grassBenchLoading ? nullptr : grassGround;
         dev.BeginFrame();
-        dev.SetViewport({0, 0, kWidth, kHeight, 0.0f, 1.0f});
+        dev.SetViewport({0, 0, g_width, g_height, 0.0f, 1.0f});
         dev.Clear(CLEAR_TARGET | CLEAR_ZBUFFER, 0xFF6080A0, 1.0f);
         const float t = g_grassBenchStill ? 0.0f : float(frame);
         const float ex = -60.0f + 0.06f * t, ez = 10.0f * std::sin(t * 0.004f);
@@ -1223,7 +1223,7 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
         const float fwd = 6.0f * std::cos(pitch);
         dev.SetTransform(View, LookAtLH({ex, ey, ez}, {ex + fwd * std::cos(yaw), ey - 6.0f * std::sin(pitch), ez + fwd * std::sin(yaw)},
                                         {0, 1, 0}));
-        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(kWidth) / kHeight, 0.3f, 300.0f));
+        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.3f, 300.0f));
         dev.SetTransform(World, Identity());
         dev.SetRenderState(RS_ZENABLE, 1);
         dev.SetRenderState(RS_ZWRITEENABLE, 1);
@@ -1406,6 +1406,7 @@ float g_smokeDensity = 1.0f;      // --smoke-density X (RVK_SmokeDensity)
 float g_smokeWindScale = 1.0f;    // --smoke-wind X: the game's wind x X
 float g_smokeWisps = 1.0f;        // --smoke-wisps X (RVK_SmokeWisps)
 bool g_smokeExact = false;        // --smoke-exact (RVK_SmokeExact)
+bool g_smokeHalf = true;          // --smoke-full: RVK_SmokeHalf off
 bool g_smokeTwo = false;          // --smoke-two: a second, bigger source
 float g_smokeOpaque = 1.0f;       // --smoke-opaque X (RVK_SmokeOpaque)
 float g_rainForce = 0.0f;         // --rain F: rain this hard (0..1; RVK_RainForce), the new weather on
@@ -1582,7 +1583,7 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
         if (frame == frames - 1)
             dev.RequestScreenshot(shot);
         dev.BeginFrame();
-        dev.SetViewport({0, 0, kWidth, kHeight, 0.0f, 1.0f});
+        dev.SetViewport({0, 0, g_width, g_height, 0.0f, 1.0f});
         dev.Clear(CLEAR_TARGET | CLEAR_ZBUFFER, sky, 1.0f);
         // Standing on the shore (the eye 1.8 above the ground there, or --water-height above the water), looking out.
         const float ex = coast ? 2.0f : 0.0f, ez = g_waterZ > -1e5f ? g_waterZ : coast ? 22.0f : -25.0f;
@@ -1601,7 +1602,7 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
             at = {0.0f, 9.0f, 60.0f};                       // (the fall's middle, about)
 
         dev.SetTransform(View, LookAtLH(eye, at, {0, 1, 0}));
-        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(kWidth) / kHeight, 0.3f, 2000.0f));
+        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.3f, 2000.0f));
         dev.SetTransform(World, Identity());
         dev.SetRenderState(RS_ZENABLE, 1);
         dev.SetRenderState(RS_ZWRITEENABLE, 1);
@@ -1821,14 +1822,14 @@ void RunShadowTest(D& dev, int frames, const std::string& shot, int cacheTest, i
             if (!dump.empty()) dev.RequestFrameDump(dump);     // the shadow test dumps its last frame
         }
         dev.BeginFrame();
-        dev.SetViewport({0, 0, kWidth, kHeight, 0.0f, 1.0f});
+        dev.SetViewport({0, 0, g_width, g_height, 0.0f, 1.0f});
         dev.Clear(CLEAR_TARGET | CLEAR_ZBUFFER, 0xFF6080A0, 1.0f);
         // --cache-test K: after K frames, look straight down past the big right cube (which the "game" then no
         // longer draws, as it is out of view) at the tip of its shadow, which must stay if rvk remembered it.
         bool topDown = cacheTest > 0 && frame >= cacheTest;
         if (topDown) {
             dev.SetTransform(View, LookAtLH({7.5f, 4, 6.5f}, {7.5f, 0, 6.5f}, {0, 0, 1}));
-            dev.SetTransform(Projection, PerspectiveLH(kPi / 4.5f, float(kWidth) / kHeight, 0.5f, 200.0f));
+            dev.SetTransform(Projection, PerspectiveLH(kPi / 4.5f, float(g_width) / g_height, 0.5f, 200.0f));
         } else if (g_sunView) {
             // --sun-view: low, looking towards the sun past the cubes (volumetric light shafts).
             dev.SetTransform(View, LookAtLH({11.0f, 1.5f, 11.0f}, {2.0f, 5.0f, 3.5f}, {0, 1, 0}));
@@ -1836,13 +1837,13 @@ void RunShadowTest(D& dev, int frames, const std::string& shot, int cacheTest, i
             // --camera-yaw r: the camera turns r radians a frame around the scene (motion blur test).
             float a = g_cameraYaw * float(frame), ex = 16.6f * std::sin(a), ez = 2.0f - 16.6f * std::cos(a);
             dev.SetTransform(View, LookAtLH({ex, 9, ez}, {0, 0, 2}, {0, 1, 0}));
-            dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(kWidth) / kHeight, 0.5f, 200.0f));
+            dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.5f, 200.0f));
         } else {
             if (g_grassWalk >= -10.0f)
                 dev.SetTransform(View, LookAtLH({0, 3.0f, -8.5f}, {0, 0.3f, -3.5f}, {0, 1, 0}));
             else
                 dev.SetTransform(View, LookAtLH({0, 9, -14}, {0, 0, 2}, {0, 1, 0}));
-            dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(kWidth) / kHeight, 0.5f, 200.0f));
+            dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.5f, 200.0f));
         }
         dev.SetTransform(World, Identity());
         dev.SetRenderState(RS_ZENABLE, 1);
@@ -2118,18 +2119,18 @@ void RunShadowTest(D& dev, int frames, const std::string& shot, int cacheTest, i
             Matrix saveView = LookAtLH({0, 9, -14}, {0, 0, 2}, {0, 1, 0});
             dev.SetTransform(View, LookAtLH({0, 0, -6}, {0, 0, 0}, {0, 1, 0}));
             dev.SetTransform(Projection, PerspectiveLH(kPi / 4, 1.0f, 0.5f, 50.0f));   // a window's own projection
-            dev.SetViewport({kWidth - 200, 20, 180, 180, 0.0f, 1.0f});
+            dev.SetViewport({g_width - 200, 20, 180, 180, 0.0f, 1.0f});
             std::vector<VtxMesh> pv;
             std::vector<uint16_t> pi;
             AddCube(pv, pi, 0, 0, 0, 1.5f);
             dev.DrawIndexedPrimitive(TriangleList, kFvfMesh, pv.data(), uint32_t(pv.size()), pi.data(), uint32_t(pi.size()));
-            dev.SetViewport({0, 0, kWidth, kHeight, 0.0f, 1.0f});
+            dev.SetViewport({0, 0, g_width, g_height, 0.0f, 1.0f});
             if (!topDown) {
                 dev.SetTransform(View, saveView);
-                dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(kWidth) / kHeight, 0.5f, 200.0f));
+                dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.5f, 200.0f));
             } else {
                 dev.SetTransform(View, LookAtLH({7.5f, 4, 6.5f}, {7.5f, 0, 6.5f}, {0, 0, 1}));
-                dev.SetTransform(Projection, PerspectiveLH(kPi / 4.5f, float(kWidth) / kHeight, 0.5f, 200.0f));
+                dev.SetTransform(Projection, PerspectiveLH(kPi / 4.5f, float(g_width) / g_height, 0.5f, 200.0f));
             }
         }
         // Anarchy Online's blob shadow (GfxVisualSimpleShadow_c, 8 segments) under the small cube: rvk hides it
@@ -2221,10 +2222,10 @@ void RunPointShadowTest(D& dev, int frames, const std::string& shot, const std::
             if (!dump.empty()) dev.RequestFrameDump(dump);
         }
         dev.BeginFrame();
-        dev.SetViewport({0, 0, kWidth, kHeight, 0.0f, 1.0f});
+        dev.SetViewport({0, 0, g_width, g_height, 0.0f, 1.0f});
         dev.Clear(CLEAR_TARGET | CLEAR_ZBUFFER, 0xFF101828, 1.0f);
         dev.SetTransform(View, LookAtLH({g_off[0], g_off[1] + 13, g_off[2] - 11}, {g_off[0], g_off[1], g_off[2] + 1.5f}, {0, 1, 0}));
-        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(kWidth) / kHeight, 0.5f, 200.0f));
+        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.5f, 200.0f));
         dev.SetTransform(World, Offset());
         dev.SetRenderState(RS_ZENABLE, 1);
         dev.SetRenderState(RS_ZWRITEENABLE, 1);
@@ -2503,13 +2504,13 @@ void RunLeafScene(D& dev, int frames, const std::string& shot, const std::string
         if (g_leafFilm > 0)
             Sleep(16);
         dev.BeginFrame();
-        dev.SetViewport({0, 0, kWidth, kHeight, 0.0f, 1.0f});
+        dev.SetViewport({0, 0, g_width, g_height, 0.0f, 1.0f});
         dev.Clear(CLEAR_TARGET | CLEAR_ZBUFFER, 0xFF8AB0D8, 1.0f);
         const float ex = mid + dist * std::sin(g_leafCamYaw), ez = -dist * std::cos(g_leafCamYaw);
         const float lookY = g_leafForest > 0 ? camY + 3.0f : tallest * 0.45f;
         const float lookZ = g_leafForest > 0 ? 30.0f : 0.0f;
         dev.SetTransform(View, LookAtLH({ex, camY, ez}, {mid, lookY, lookZ}, {0, 1, 0}));
-        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(kWidth) / kHeight, 0.5f, 500.0f));
+        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.5f, 500.0f));
         dev.SetTransform(World, Identity());
         dev.SetRenderState(RS_ZENABLE, 1);
         dev.SetRenderState(RS_ZWRITEENABLE, 1);
@@ -2642,11 +2643,11 @@ void RunParticleTest(D& dev, int frames, int frameMs, const std::string& shot, c
             dev.DrawPrimitive(TriangleList, FVF_XYZRHW | FVF_DIFFUSE, q, 3);
             dev.SetRenderTarget(nullptr);
         }
-        dev.SetViewport({0, 0, kWidth, kHeight, 0.0f, 1.0f});
+        dev.SetViewport({0, 0, g_width, g_height, 0.0f, 1.0f});
         dev.Clear(CLEAR_TARGET | CLEAR_ZBUFFER, 0xFF0C1018, 1.0f);
         Matrix view = LookAtLH({0, 2.2f, -4.5f}, {0, 0.9f, 0}, {0, 1, 0});
         dev.SetTransform(View, view);
-        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(kWidth) / kHeight, 0.1f, 100.0f));
+        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.1f, 100.0f));
         dev.SetTransform(World, Identity());
         dev.SetRenderState(RS_LIGHTING, 0);
         dev.SetRenderState(RS_CULLMODE, CULL_NONE);
@@ -2665,8 +2666,8 @@ void RunParticleTest(D& dev, int frames, int frameMs, const std::string& shot, c
         dev.DrawIndexedPrimitive(TriangleList, FVF_XYZ | FVF_DIFFUSE, ground, 4, gi, 6);
         if (g_particleWater) {                   // pre-transformed water between the 3D draws, as VisualLiquid_t does
             struct VW { float x, y, z, rhw; uint32_t c, s; float u, v; } water[4] = {
-                {0, 700, 0.9f, 1, 0x80204060, 0, 0, 0}, {float(kWidth), 700, 0.9f, 1, 0x80204060, 0, 1, 0},
-                {0, float(kHeight), 0.9f, 1, 0x80204060, 0, 0, 1}, {float(kWidth), float(kHeight), 0.9f, 1, 0x80204060, 0, 1, 1}};
+                {0, 700, 0.9f, 1, 0x80204060, 0, 0, 0}, {float(g_width), 700, 0.9f, 1, 0x80204060, 0, 1, 0},
+                {0, float(g_height), 0.9f, 1, 0x80204060, 0, 0, 1}, {float(g_width), float(g_height), 0.9f, 1, 0x80204060, 0, 1, 1}};
             dev.SetRenderState(RS_ZWRITEENABLE, 0);
             dev.DrawIndexedPrimitive(TriangleList, FVF_XYZRHW | FVF_DIFFUSE | FVF_SPECULAR | (1u << 8), water, 4, gi, 6);
             dev.SetRenderState(RS_ZWRITEENABLE, 1);
@@ -2827,6 +2828,7 @@ int main(int argc, char** argv)
         else if (a == "--point-shadow-slab") g_slabTest = pointShadowTest = pointShadowSun = shadows = true;
         else if (a == "--point-shadow-sun") pointShadowTest = pointShadowSun = shadows = true;
         else if (a == "--frame-ms" && i + 1 < argc) frameMs = std::atoi(argv[++i]);
+        else if (a == "--size" && i + 2 < argc) { g_width = uint32_t(std::atoi(argv[++i])); g_height = uint32_t(std::atoi(argv[++i])); }
         else if (a == "--fixed-clock" && i + 1 < argc) { g_fixedClock = true; Device::SetFixedClock(std::atof(argv[++i]) * 1e-3); }
         else if (a == "--cache-test" && i + 1 < argc) { cacheTest = std::atoi(argv[++i]); shadowTest = shadows = true; }
         else if (a == "--dump" && i + 1 < argc) dump = argv[++i];
@@ -2872,6 +2874,7 @@ int main(int argc, char** argv)
         else if (a == "--smoke-opaque" && i + 1 < argc) g_smokeOpaque = float(std::atof(argv[++i]));
         else if (a == "--smoke-wisps" && i + 1 < argc) g_smokeWisps = float(std::atof(argv[++i]));
         else if (a == "--smoke-exact") g_smokeExact = true;
+        else if (a == "--smoke-full") g_smokeHalf = false;
         else if (a == "--smoke-wind" && i + 1 < argc) g_smokeWindScale = float(std::atof(argv[++i]));
         else if (a == "--smoke-density" && i + 1 < argc) g_smokeDensity = float(std::atof(argv[++i]));
         else if (a == "--rain" && i + 1 < argc) { g_rainForce = float(std::atof(argv[++i])); hdr = true; }
@@ -3004,7 +3007,7 @@ int main(int argc, char** argv)
         wc.lpszClassName = "rvk_demo";
         wc.hCursor = LoadCursorA(nullptr, (LPCSTR)IDC_ARROW);
         RegisterClassA(&wc);
-        RECT r{0, 0, LONG(kWidth), LONG(kHeight)};
+        RECT r{0, 0, LONG(g_width), LONG(g_height)};
         AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
         hwnd = CreateWindowA("rvk_demo", "rvk demo", WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT,
                              r.right - r.left, r.bottom - r.top, nullptr, nullptr, wc.hInstance, nullptr);
@@ -3012,7 +3015,7 @@ int main(int argc, char** argv)
 
     Device dev;
     std::string error;
-    if (!dev.Init(hwnd, kWidth, kHeight, &error)) {
+    if (!dev.Init(hwnd, g_width, g_height, &error)) {
         std::printf("rvk init failed: %s\n", error.c_str());
         return 1;
     }
@@ -3029,6 +3032,7 @@ int main(int argc, char** argv)
         smoke.density = g_smokeDensity;
         smoke.detail = g_smokeWisps;
         smoke.exact = g_smokeExact;
+        smoke.half = g_smokeHalf;
         smoke.opacity = g_smokeOpaque;
         dev.SetSmokeParams(smoke);
     }
@@ -3104,7 +3108,7 @@ int main(int argc, char** argv)
     if (particleTest) {
         if (threaded) {
             ThreadedDevice tdev;
-            if (!tdev.Init(nullptr, kWidth, kHeight, &error)) { std::printf("init failed: %s\n", error.c_str()); return 1; }
+            if (!tdev.Init(nullptr, g_width, g_height, &error)) { std::printf("init failed: %s\n", error.c_str()); return 1; }
             tdev.SetHdr(hdr);
             tdev.SetBloom(bloom, 1.0f);
             tdev.SetHideInterface(g_hideUi);
@@ -3124,7 +3128,7 @@ int main(int argc, char** argv)
         // The benchmark through rvk::ThreadedDevice: the time measured is what stays on the calling thread.
         ThreadedDevice tdev;
         std::string err;
-        if (!tdev.Init(nullptr, kWidth, kHeight, &err)) { std::printf("init failed: %s\n", err.c_str()); return 1; }
+        if (!tdev.Init(nullptr, g_width, g_height, &err)) { std::printf("init failed: %s\n", err.c_str()); return 1; }
         double ms = Benchmark(tdev, bench);
         std::printf("bench threaded: frame %.3f ms, of which recording %.3f ms (%.2f us per draw), game work %.1f ms\n", ms,
                     g_benchRecordMs, g_benchRecordMs * 1000.0 / 2450, g_benchGameMs);
@@ -3138,7 +3142,7 @@ int main(int argc, char** argv)
     }
     if (threaded) {
         ThreadedDevice tdev;
-        if (!tdev.Init(hwnd, kWidth, kHeight, &error)) { std::printf("init failed: %s\n", error.c_str()); return 1; }
+        if (!tdev.Init(hwnd, g_width, g_height, &error)) { std::printf("init failed: %s\n", error.c_str()); return 1; }
         tdev.SetPixelLighting(pixelLighting);
         tdev.SetLightingDebug(lightingDebug);
         tdev.SetHideInterface(g_hideUi);

@@ -542,6 +542,7 @@ public:
         float detail = 1.0f;                    // RVK_SmokeWisps: the wisps finer than the grid (0 none)
         float brightness = 1.0f;                // RVK_SmokeBright: its colour, x
         float opacity = 1.0f;                   // RVK_SmokeOpaque: how opaque it is drawn (<= 1 x; above, as if thicker)
+        bool half = true;                        // RVK_SmokeHalf: marched at half size, upsampled by depth
         bool exact = false;                      // RVK_SmokeExact: the pressure solved closer (from the last step's;
                                                  // cheaper too - but its plumes rise less high: a look of its own)
     };
@@ -1545,6 +1546,11 @@ private:
     VkDescriptorSetLayout m_smokeSimSetLayout = VK_NULL_HANDLE, m_smokeSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_smokeSimLayout = VK_NULL_HANDLE, m_smokeLayout = VK_NULL_HANDLE;
     VkPipeline m_smokeSimPipeline = VK_NULL_HANDLE, m_smokePipeline = VK_NULL_HANDLE;
+    VkPipeline m_smokeHalfPipeline = VK_NULL_HANDLE, m_smokeUpPipeline = VK_NULL_HANDLE;   // RVK_SmokeHalf
+    VkDescriptorSetLayout m_smokeUpSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout m_smokeUpLayout = VK_NULL_HANDLE;
+    Texture* m_smokeHalf = nullptr;              // RVK_SmokeHalf: the smoke at half size (premultiplied)
+    Texture* m_smokeHalfDepth = nullptr;         // ... and the view depth each pixel was marched to (R)
     bool CreateSmokeResources(std::string* error);
     void DestroySmokeResources();
     void DestroySmokeImages();

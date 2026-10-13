@@ -17,10 +17,15 @@ layout(location = 1) flat in vec3 vLow;     // the part of the box drawn (with s
 layout(location = 2) flat in vec3 vHigh;
 
 layout(location = 0) out vec4 outScene;
+#ifdef RVK_SMOKE_HALF
+// Half size (RVK_SmokeHalf): the smoke, and the view depth this pixel marched to (smoke_up.frag weighs by it).
+layout(location = 1) out vec4 outDepth;
+#else
 layout(location = 1) out vec4 outGlow;
 layout(location = 2) out vec4 outLocal;
 layout(location = 3) out vec4 outMotion;
 layout(location = 4) out vec4 outAlbedo;
+#endif
 
 const float kPi = 3.14159265;
 
@@ -50,7 +55,9 @@ float Fog(float d)
 
 void main()
 {
+#ifndef RVK_SMOKE_HALF
     outGlow = outLocal = outMotion = outAlbedo = vec4(0.0);
+#endif
     vec3 eye = S.camera.xyz;
     vec3 dir = normalize(vWorld - eye);
     // The far faces only (outward normal away from the camera): the face this point is on is the nearest wall.
@@ -71,7 +78,18 @@ void main()
     float enter = max(max(max(tmin.x, tmin.y), tmin.z), 0.0);
     float leave = min(min(tmax.x, tmax.y), tmax.z);
     // ... and no further than the scene there.
+#ifdef RVK_SMOKE_HALF
+    // The scene's four depths under this pixel: the nearest or the farthest, alternately (a checkerboard), so both
+    // sides of an edge have pixels marched to them.
+    ivec2 at = ivec2(gl_FragCoord.xy) * 2, last = ivec2(S.viewport.xy) - 1;
+    float d0 = texelFetch(sceneDepth, min(at, last), 0).r, d1 = texelFetch(sceneDepth, min(at + ivec2(1, 0), last), 0).r;
+    float d2 = texelFetch(sceneDepth, min(at + ivec2(0, 1), last), 0).r, d3 = texelFetch(sceneDepth, min(at + 1, last), 0).r;
+    bool farthest = ((int(gl_FragCoord.x) + int(gl_FragCoord.y)) & 1) != 0;
+    float sd = farthest ? max(max(d0, d1), max(d2, d3)) : min(min(d0, d1), min(d2, d3));
+    outDepth = vec4(sd < 1.0 ? SmokeViewZ(sd) : 60000.0, 0.0, 0.0, 0.0);
+#else
     float sd = texelFetch(sceneDepth, ivec2(gl_FragCoord.xy), 0).r;
+#endif
     if (sd < 1.0) {
         vec3 forward = vec3(S.view[0][2], S.view[1][2], S.view[2][2]);
         leave = min(leave, SmokeViewZ(sd) / max(dot(dir, forward), 1e-3));
@@ -127,8 +145,10 @@ void main()
     light *= cover / max(alpha, 1e-5);
     alpha = cover;
     outScene = vec4(light, alpha);
+#ifndef RVK_SMOKE_HALF
     // The local-fraction target as covered as the scene: R (whose ambient occlusion is waived) towards 1 - the tone
     // mapping's occlusion, applied after this, must not darken the smoke; its reflectivity (G) and sun share (B, the
-    // contact shadows) fade behind it.
+    // contact shadows) fade behind it. (Half size: smoke_up.frag does the same.)
     outLocal = vec4(alpha, 0.0, 0.0, alpha);
+#endif
 }
