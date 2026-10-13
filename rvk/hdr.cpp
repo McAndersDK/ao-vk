@@ -585,7 +585,7 @@ void Device::LandHaze(float out[24]) const
         out[11] = 150.0f;
         // (D3D row vectors: a world direction's view-space form is d.x * row 0 + d.y * row 1 + d.z * row 2.)
         for (int k = 0; k < 3; ++k) out[12 + k] = v[1][k];
-        out[15] = 0.6f;
+        out[15] = 0.35f;                         // (0.6 washed the far land out round a rising sun - user)
         // Towards the sun, or by night the moon; their light through the air.
         const bool moon = MoonOn() && m_frameSunColor[0] + m_frameSunColor[1] + m_frameSunColor[2] <= 0.0f;
         float to[3], light[3];
@@ -599,7 +599,9 @@ void Device::LandHaze(float out[24]) const
         out[19] = 0.75f;
         const float low = 1.0f - std::clamp(to[1] / 0.3f, 0.0f, 1.0f), low2 = low * low;
         const float tint[3] = {1.0f, 1.0f - 0.35f * low2, 1.0f - 0.6f * low2};
-        for (int k = 0; k < 3; ++k) out[20 + k] = light[k] * tint[k] * (moon ? 1.0f : 0.5f);
+        // (A low sun's light through much air: a third of it at the horizon, all from ~17 degrees.)
+        const float through = 0.35f + 0.65f * std::clamp(to[1] / 0.3f, 0.0f, 1.0f);
+        for (int k = 0; k < 3; ++k) out[20 + k] = light[k] * tint[k] * (moon ? 1.0f : 0.5f * through);
     }
     if (m_frameNumber % 600 == 3)
         Log("land haze: colour %.2f %.2f %.2f x %.2f, the game's fog %.0f..%.0f", double(out[0]), double(out[1]),

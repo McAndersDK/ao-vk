@@ -53,7 +53,7 @@ vec3 Air(vec3 c, float z)
     float tau = P.air0.z * dist * clamp(f, 0.0, 4.0);
     vec3 through = exp(-tau * vec3(0.8, 1.0, 1.3));
     float g = P.air2.w, cosT = dot(dir, P.air2.xyz);
-    float phase = min((1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * cosT, 1.5), 10.0);
+    float phase = min((1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * cosT, 1.5), 5.0);
     vec3 scattered = (1.0 - through) * P.haze.rgb + (1.0 - exp(-tau)) * P.air3.rgb * (phase * P.air1.w);
     c = c * through + scattered;
     // The valley mist (rvk mist.cpp): a layer up to P.fog.z over the eye, fading over ~8 units above. Its depth along
