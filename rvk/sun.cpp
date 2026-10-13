@@ -102,12 +102,14 @@ void Device::DrawSun()
     }
     // How much of each is seen: this frame slot's measure (made when it last ran: its commands are done now), eased -
     // the glare swelling in as a sun comes out (~0.35 s), going quickly as it goes behind something (~0.08 s).
-    float target[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    // Not measured (looking away, or no cloud pass this frame): kept as known - unless there are no clouds at all.
+    float target[4];
+    for (int k = 0; k < 4; ++k) target[k] = m_cloudParams.enable ? m_sunSeen[k] : 1.0f;
     if (m_sunVisMeasured[m_frameIndex] && m_sunVisCpu) {
         vmaInvalidateAllocation(m_allocator, m_sunVisAllocation, m_sunVisStride * m_frameIndex, 16);
         const float* seen = reinterpret_cast<const float*>(m_sunVisCpu + m_sunVisStride * m_frameIndex);
         for (uint32_t k = 0; k < m_sunVisCount[m_frameIndex] && k < 4; ++k)
-            target[k] = std::clamp(seen[k], 0.0f, 1.0f);
+            if (seen[k] >= 0.0f) target[k] = std::min(seen[k], 1.0f);
         m_sunVisMeasured[m_frameIndex] = false;
     }
     const float dt = m_sunSeenClock < 0.0 ? 1.0f : float(std::clamp(m_frameClock - m_sunSeenClock, 0.0, 1.0));
@@ -144,10 +146,23 @@ void Device::DrawSun()
         d.seed = float(k) * 17.31f;
         m_sunsDrawn.push_back(d);
     }
+    // How much of the sun - the sprite nearest the light's way - the clouds and the land let through (RenderShadowMap:
+    // low, where the cloud shadow map can't reach, the frame's sun dimmed by it).
+    {
+        const float* l = m_sunLuminance > 0.0f ? m_sunDir : m_trueSunDir;
+        float best = -2.0f;
+        for (size_t k = 0; k < m_sunsDrawn.size() && k < 4; ++k) {
+            const float* d = m_sunsDrawn[k].dir;
+            const float dot = -(d[0] * l[0] + d[1] * l[1] + d[2] * l[2]);
+            if (dot > best) { best = dot; m_sunThrough = m_sunSeen[k]; }
+        }
+        if (best < 0.9f) m_sunThrough = 1.0f;    // (no sprite near the light: not known)
+    }
     DrawSuns(false);
     if (m_frameNumber % 600 == 50) {
-        Log("suns: %zu sprites (last frame's), %zu drawn; seen %.2f %.2f %.2f %.2f", m_sunSprites.size(),
-            m_sunsDrawn.size(), double(m_sunSeen[0]), double(m_sunSeen[1]), double(m_sunSeen[2]), double(m_sunSeen[3]));
+        Log("suns: %zu sprites (last frame's), %zu drawn; seen %.2f %.2f %.2f %.2f; the light's through %.2f",
+            m_sunSprites.size(), m_sunsDrawn.size(), double(m_sunSeen[0]), double(m_sunSeen[1]), double(m_sunSeen[2]),
+            double(m_sunSeen[3]), double(m_sunThrough));
         for (const SunSprite& s : m_sunSprites)
             Log("  sprite: hub %u towards (%.3f %.3f %.3f) size %.3f tint %.2f %.2f %.2f rim %.2f", s.hub,
                 double(s.dir[0]), double(s.dir[1]), double(s.dir[2]), double(s.size), double(s.colour[0]),

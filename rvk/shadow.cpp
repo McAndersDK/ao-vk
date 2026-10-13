@@ -1170,7 +1170,14 @@ void Device::RenderShadowMap(VkCommandBuffer cmd)
     m_animatedItems.clear();
     // The sun for effects that don't need the shadow map (light through leaves, contact shadows).
     if (haveSun || lowSun || moon) std::memcpy(m_frameSunDir, lightDir, sizeof(m_frameSunDir));
-    for (int i = 0; i < 3; ++i) m_frameSunColor[i] = haveSun ? m_sunColor[i] : lowSun ? m_sunColor[i] * lowFade : 0.0f;
+    // Low, the cloud shadow map can't reach (its plane met too far off: none under ~3 degrees, coarse to ~6): the sun's
+    // light for our effects (leaves, air, clouds) dimmed by how much of it the clouds and the land let through - a
+    // dawn sun behind a cloud bank lit the trees and air gold (user, 2026-10-13).
+    const float upNow = -m_sunDir[1];
+    const float lowShade = 1.0f - std::clamp((upNow - 0.05f) / 0.05f, 0.0f, 1.0f);
+    const float through = 1.0f + (std::clamp(m_sunThrough, 0.0f, 1.0f) - 1.0f) * lowShade;
+    for (int i = 0; i < 3; ++i)
+        m_frameSunColor[i] = (haveSun ? m_sunColor[i] : lowSun ? m_sunColor[i] * lowFade : 0.0f) * through;
     m_frameLightsDirty = true;
     // The world camera: the one most casters were drawn with.
     uint32_t world = 0;
@@ -1340,7 +1347,7 @@ void Device::RenderShadowMap(VkCommandBuffer cmd)
     m_shadowImageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     m_cascadeCount = count;
     std::memcpy(m_shadowSunDir, lightDir, sizeof(m_shadowSunDir));
-    for (int i = 0; i < 3; ++i) m_shadowSunColor[i] = haveSun ? m_sunColor[i] : 0.0f;   // (the moon: FrameLights moon)
+    for (int i = 0; i < 3; ++i) m_shadowSunColor[i] = haveSun ? m_frameSunColor[i] : 0.0f;   // (the moon: FrameLights moon)
     m_shadowIsMoon = !haveSun;
     m_shadowValid = true;
 }

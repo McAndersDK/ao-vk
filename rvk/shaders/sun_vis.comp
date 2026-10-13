@@ -2,7 +2,8 @@
 // How much of each sun sprite's core is seen (rvk/sun.cpp MeasureSunVisibility): run with the clouds' own commands,
 // after the depth pre-pass and the cloud layer's march. 64 points over the core's disc on the screen: sky there (the
 // pre-pass left its depth at the clear value) and how little cloud covers it (the layer's alpha: its coverage). One
-// workgroup a sprite; the mean written for the CPU (read a frame or two later, eased: the glare swelling in).
+// workgroup a sprite; the mean over the points on the screen written for the CPU (read a frame or two later, eased:
+// the glare swelling in), -1 when none is (looking away: the CPU keeps what it knew).
 layout(local_size_x = 64) in;
 layout(push_constant) uniform Params {
     vec4 sun[4];        // xy: the core's middle (pixels), z: its radius (pixels), w: 1 on screen ahead, 0 not
@@ -12,13 +13,13 @@ layout(binding = 0) uniform sampler2D sceneDepth;
 layout(binding = 1) uniform sampler2D clouds;
 layout(binding = 2) buffer Out { float seen[4]; } O;
 
-shared float s_seen[64];
+shared float s_seen[64], s_on[64];
 
 void main()
 {
     uint k = gl_WorkGroupID.x, i = gl_LocalInvocationID.x;
     vec4 s = P.sun[k];
-    float seen = 1.0;
+    float seen = 0.0, on = 0.0;                 // (on: a point on the screen - else unknown)
     if (s.w > 0.5) {
         float rr = s.z * sqrt((float(i) + 0.5) / 64.0), a = float(i) * 2.3999632;
         vec2 p = s.xy + rr * vec2(cos(a), sin(a));
@@ -26,14 +27,16 @@ void main()
             bool sky = texelFetch(sceneDepth, ivec2(p), 0).r == P.info.z;
             float cover = P.info.w > 0.5 ? clamp(textureLod(clouds, p / P.info.xy, 0.0).a, 0.0, 1.0) : 0.0;
             seen = sky ? 1.0 - cover : 0.0;
+            on = 1.0;
         }
     }
     s_seen[i] = seen;
+    s_on[i] = on;
     barrier();
     for (uint n = 32u; n > 0u; n >>= 1u) {
-        if (i < n) s_seen[i] += s_seen[i + n];
+        if (i < n) { s_seen[i] += s_seen[i + n]; s_on[i] += s_on[i + n]; }
         barrier();
     }
-    if (i == 0u)
-        O.seen[k] = s_seen[0] / 64.0;
+    if (i == 0u)                                 // (-1: not on the screen - the CPU keeps what it knew)
+        O.seen[k] = s_on[0] > 0.5 ? s_seen[0] / s_on[0] : -1.0;
 }
