@@ -64,6 +64,9 @@ void main()
             gRayStart[c] = (FL.shadowViewProj[c] * vec4(P.eye.xyz, 1.0)).xyz;
             gRayDir[c] = (FL.shadowViewProj[c] * vec4(dir, 0.0)).xyz;
         }
+        // (Things' shadows fade out as the sun nears the horizon, as on the ground - rvk draw.cpp: full from ~10 degrees
+        // up, none at ~3. Unfaded, shafts of shadows no longer seen came from invisible things - user, 2026-10-13.)
+        float casterFade = smoothstep(0.05, 0.17, -normalize(FL.sunDir.xyz).y);
         float lit = 0.0, open = 0.0;
         for (int i = 0; i < steps; ++i) {
             float u = (float(i) + noise) / float(steps), t = len * u * u;
@@ -72,7 +75,7 @@ void main()
             // the sky leave it soon (the sky isn't washed out), air near the ground - where shadows fall - keeps it.
             float density = exp(-max(q.y - (P.eye.y - 2.0), 0.0) / kHazeHeight);
             float w = (2.0 * u) * exp(-kExtinction * t) * density;
-            lit += SunVisible(t) * CloudShadowMap(q) * w;
+            lit += mix(1.0, SunVisible(t), casterFade) * CloudShadowMap(q) * w;
             open += w;
         }
         // Shafts are contrast: a ray partly in shadow is darkened by a power of its lit fraction, a fully lit one

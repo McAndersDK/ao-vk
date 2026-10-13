@@ -407,6 +407,13 @@ vec3 NormalMapNormal(vec3 n, vec3 posW, vec2 uv)
     return BendNormal(n, px, py, dot(slope, uvx) * worldPerUv, dot(slope, uvy) * worldPerUv);
 }
 
+// Things' shadows fading out as the light nears the horizon (rvk draw.cpp folds it into FL.shadowParams.y: full from
+// ~10 degrees up, none at ~3) - for the uses of the visibility that don't go through that strength.
+float CasterFade()
+{
+    return smoothstep(0.05, 0.17, -normalize(FL.sunDir.xyz + vec3(0.0, 1e-6, 0.0)).y);
+}
+
 float gSunVisibility = 1.0;          // SunVisibility(vPosW, vNormalW) when computed (main)
 bool gSunVisibilityValid = false;
 
@@ -590,7 +597,7 @@ void main()
             // shadow cascades, whose shadows a low sun makes long), and fading as the sun nears the horizon.
             if (gPbrBase && dot(FL.sunColor.rgb, FL.sunColor.rgb) > 0.0 && dot(FL.sunDir.xyz, FL.sunDir.xyz) > 0.0) {
                 vec3 Ls = -normalize(FL.sunDir.xyz);
-                float sunVis = gSunVisibilityValid ? gSunVisibility : 1.0;
+                float sunVis = gSunVisibilityValid ? mix(1.0, gSunVisibility, CasterFade()) : 1.0;
                 float horizon = smoothstep(0.03, 0.25, Ls.y);
                 float baked = smoothstep(0.2, 0.55, dot(Sample(0u).rgb, vec3(0.3, 0.59, 0.11)));
                 gPbrSpec += FL.sunColor.rgb * PbrSpecular(gPbrNormal, Ls, V) * (sunVis * horizon * baked) * FL.pbr.x;
@@ -685,7 +692,7 @@ void main()
             if (through + glare > 0.0) {
                 // The sun's visibility on the lit side: the shadow already computed for the surface (a second,
                 // opposite-side search only darkened back-lit leaves and cost another few taps).
-                float visible = FL.shadowParams.x <= 0.5 ? 1.0 : gSunVisibilityValid ? gSunVisibility : 1.0;
+                float visible = FL.shadowParams.x <= 0.5 ? 1.0 : gSunVisibilityValid ? mix(1.0, gSunVisibility, CasterFade()) : 1.0;
                 current.rgb += t0.rgb * FL.sunColor.rgb * ((0.5 * through + 0.7 * glare) * visible * holes * FL.effects.x);
             }
         }
