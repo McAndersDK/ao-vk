@@ -24,6 +24,8 @@ layout(set = 0, binding = 0, std140) uniform LayerFrame {
                         // 2x2 marched, into a quarter-size target) or 1 (every pixel)
     vec4 horizon;       // x: how much the game fogs its clouds (0..1: towards the horizon they become the fog's colour,
                         // as the game's do - the fogged ground meets them seamlessly); y: contrast (RVK_CloudShade)
+    vec4 shadowArea;    // the shadow map (RVK_CLOUD_SHADOW): its corner x, z (world), its size, the plane it lies in
+                        // (world y)
 } L;
 layout(set = 0, binding = 1) uniform sampler2D weatherMap;
 layout(set = 0, binding = 2) uniform sampler3D shapeNoise;
@@ -115,6 +117,35 @@ float Density(vec3 p, bool detail)
 float HG(float c, float g) { return (1.0 - g * g) / (4.0 * kPi * pow(1.0 + g * g - 2.0 * g * c, 1.5)); }
 
 
+#ifdef RVK_CLOUD_SHADOW
+// The clouds' shadow map (rvk/clouds.cpp MakeCloudLayerShadow): top down, in a plane through the layer - for each
+// texel, the sunlight through the layer along the sun's way (a few samples through its height): 1 clear. Ground
+// shadows (ffp_main, grass, water) and the light shafts read it where the sun's ray through a point meets the plane.
+void main()
+{
+    vec3 eye = L.eye.xyz;
+    float R = L.layer.z;
+    gCentre = vec3(eye.x, eye.y - R, eye.z);
+    gInner = R + (L.layer.x - eye.y);
+    gThick = (R + (L.layer.y - eye.y)) - gInner;
+    vec3 sunL = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
+    if (sunL.y < 0.05) {
+        outScene = vec4(1.0);
+        return;
+    }
+    vec3 p = vec3(L.shadowArea.x + gl_FragCoord.x / 256.0 * L.shadowArea.z, L.shadowArea.w,
+                  L.shadowArea.y + gl_FragCoord.y / 256.0 * L.shadowArea.z);
+    const int kSamples = 8;
+    float od = 0.0, span = (L.layer.y - L.layer.x) / float(kSamples);
+    for (int k = 0; k < kSamples; ++k) {
+        float y = L.layer.x + span * (float(k) + 0.5);
+        od += Density(p + sunL * ((y - p.y) / sunL.y), false);
+    }
+    od *= span / sunL.y * L.shape.w;
+    float light = exp(-od * 0.25);                // (softened: thin cloud a light shade, thick cloud dark)
+    outScene = vec4(light, light, light, 1.0);
+}
+#else
 void main()
 {
     // The half-size pixel marched (one of each 2x2 when reused over frames).
@@ -245,3 +276,4 @@ void main()
     float fade = 1.0 - smoothstep(0.7 * L.layer.w, L.layer.w, dist);
     outScene = vec4(light, alpha) * fade;
 }
+#endif

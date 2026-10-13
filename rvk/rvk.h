@@ -1666,7 +1666,9 @@ private:
     void UpdateCloudDrift();
     double m_cloudBaseClock = -1.0;
     void MakeCloudWeather(VkCommandBuffer cmd, const float eye[3]);
-    void MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float sub[4]);
+    void MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float sub[4], const float* shadowArea = nullptr);
+    void MakeCloudLayerShadow(VkCommandBuffer cmd, const float eye[3]);
+    VkPipeline m_cloudLayerShadowPipeline = VK_NULL_HANDLE;
     // ... reused over frames (cloud_resolve.frag): one half-size pixel of each 2x2 marched a frame (into the quarter-
     // size target), the half-size clouds rebuilt from them and last frame's (two, in turn).
     Texture* m_cloudQuarter = nullptr;

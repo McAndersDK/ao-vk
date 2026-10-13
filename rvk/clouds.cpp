@@ -50,6 +50,9 @@ const uint32_t kCloudWeatherFragSpirv[] = {
 const uint32_t kCloudLayerFragSpirv[] = {
 #include "cloud_layer.frag.inc"
 };
+const uint32_t kCloudLayerShadowFragSpirv[] = {   // cloud_layer.frag built with RVK_CLOUD_SHADOW
+#include "cloud_layer_shadow.frag.inc"
+};
 const uint32_t kCloudResolveFragSpirv[] = {
 #include "cloud_resolve.frag.inc"
 };
@@ -68,6 +71,7 @@ constexpr uint32_t kNoiseSize = 64;             // the clouds' noise image (cell
 // RVK_CloudLayer.
 constexpr uint32_t kShapeSize = 128, kDetailSize = 64;   // the layer's noise images (cells a side; tiling)
 constexpr uint32_t kWeatherSize = 256;          // the weather map (pixels a side)
+constexpr float kLayerShadowArea = 12000.0f;    // RVK_CloudLayer's shadow map: over this much (world) round the camera
 // The game's puff textures (RDB 1010004): single_cloud01..03 (121213, 121212, 121211) fibrous puffs, 04 streaky wisps.
 constexpr uint32_t kCloudTexWispy = 121214;
 constexpr float kWeatherArea = 24000.0f;        // ... over this much of the world round the camera
@@ -80,7 +84,8 @@ struct WeatherFrame {
 
 struct LayerFrame {
     d3d::Matrix invViewProj;
-    float eye[4], layer[4], weather[4], shape[4], wind[4], tint[4], ambient[4], haze[4], view[4], sub[4], horizon[4];
+    float eye[4], layer[4], weather[4], shape[4], wind[4], tint[4], ambient[4], haze[4], view[4], sub[4], horizon[4],
+        shadowArea[4];
 };
 
 struct ResolveFrame {
@@ -412,14 +417,17 @@ bool Device::CreateCloudResources(std::string* error)
            pipeline(kFullscreenVertSpirv, sizeof(kFullscreenVertSpirv), kCloudWeatherFragSpirv, sizeof(kCloudWeatherFragSpirv),
                     m_cloudWeatherLayout, &weatherFormat, 1, VK_FORMAT_UNDEFINED, &m_cloudWeatherPipeline) &&
            pipeline(kFullscreenVertSpirv, sizeof(kFullscreenVertSpirv), kCloudLayerFragSpirv, sizeof(kCloudLayerFragSpirv),
-                    m_cloudLayerLayout, &halfFormat, 1, VK_FORMAT_UNDEFINED, &m_cloudLayerPipeline);
+                    m_cloudLayerLayout, &halfFormat, 1, VK_FORMAT_UNDEFINED, &m_cloudLayerPipeline) &&
+           pipeline(kFullscreenVertSpirv, sizeof(kFullscreenVertSpirv), kCloudLayerShadowFragSpirv,
+                    sizeof(kCloudLayerShadowFragSpirv), m_cloudLayerLayout, &shadowFormat, 1, VK_FORMAT_UNDEFINED,
+                    &m_cloudLayerShadowPipeline);
 }
 
 void Device::DestroyCloudResources()
 {
     for (VkPipeline* p : {&m_cloudPipeline, &m_cloudHalfPipeline, &m_cloudUpPipeline, &m_cloudUpScenePipeline,
                           &m_cloudShadowPipeline, &m_cloudLayerNoisePipeline, &m_cloudWeatherPipeline, &m_cloudLayerPipeline,
-                          &m_cloudResolvePipeline})
+                          &m_cloudResolvePipeline, &m_cloudLayerShadowPipeline})
         if (*p) { vkDestroyPipeline(m_device, *p, nullptr); *p = VK_NULL_HANDLE; }
     for (VkPipelineLayout* l : {&m_cloudLayerNoiseLayout, &m_cloudWeatherLayout, &m_cloudLayerLayout, &m_cloudResolveLayout})
         if (*l) { vkDestroyPipelineLayout(m_device, *l, nullptr); *l = VK_NULL_HANDLE; }
@@ -710,8 +718,13 @@ void Device::DrawClouds(VkCommandBuffer cmd)
         vkEndCommandBuffer(work);
         f.cloudsRecorded = true;
     };
+    if (layer)
+        MakeCloudWeather(work, eyeNow);          // (the layer's shadow and march read it)
     if (shadow) {
-        MakeCloudShadow(work);
+        if (layer)
+            MakeCloudLayerShadow(work, eyeNow);
+        else
+            MakeCloudShadow(work);
         m_frameLightsDirty = true;                // (the scene's draws after the sky read it through the frame lights)
     }
     if (!half) {
@@ -731,7 +744,6 @@ void Device::DrawClouds(VkCommandBuffer cmd)
         float lo[2] = {0.0f, 0.0f}, hi[2] = {float(fw), float(fh)};
         Texture* clouds = m_cloudHalf;           // the half-size clouds to filter up
         if (layer) {
-            MakeCloudWeather(work, eyeNow);
             clouds = ReusedCloudLayer(work, skipCovered, eyeNow);
         } else {
             Transition(work, m_cloudHalf, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -1223,11 +1235,13 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
 // RVK_CloudLayer: the layer marched over the half-size target (inside its rendering), one fullscreen pass. The world
 // camera: the frame's (the first scene draw writing depth), else the draw's that set the clouds off (the first after
 // the sky).
-void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float sub[4])
+void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float sub[4], const float* shadowArea)
 {
     Frame& f = m_frames[m_frameIndex];
     const uint32_t hw = (m_scene->m_width + 1) / 2, hh = (m_scene->m_height + 1) / 2;
-    const uint32_t tw = sub[2] > 1.5f ? (hw + 1) / 2 : hw, th = sub[2] > 1.5f ? (hh + 1) / 2 : hh;   // the target's
+    uint32_t tw = sub[2] > 1.5f ? (hw + 1) / 2 : hw, th = sub[2] > 1.5f ? (hh + 1) / 2 : hh;   // the target's
+    if (shadowArea)
+        tw = th = kShadowSize;                   // (the shadow map: cloud_layer_shadow.frag)
     const d3d::Matrix& view = m_aoProjValid ? m_aoView : m_view;
     const d3d::Matrix& proj = m_aoProjValid ? m_aoProj : m_proj;
     LayerFrame lf{};
@@ -1328,6 +1342,8 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     lf.view[2] = float(std::clamp(m_cloudParams.steps * 3u, 32u, 192u));
     lf.view[3] = 4.0f;
     std::memcpy(lf.sub, sub, sizeof(lf.sub));
+    if (shadowArea)
+        std::memcpy(lf.shadowArea, shadowArea, sizeof(lf.shadowArea));
     void* cpu = nullptr;
     const VkDeviceSize offset = Allocate(sizeof(LayerFrame), 256, &cpu);
     std::memcpy(cpu, &lf, sizeof(lf));
@@ -1335,7 +1351,7 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     VkRect2D scissor{{0, 0}, {tw, th}};
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudLayerPipeline);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowArea ? m_cloudLayerShadowPipeline : m_cloudLayerPipeline);
     VkDescriptorBufferInfo blockInfo{f.ring, offset, sizeof(LayerFrame)};
     VkDescriptorBufferInfo lightsInfo{f.ring, m_frameLightsOffset, sizeof(FrameLights)};
     VkDescriptorImageInfo weatherInfo{m_cloudClampSampler, m_cloudWeather->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -1456,6 +1472,45 @@ Texture* Device::ReusedCloudLayer(VkCommandBuffer cmd, bool skipCovered, const f
     m_cloudHistoryFrame = m_frameNumber;
     std::memcpy(m_cloudHistoryEye, eye, sizeof(m_cloudHistoryEye));
     return m_cloudHistory[cur];
+}
+
+// RVK_CloudLayer's shadow map: the sunlight through the layer, top down in a plane through it (cloud_layer_shadow.frag,
+// the weather map made already) - the ground's shadows match the clouds seen. Placed where the sun's rays through
+// the ground round the camera cross the plane. Outside any rendering.
+void Device::MakeCloudLayerShadow(VkCommandBuffer cmd, const float eye[3])
+{
+    if (!m_cloudShadowMap) {
+        m_cloudShadowMap = CreateImage(kShadowSize, kShadowSize, Format::RGBA8, 1, true);
+        if (!m_cloudShadowMap)
+            return;
+    }
+    float sun[3] = {-m_frameSunDir[0], -m_frameSunDir[1], -m_frameSunDir[2]};
+    const float sl = std::max(std::sqrt(sun[0] * sun[0] + sun[1] * sun[1] + sun[2] * sun[2]), 1e-6f);
+    for (float& v : sun) v /= sl;
+    const float plane = m_cloudBase + 0.35f * kLayerThickness;
+    const float up = std::max(sun[1], 0.2f);    // (low sun: the offset capped)
+    const float cx = eye[0] + (plane - eye[1]) * sun[0] / up, cz = eye[2] + (plane - eye[1]) * sun[2] / up;
+    const float area = kLayerShadowArea, texel = area / float(kShadowSize);
+    float shadowArea[4] = {std::floor((cx - area * 0.5f) / texel) * texel, std::floor((cz - area * 0.5f) / texel) * texel,
+                           area, plane};
+    Transition(cmd, m_cloudShadowMap, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    color.imageView = m_cloudShadowMap->m_view;
+    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    ri.renderArea = {{0, 0}, {kShadowSize, kShadowSize}};
+    ri.layerCount = 1;
+    ri.colorAttachmentCount = 1;
+    ri.pColorAttachments = &color;
+    vkCmdBeginRendering(cmd, &ri);
+    const float sub[4] = {0.0f, 0.0f, 1.0f, 0.0f};
+    MarchCloudLayer(cmd, false, sub, shadowArea);
+    vkCmdEndRendering(cmd);
+    Transition(cmd, m_cloudShadowMap, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    std::memcpy(m_cloudShadowArea, shadowArea, sizeof(m_cloudShadowArea));
+    m_cloudShadowFrame = m_frameNumber;
 }
 
 VkImageView Device::CloudShadowView() const
