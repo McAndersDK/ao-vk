@@ -1239,26 +1239,62 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     lf.wind[1] = m_cloudDrift[2];
     lf.wind[2] = m_cloudDrift[1];
     lf.wind[3] = m_prepassClearZ;
-    // The game's cloud colour (its puffs lit as it lit them, by their opacity), stylised around it.
-    float tint[3] = {0.0f, 0.0f, 0.0f}, weight = 0.0f;
+    // The game's cloud colour as it shows them: each puff lit as it lit it, fogged as it fogs it (its fog by its
+    // distance - storms draw their far puffs wholly in the fog's colour: the green storm sky), averaged by opacity.
+    // The sky's light and the distance's haze: the fog the game draws its clouds in (not the ground's). Eased over
+    // seconds (puffs fade in and out).
+    float tint[3] = {0.0f, 0.0f, 0.0f}, fogColour[3] = {0.0f, 0.0f, 0.0f}, weight = 0.0f, fogWeight = 0.0f, fogged = 0.0f;
     for (const CloudPuff& p : m_cloudPuffs) {
         const float o = std::clamp(p.colour[3], 0.05f, 1.0f);
-        for (int k = 0; k < 3; ++k) tint[k] += p.colour[k] * o;
+        float f = 1.0f;                           // (1: no fog)
+        if (p.fogColour[3] > 0.5f) {
+            float mid[3], w[3];
+            for (int k = 0; k < 3; ++k) mid[k] = 0.5f * (p.low[k] + p.high[k]);
+            for (int j = 0; j < 3; ++j)
+                w[j] = mid[0] * p.world.m[0][j] + mid[1] * p.world.m[1][j] + mid[2] * p.world.m[2][j] + p.world.m[3][j];
+            const float z = std::fabs(w[0] * p.view.m[0][2] + w[1] * p.view.m[1][2] + w[2] * p.view.m[2][2] + p.view.m[3][2]);
+            const uint32_t mode = uint32_t(p.fogParams[3]);
+            if (mode == 3) f = std::clamp((p.fogParams[1] - z) / std::max(p.fogParams[1] - p.fogParams[0], 1e-3f), 0.0f, 1.0f);
+            else if (mode == 1) f = std::exp(-p.fogParams[2] * z);
+            else if (mode == 2) f = std::exp(-(p.fogParams[2] * z) * (p.fogParams[2] * z));
+            for (int k = 0; k < 3; ++k) fogColour[k] += p.fogColour[k] * o;
+            fogWeight += o;
+        }
+        for (int k = 0; k < 3; ++k)
+            tint[k] += (p.fogColour[3] > 0.5f ? p.fogColour[k] + (p.colour[k] - p.fogColour[k]) * f : p.colour[k]) * o;
+        fogged += (1.0f - f) * o;
         weight += o;
     }
-    for (int k = 0; k < 3; ++k) lf.tint[k] = weight > 0.0f ? tint[k] / weight : 0.8f;
+    float sceneFog[4], sceneFogParams[4];
+    SceneFog(sceneFog, sceneFogParams);
+    float tintNow[3], hazeNow[3];
+    for (int k = 0; k < 3; ++k) {
+        tintNow[k] = weight > 0.0f ? tint[k] / weight : 0.8f;
+        hazeNow[k] = fogWeight > 0.0f ? fogColour[k] / fogWeight
+                   : sceneFog[3] > 0.5f ? sceneFog[k] : (m_terrainAmbient[3] > 0.5f ? m_terrainAmbient[k] : 0.35f);
+    }
+    {
+        const double gap = m_cloudColourClock < 0.0 ? 1e9 : m_frameClock - m_cloudColourClock;
+        const float k = gap > 5.0 ? 1.0f : 1.0f - std::exp(-float(gap) / 3.0f);
+        for (int i = 0; i < 3; ++i) {
+            m_cloudTint[i] += (tintNow[i] - m_cloudTint[i]) * k;
+            m_cloudHaze[i] += (hazeNow[i] - m_cloudHaze[i]) * k;
+        }
+        m_cloudColourClock = m_frameClock;
+    }
+    std::memcpy(lf.tint, m_cloudTint, 12);
     const float storm = std::clamp(m_rain, 0.0f, 1.0f);
     lf.tint[3] = m_cloudParams.brightness * (1.0f - 0.4f * storm);
-    // The sky's light: its hue (the game's ambient and fog), about unit brightness - the tint carries how light.
-    float fog[4], fogParams[4];
-    SceneFog(fog, fogParams);
-    float sky[3];
-    for (int k = 0; k < 3; ++k)
-        sky[k] = 0.5f * (m_terrainAmbient[3] > 0.5f ? m_terrainAmbient[k] : 0.35f) + 0.5f * (fog[3] > 0.5f ? fog[k] : 0.35f);
-    const float luma = std::max(0.3f * sky[0] + 0.59f * sky[1] + 0.11f * sky[2], 1e-3f);
-    for (int k = 0; k < 3; ++k) lf.ambient[k] = 0.5f + 0.5f * sky[k] / luma;
+    // The sky's light: its hue (the haze's, half), about unit brightness - the tint carries how light.
+    const float luma = std::max(0.3f * m_cloudHaze[0] + 0.59f * m_cloudHaze[1] + 0.11f * m_cloudHaze[2], 1e-3f);
+    for (int k = 0; k < 3; ++k) lf.ambient[k] = 0.5f + 0.5f * m_cloudHaze[k] / luma;
     lf.ambient[3] = storm;
-    for (int k = 0; k < 3; ++k) lf.haze[k] = fog[3] > 0.5f ? fog[k] : sky[k];
+    for (int k = 0; k < 3; ++k) lf.haze[k] = m_cloudHaze[k];
+    if (m_frameNumber % 600 == 2)
+        Log("clouds: colour %.2f %.2f %.2f (the puffs as the game shows them: %.0f%% fog), haze %.2f %.2f %.2f",
+            double(m_cloudTint[0]), double(m_cloudTint[1]), double(m_cloudTint[2]),
+            double(weight > 0.0f ? 100.0f * fogged / weight : 0.0f), double(m_cloudHaze[0]),
+            double(m_cloudHaze[1]), double(m_cloudHaze[2]));
     lf.haze[3] = 16000.0f;
     lf.view[0] = float(hw);
     lf.view[1] = float(hh);

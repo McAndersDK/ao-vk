@@ -197,7 +197,10 @@ void main()
         // lit by it), dimmed by the cloud over the point (the sun's way through it stands in for up: dark storm bases).
         vec3 skyTop = L.ambient.rgb * 1.15, skyLow = L.ambient.rgb * vec3(0.66, 0.62, 0.58);
         vec3 sky = mix(skyLow, skyTop, smoothstep(0.0, 0.8, h)) * mix(0.4, 1.0, exp(-od * 0.3));
-        vec3 S = (sunColour * sun * powder * 1.5 + sky) * L.tint.rgb * L.tint.w;
+        // (The game's colour - its puffs as it shows them, fog and all - wholly in the sky's light, half in the sun's:
+        // a storm takes the game's colour, sunlit tops stay bright.)
+        vec3 S = (sunColour * sun * powder * 1.5 * mix(L.tint.rgb, vec3(dot(L.tint.rgb, vec3(0.3, 0.59, 0.11))), 0.5) +
+                  sky * L.tint.rgb) * L.tint.w;
         float stepT = exp(-d * sigma * dt);
         light += transmit * (1.0 - stepT) * S;
         depthSum += transmit * (1.0 - stepT) * tHere;

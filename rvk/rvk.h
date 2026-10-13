@@ -1648,6 +1648,8 @@ private:
     float m_cloudBase = 0.0f;                    // the layer's base (world y), easing after the eye's height
     float m_cloudCloudy = 0.0f, m_cloudType = 0.5f;   // the weather map's cloudiness and type, eased
     double m_cloudWeatherClock = -1.0;
+    float m_cloudTint[3] = {0.8f, 0.8f, 0.8f}, m_cloudHaze[3] = {0.5f, 0.5f, 0.5f};   // eased (MarchCloudLayer)
+    double m_cloudColourClock = -1.0;
     float m_cloudDrift[3] = {};                  // the clouds' drift (world x, z) and evolution (UpdateCloudDrift)
     float m_cloudWindDir[2] = {0.8f, 0.6f};
     double m_cloudDriftClock = -1.0;
