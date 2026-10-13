@@ -303,6 +303,15 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
     fl->taa[3] = float(m_windTimePrev);         // the wind's time last frame (plants' motion vectors)
     fl->shadowParams[0] = m_shadowValid ? 1.0f : 0.0f;
     fl->shadowParams[1] = m_shadowValid && m_shadowIsMoon ? 0.8f * m_shadowStrength : m_shadowStrength;
+    // Fading out as the light nears the horizon (full from ~10 degrees up, none at the ~3 degrees where the map stops):
+    // that low, the shadows of things on a ridge lie hundreds of metres down the slopes facing the light, in the far
+    // cascade's coarse texels - dark blocks on the mountains, switching off at once at the cut (user, 2026-10-13).
+    if (m_shadowValid) {
+        const float* d = m_shadowSunDir;
+        const float up = -d[1] / std::max(std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]), 1e-6f);
+        const float t = std::clamp((up - 0.05f) / (0.17f - 0.05f), 0.0f, 1.0f);
+        fl->shadowParams[1] *= t * t * (3.0f - 2.0f * t);
+    }
     fl->shadowParams[2] = float(m_cascadeCount);
     fl->shadowParams[3] = PointShadowStrength();
     // The sun the shadow map was drawn with (shadows lag a frame), or without shadows this frame's.
