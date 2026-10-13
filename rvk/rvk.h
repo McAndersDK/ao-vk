@@ -576,7 +576,6 @@ public:
         float cover = 0.0f;                      // RVK_CloudCover: the layer's coverage, more (+) or less (-)
         float height = 900.0f;                   // RVK_CloudHeight: the layer's base above the eye's ground (world)
         float shade = 1.6f;                      // RVK_CloudShade: contrast (light and shade; 1 = as lit)
-        float cirrus = 1.0f;                     // RVK_CloudCirrus: the high wisps, x (0: none)
     };
     void SetCloudParams(const CloudParams& params);
     void SmokeSourceFrame(uint64_t key, const SmokeSource& source);
@@ -1660,7 +1659,7 @@ private:
     float m_cloudTint[3] = {0.8f, 0.8f, 0.8f}, m_cloudHaze[3] = {0.5f, 0.5f, 0.5f};   // eased (MarchCloudLayer)
     double m_cloudColourClock = -1.0;
     float m_cloudFogged = 0.0f;                  // how fogged the game's clouds are (0..1), eased
-    float m_cloudWispy = 0.0f, m_cloudCirrus = 0.0f;   // the game's wispy puffs' share; the cirrus's amount (eased)
+    float m_cloudWispy = 0.0f;                   // the game's wispy puffs' share (eased; logged)
     float m_cloudDrift[3] = {};                  // the clouds' drift (world x, z) and evolution (UpdateCloudDrift)
     float m_cloudWindDir[2] = {0.8f, 0.6f};
     double m_cloudDriftClock = -1.0;

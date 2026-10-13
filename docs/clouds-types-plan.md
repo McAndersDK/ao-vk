@@ -1,6 +1,7 @@
 # Cloud types (clouds v2, next feature)
 
-Status: planned (2026-10-13). Builds on the cloud layer (`docs/clouds-layer-plan.md`, `rvk/clouds.cpp`,
+Status: planned (2026-10-13). Cirrus dropped (user, 2026-10-13: not in the game; stay near its look) - phase 1
+kept only the game's puff textures known to the renderer (Texture::m_rdbId). Builds on the cloud layer (`docs/clouds-layer-plan.md`, `rvk/clouds.cpp`,
 `cloud_layer.frag`, `cloud_weather.frag`).
 
 ## Why

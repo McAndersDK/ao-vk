@@ -68,7 +68,6 @@ constexpr uint32_t kNoiseSize = 64;             // the clouds' noise image (cell
 // RVK_CloudLayer.
 constexpr uint32_t kShapeSize = 128, kDetailSize = 64;   // the layer's noise images (cells a side; tiling)
 constexpr uint32_t kWeatherSize = 256;          // the weather map (pixels a side)
-constexpr float kCirrusHeight = 6500.0f;        // the high wisps above the eye's ground (world)
 // The game's puff textures (RDB 1010004): single_cloud01..03 (121213, 121212, 121211) fibrous puffs, 04 streaky wisps.
 constexpr uint32_t kCloudTexWispy = 121214;
 constexpr float kWeatherArea = 24000.0f;        // ... over this much of the world round the camera
@@ -81,8 +80,7 @@ struct WeatherFrame {
 
 struct LayerFrame {
     d3d::Matrix invViewProj;
-    float eye[4], layer[4], weather[4], shape[4], wind[4], tint[4], ambient[4], haze[4], view[4], sub[4], horizon[4],
-        cirrus[4];
+    float eye[4], layer[4], weather[4], shape[4], wind[4], tint[4], ambient[4], haze[4], view[4], sub[4], horizon[4];
 };
 
 struct ResolveFrame {
@@ -1159,13 +1157,7 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
         const float k = gap > 5.0 ? 1.0f : 1.0f - std::exp(-float(gap) / 8.0f);
         m_cloudCloudy += (cloudy - m_cloudCloudy) * k;
         m_cloudType += (type - m_cloudType) * k;
-        // The high wisps: always some where the game draws clouds (its puffs are fibrous, its sky wispy), more the
-        // more of them are its streaky cirrus texture and the more flat sheets; fewer in rain (the storm hides them).
-        const float wispyShare = weight > 0.0f ? wispy / weight : 0.0f;
-        const float cirrus = m_cloudPuffs.empty() ? 0.0f
-                           : std::clamp(0.35f + 0.9f * wispyShare + 0.15f * flatShare, 0.0f, 1.0f) * (1.0f - 0.8f * rain);
-        m_cloudWispy += (wispyShare - m_cloudWispy) * k;
-        m_cloudCirrus += (cirrus - m_cloudCirrus) * k;
+        m_cloudWispy += ((weight > 0.0f ? wispy / weight : 0.0f) - m_cloudWispy) * k;   // (the game's wispy puffs' share)
         m_cloudWeatherClock = m_frameClock;
     }
     wf.info[1] = m_cloudCloudy;
@@ -1180,9 +1172,9 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
     wf.drift[3] = std::clamp(m_cloudParams.cover, -1.0f, 1.0f);
     if (m_frameNumber % 600 == 1)
         Log("clouds: weather map: cloudy %.2f (now %.2f: puffs %.2f, rain %.2f), type %.2f (flat sheets %.0f%%), base %.0f "
-            "(eye %.0f); cirrus %.2f (wispy puffs %.0f%%, %u of %zu puffs' textures known)", double(wf.info[1]),
+            "(eye %.0f); wispy puffs %.0f%% (%u of %zu puffs' textures known)", double(wf.info[1]),
             double(cloudy), double(cover), double(rain), double(wf.info[2]), double(flatShare * 100.0f),
-            double(m_cloudBase), double(eye[1]), double(m_cloudCirrus), double(m_cloudWispy * 100.0f), known,
+            double(m_cloudBase), double(eye[1]), double(m_cloudWispy * 100.0f), known,
             m_cloudPuffs.size());
     m_cloudWeatherArea[0] = wf.area[0];
     m_cloudWeatherArea[1] = wf.area[1];
@@ -1317,13 +1309,6 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     // far distance is hazy, as the game's sky).
     lf.horizon[0] = std::clamp(0.55f + 0.45f * m_cloudFogged, 0.0f, 1.0f);
     lf.horizon[1] = std::clamp(m_cloudParams.shade, 0.25f, 4.0f);
-    lf.cirrus[0] = std::clamp(m_cloudCirrus * m_cloudParams.cirrus, 0.0f, 1.0f);
-    lf.cirrus[1] = m_cloudBase - m_cloudParams.height + kCirrusHeight;   // (the eye's ground + the cirrus's height)
-    {
-        const float dl = std::max(std::sqrt(m_cloudWindDir[0] * m_cloudWindDir[0] + m_cloudWindDir[1] * m_cloudWindDir[1]), 1e-3f);
-        lf.cirrus[2] = m_cloudWindDir[0] / dl;
-        lf.cirrus[3] = m_cloudWindDir[1] / dl;
-    }
     std::memcpy(lf.tint, m_cloudTint, 12);
     const float storm = std::clamp(m_rain, 0.0f, 1.0f);
     lf.tint[3] = m_cloudParams.brightness * (1.0f - 0.4f * storm);
