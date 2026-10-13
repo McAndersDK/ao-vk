@@ -1452,6 +1452,7 @@ double g_skyTime = -1.0;          // --sky-time T: the sky weather's clock (seco
 float g_moonLight = 1.0f;         // --moon-light X: RVK_MoonLight
 float g_nightDark = 1.0f;         // --night-dark X: RVK_NightDark
 bool g_atmos = true;              // --atmos 0|1: RVK_Atmos
+float g_mist = 1.0f;              // --mist X: RVK_Mist
 bool g_cloudLayer = true;         // --cloud-puffs: RVK_CloudLayer off (a volume per puff)
 bool g_cloudsHalf = true;         // --clouds-full: RVK_CloudHalf off        // --clouds-game: ... drawn as the game draws them (RVK_CloudsOn off)
 bool g_fixedClock = false;        // --fixed-clock MS: the renderer's clock steps MS a frame (no sleeping: benchmarks)
@@ -3096,6 +3097,7 @@ int main(int argc, char** argv)
         else if (a == "--moon-light" && i + 1 < argc) g_moonLight = float(std::atof(argv[++i]));
         else if (a == "--night-dark" && i + 1 < argc) g_nightDark = float(std::atof(argv[++i]));
         else if (a == "--atmos" && i + 1 < argc) g_atmos = std::atoi(argv[++i]) != 0;
+        else if (a == "--mist" && i + 1 < argc) g_mist = float(std::atof(argv[++i]));
         else if (a == "--water-z" && i + 1 < argc) g_waterZ = float(std::atof(argv[++i]));
         else if (a == "--water-noshadow") shadows = false;
         else if (a == "--water-nohdr") hdr = false;
@@ -3273,6 +3275,7 @@ int main(int argc, char** argv)
     dev.SetMoonLight(g_moonLight);
     dev.SetNightDark(g_nightDark);
     dev.SetAtmos(g_atmos);
+    dev.SetMist(g_mist);
     dev.SetContactShadows(contact);
     dev.SetSway(sway);
     dev.SetGrassPush(grassPush);

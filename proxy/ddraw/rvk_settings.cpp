@@ -204,6 +204,7 @@ Setting g_settings[] = {
     {"RVK_VolRays",    "Light rays through gaps in the clouds",                    "HDR and effects",  Float, 0, 3, 0.25f, 1, nullptr, 0, "RVK_VolOn"},
     {"RVK_VolLand",    "Haze over distant land (cool, as the air makes it)",       "HDR and effects",  Float, 0, 1, 0.05f, 0.4f, nullptr, 0},
     {"RVK_Atmos",      "Air: haze by height, bluer far off, the sun's glow (off: flat haze)", "HDR and effects", Bool, 0, 1, 1, 1, nullptr, 0},
+    {"RVK_Mist",       "Air: valley mist at night and dawn, x (0 none; needs the above)", "HDR and effects", Float, 0, 2, 0.1f, 1, nullptr, 0},
     {"RVK_SsrOn",      "Reflections (screen-space)",                               "HDR and effects",  Bool,  0, 1, 1, 1, nullptr, 0},
     {"RVK_Ssr",        "Strength",                                                 "HDR and effects",  Float, 0.25f, 2, 0.25f, 1, nullptr, 0, "RVK_SsrOn"},
     {"RVK_SsrWater",   "Water",                                                    "HDR and effects",  Float, 0, 1, 0.05f, 0.25f, nullptr, 0, "RVK_SsrOn"},
@@ -282,7 +283,7 @@ struct Vanilla { const char* name; float value; };
 const Vanilla kVanilla[] = {
     {"RVK_PixelLight", 0}, {"RVK_LightOver", 0}, {"RVK_Bump", 0}, {"RVK_NormalMaps", 0}, {"RVK_Pbr", 0}, {"RVK_Albedo", 0}, {"RVK_LeafLight", 0}, {"RVK_Headroom", 1},
     {"RVK_Sway", 0}, {"RVK_FolEdges", 0}, {"RVK_GrassPush", 0}, {"RVK_GrassOn", 0}, {"RVK_LeafOn", 0}, {"RVK_PlantDetail", 0}, {"RVK_FoliageLod", 0}, {"RVK_PtLight", 1}, {"RVK_CharLight", 1}, {"RVK_Tess", 0}, {"RVK_Aniso", 1}, {"RVK_SunShadow", 0}, {"RVK_Contact", 0}, {"RVK_PtShadows", 0},
-    {"RVK_Hdr", 0}, {"RVK_Bloom", 0}, {"RVK_BloomFx", 0}, {"RVK_NightGlow", 0}, {"RVK_MoonLight", 0}, {"RVK_NightDark", 0}, {"RVK_Ao", 0}, {"RVK_Gi", 0},
+    {"RVK_Hdr", 0}, {"RVK_Bloom", 0}, {"RVK_BloomFx", 0}, {"RVK_NightGlow", 0}, {"RVK_MoonLight", 0}, {"RVK_NightDark", 0}, {"RVK_Mist", 0}, {"RVK_Ao", 0}, {"RVK_Gi", 0},
     {"RVK_Volume", 0}, {"RVK_VolLand", 0}, {"RVK_Ssr", 0}, {"RVK_MBlur", 0}, {"RVK_Taa", 0}, {"RVK_Saturation", 1}, {"RVK_Contrast", 1},
     {"RVK_Warmth", 0}, {"RVK_NightTint", 0}, {"RVK_Vignette", 0}, {"RVK_LutAmount", 0}, {"RVK_Dof", 0},
     {"RVK_Particles", 0}, {"RVK_PartCore", 1}, {"RVK_WaterOn", 0},
@@ -456,6 +457,7 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
     else if (is("RVK_MoonLight")) d->SetMoonLight(V(n));
     else if (is("RVK_NightDark")) d->SetNightDark(V(n));
     else if (is("RVK_Atmos")) d->SetAtmos(V(n) != 0.0f);
+    else if (is("RVK_Mist")) d->SetMist(V(n));
     else if (is("RVK_Contact")) d->SetContactShadows(V(n));
     else if (is("RVK_Ao") || is("RVK_AoRadius")) d->SetAo(V("RVK_Ao"), V("RVK_AoRadius"));
     else if (is("RVK_Gi") || is("RVK_GiRadius")) d->SetGi(V("RVK_Gi"), V("RVK_GiRadius"));

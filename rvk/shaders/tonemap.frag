@@ -55,7 +55,29 @@ vec3 Air(vec3 c, float z)
     float g = P.air2.w, cosT = dot(dir, P.air2.xyz);
     float phase = min((1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * cosT, 1.5), 10.0);
     vec3 scattered = (1.0 - through) * P.haze.rgb + (1.0 - exp(-tau)) * P.air3.rgb * (phase * P.air1.w);
-    return c * through + scattered;
+    c = c * through + scattered;
+    // The valley mist (rvk mist.cpp): a layer up to P.fog.z over the eye, fading over ~8 units above. Its depth along
+    // the ray: the density's integral over the heights the ray crosses, over how fast it climbs. Lit as the air - the
+    // zone's colour, paler - and the sun's (moon's) glow.
+    if (P.fog.w > 0.0) {
+        float h0 = 0.0, h1 = dot(V, P.air1.xyz), top = P.fog.z;
+        float tauM;
+        if (abs(h1 - h0) < 0.5) {
+            float h = 0.5 * (h0 + h1);
+            tauM = dist * (h < top ? 1.0 : exp(-(h - top) / 8.0));
+        } else {
+            // (G: the density's integral from -inf: full below the top, then 8 units more fading.)
+            #define MIST_G(y) ((y) < top ? (y) : top + 8.0 * (1.0 - exp(-((y) - top) / 8.0)))
+            tauM = dist * (MIST_G(h1) - MIST_G(h0)) / (h1 - h0);
+            #undef MIST_G
+        }
+        tauM *= P.fog.w;
+        float m = 1.0 - exp(-tauM);
+        float l = dot(P.haze.rgb, vec3(0.3, 0.59, 0.11));
+        vec3 mist = mix(P.haze.rgb, vec3(l), 0.45) * 1.2 + P.air3.rgb * (phase * P.air1.w * 0.5);
+        c = mix(c, mist, m);
+    }
+    return c;
 }
 
 void main()

@@ -1153,8 +1153,9 @@ void Device::RenderShadowMap(VkCommandBuffer cmd)
     // read it (the cloud layer's: with the shadow light's direction - the moon's, above the horizon - it took night for
     // day and its clouds went dark).
     if (m_sunLuminance > 0.0f) std::memcpy(m_trueSunDir, m_sunDir, sizeof(m_trueSunDir));
-    // With the sun down, the moon's light (night.cpp) - the map drawn from it.
+    // With the sun down, the moon's light (night.cpp) - the map drawn from it. The valley mist (mist.cpp).
     UpdateMoon();
+    UpdateMist();
     const bool moon = !haveSun && MoonOn();
     const float* lightDir = haveSun ? m_sunDir : m_moonDir;
     m_shadowValid = false;

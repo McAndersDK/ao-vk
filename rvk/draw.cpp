@@ -2110,6 +2110,8 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     if (IsTerrain(fvf) && IsMultiplyPass())
         m_terrainLitPassCur = true;
     // (The terrain's base pass: its light pass multiplies, its fog white - not the scene's fog colour.)
+    if (IsTerrain(fvf) && !IsMultiplyPass() && m_scenePhase && m_target == m_scene && !m_external && !m_drawGpu)
+        NoteTerrainHeights(fvf, vertices, vertexCount);   // (the valley mist's low ground: mist.cpp)
     if (IsTerrain(fvf) && !IsMultiplyPass() && m_scenePhase && m_target == m_scene && !m_external) {
         RenderStateFog(m_sceneFogColour, m_sceneFogParams);
         m_sceneFogFrame = m_frameNumber;

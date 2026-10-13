@@ -430,6 +430,8 @@ public:
     void SetNightDark(float s) { m_nightDark = s; }
     // The air's light scattering over distance (tonemap.frag Air; RVK_Atmos; off: the plain land haze).
     void SetAtmos(bool on) { m_atmos = on; }
+    // Valley mist's amount (mist.cpp; 0 none, 1 as planned).
+    void SetMist(float s) { m_mist = s; }
     // Tests: the sky weather's clock (seconds, as UTC; < 0 the wall clock).
     void SetSkyTime(double t) { m_skyTime = t; }
     void SetContactShadows(float s) { m_contact = s; m_constantsDirty = true; }
@@ -965,6 +967,15 @@ private:
     float m_moonLight = 1.0f;                    // RVK_MoonLight (0: none)
     float m_nightDark = 1.0f;                    // RVK_NightDark (0: as the game)
     bool m_atmos = true;                         // RVK_Atmos
+    // Valley mist (mist.cpp, RVK_Mist).
+    float m_mist = 1.0f;                         // RVK_Mist, x (0: none)
+    std::vector<float> m_mistSamples;            // this frame's terrain heights near the eye
+    float m_mistFloor = 0.0f, m_mistAmount = 0.0f, m_mistWet = 0.0f, m_mistSunPrev = 0.0f, m_mistSunTrend = 0.0f;
+    bool m_mistFloorSet = false;
+    double m_mistClock = -1.0;
+    void NoteTerrainHeights(uint32_t fvf, const void* vertices, uint32_t vertexCount);
+    void UpdateMist();
+    void MistParams(float out[2]) const;
     float m_moonSeenDir[3] = {}, m_moonSeenSize = 0.0f;   // this frame's biggest moon in the sky (towards it)
     uint64_t m_moonSeenFrame = ~0ull, m_skySeenFrame = ~0ull;
     float m_moonPos[3] = {0.0f, 1.0f, 0.0f};     // towards the moon (eased)

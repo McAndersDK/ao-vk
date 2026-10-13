@@ -572,7 +572,7 @@ void Device::LandHaze(float out[24]) const
     out[3] = std::clamp(m_landHaze, 0.0f, 1.0f);
     out[4] = fogParams[0];
     out[5] = fogParams[1];
-    out[6] = out[7] = 0.0f;
+    MistParams(out + 6);                         // (the valley mist: its top over the eye, its density)
     // The air (RVK_Atmos; tonemap.frag Air): out[8..23]. Its density at the eye: about 45% hazed at the game's fog
     // end on the level, more with the sky's cloud and rain (sky.cpp); its scale height; the sun's glow.
     if (m_atmos) {
