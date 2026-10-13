@@ -985,7 +985,7 @@ private:
     // The game's sun sprites seen this frame / the last (sun.cpp): where, how big, their colour - grouped into suns.
     struct SunSprite { float dir[3], size, colour[3], rimFade; uint32_t hub; };
     // The sprites as drawn this frame (DrawSun under the clouds, then their glow over them: DrawSunOver).
-    struct SunDrawn { float dir[3], size, colour[3], rimFade, seed, low, seen; };
+    struct SunDrawn { float dir[3], size, colour[3], rimFade, seed, low, seen, core; };
     std::vector<SunDrawn> m_sunsDrawn;
     d3d::Matrix m_sunViewProj{};                 // the sky's camera they were drawn with
     // How much of each sprite's core is seen (sun_vis.comp, measured with the clouds; 1 when not): the frame slot's
@@ -1519,6 +1519,13 @@ private:
     // - smoke, rain - when the render states hold the interface's. SceneFog: colour (w: on), start, end, density, mode.
     float m_sceneFogColour[4] = {}, m_sceneFogParams[4] = {};
     uint64_t m_sceneFogFrame = ~0ull;
+    // The world's global ambient (the terrain's base pass: RS_AMBIENT, luma, eased): the game's own day cycle - 0.23 by
+    // night, ~0.34 at dawn, ~0.46 by day - lifts the night grading at dawn and dusk (NightAmount).
+    float m_sceneAmbient = -1.0f;
+    uint64_t m_sceneAmbientFrame = ~0ull;
+    // How much it is night for the grading (tone map, bloom, night glow): the sun's light on flat ground, but no more
+    // than the game's ambient says (at dawn its light is still level and off while its world has brightened).
+    float NightAmount() const;
     void SceneFog(float colour[4], float params[4]) const;
     void RenderStateFog(float colour[4], float params[4]) const;
     float m_terrainSun[8] = {};                  // ... the directional light it takes: colour, direction

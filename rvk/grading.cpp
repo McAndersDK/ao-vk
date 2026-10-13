@@ -89,9 +89,18 @@ void Device::SetColorLut(uint32_t slot, uint32_t size, const uint8_t* rgba)
 }
 
 // The grading part of the tone mapping's parameters (params[8..15], tonemap.frag Grade).
+float Device::NightAmount() const
+{
+    const float byLight = 1.0f - std::clamp(m_daylight / 0.35f, 0.0f, 1.0f);
+    if (m_sceneAmbient < 0.0f)
+        return byLight;
+    const float t = std::clamp((m_sceneAmbient - 0.26f) / (0.42f - 0.26f), 0.0f, 1.0f);
+    return std::min(byLight, 1.0f - t * t * (3.0f - 2.0f * t));
+}
+
 void Device::GradingParams(float out[8]) const
 {
-    float night = 1.0f - std::clamp(m_daylight / 0.35f, 0.0f, 1.0f);
+    float night = NightAmount();
     out[0] = m_saturation;
     out[1] = m_contrast;
     out[2] = m_warmth;

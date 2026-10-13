@@ -1141,7 +1141,7 @@ void Device::RenderBloom(VkCommandBuffer cmd)
     Texture* src = m_scene;
     for (size_t i = 0; i < m_bloomLevels.size(); ++i) {
         // (By night (RVK_NightDark) the threshold lower: lamps and windows glow out of the darker night.)
-        const float nightGlow = (1.0f - std::clamp(m_daylight / 0.35f, 0.0f, 1.0f)) * std::min(m_nightDark, 1.0f);
+        const float nightGlow = NightAmount() * std::min(m_nightDark, 1.0f);
         float params[8] = {1.0f / float(src->m_width), 1.0f / float(src->m_height),
                            m_bloomThreshold * (1.0f - 0.25f * nightGlow), i == 0 ? 1.0f : 0.0f,
                            m_aoProj.m[2][2], m_aoProj.m[3][2], m_bloomDepth ? 1.0f : 0.0f, 0.0f};

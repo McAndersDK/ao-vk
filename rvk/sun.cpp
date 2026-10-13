@@ -132,6 +132,13 @@ void Device::DrawSun()
         d.low = low;
         d.size = std::clamp(s.size * scale * (1.0f + 0.35f * low2), 0.002f, 1.2f);
         d.seen = m_sunsDrawn.size() < 4 ? m_sunSeen[m_sunsDrawn.size()] : 1.0f;
+        // Its core's share: the sun's smallest sprite is its body (white-hot, glaring), the bigger ones its glow - in
+        // the game the big one's core, magnified, is a soft orange glow, not a white disc (user dump 2026-10-13).
+        float smallest = s.size;
+        for (const SunSprite& o : sprites)
+            if (o.dir[0] * to[0] + o.dir[1] * to[1] + o.dir[2] * to[2] > 0.9945f) smallest = std::min(smallest, o.size);
+        const float rel = s.size > 0.0f ? smallest / s.size : 1.0f;
+        d.core = rel * rel;
         for (int j = 0; j < 3; ++j) d.colour[j] = s.colour[j] * tint[j] * through * m_sun;
         d.rimFade = s.rimFade;
         d.seed = float(k) * 17.31f;
@@ -261,10 +268,10 @@ void Device::DrawSuns(bool over)
         push.toSun[3] = d.size;
         std::memcpy(push.colour, d.colour, sizeof(d.colour));
         push.colour[3] = d.rimFade;
+        push.view[3] = std::clamp(m_sunBleed, 0.0f, 0.999f) + std::floor(d.core * 1000.0f);   // (bleed . its core's share)
         push.view[0] = float(m_scene->m_width);
         push.view[1] = float(m_scene->m_height);
         push.view[2] = over ? 1.0f : 0.0f;       // under the clouds: all but the glow's bleed; over: the bleed alone
-        push.view[3] = std::clamp(m_sunBleed, 0.0f, 1.0f);
         push.anim[0] = float(std::fmod(m_frameClock, 3600.0));   // the clock (serrations swelling, rays turning)
         push.anim[1] = d.seed;                   // each sprite its own
         push.anim[2] = d.low;                    // low in the sky (0..1)

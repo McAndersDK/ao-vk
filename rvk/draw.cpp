@@ -281,8 +281,8 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
         fl->cascadeTexel[i] = m_cascadeTexel[i];
         fl->cascadeDepth[i] = m_cascadeDepth[i];
     }
-    // Night: the sun's light on flat ground (smoothed) below a tenth of full day.
-    float night = 1.0f - std::clamp(m_daylight / 0.35f, 0.0f, 1.0f);
+    // Night: the sun's light on flat ground (smoothed) below a tenth of full day; lifted by the game's dawn ambient.
+    float night = NightAmount();
     fl->effects[0] = m_leafLight;
     fl->effects[1] = m_hdr ? m_nightGlow * night : 0.0f;
     fl->effects[2] = m_sunSoftness;
@@ -2127,6 +2127,12 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     if (IsTerrain(fvf) && !IsMultiplyPass() && m_scenePhase && m_target == m_scene && !m_external) {
         RenderStateFog(m_sceneFogColour, m_sceneFogParams);
         m_sceneFogFrame = m_frameNumber;
+        if (m_sceneAmbientFrame != m_frameNumber) {   // (once a frame: eased - a zone's change shouldn't pop)
+            const uint32_t a = m_rs[d3d::RS_AMBIENT];
+            const float luma = (0.3f * float((a >> 16) & 0xFF) + 0.59f * float((a >> 8) & 0xFF) + 0.11f * float(a & 0xFF)) / 255.0f;
+            m_sceneAmbient = m_sceneAmbient < 0.0f ? luma : m_sceneAmbient + (luma - m_sceneAmbient) * 0.05f;
+            m_sceneAmbientFrame = m_frameNumber;
+        }
     }
     Frame& f = m_frames[m_frameIndex];
     VkCommandBuffer cmd = f.main;

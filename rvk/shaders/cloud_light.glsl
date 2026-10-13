@@ -8,7 +8,12 @@ vec3 SunLight(vec3 sunL)
     float low = 1.0 - smoothstep(0.0, 0.35, sunL.y);
     low *= low;                                  // (golden first; pink only in its last few degrees)
     vec3 tint = mix(vec3(1.0), mix(vec3(1.0, 0.8, 0.58), vec3(1.0, 0.6, 0.5), smoothstep(0.75, 1.0, low)), low);
-    return FL.sunColor.rgb * tint * smoothstep(-0.12, 0.1, sunL.y);
+    vec3 sun = FL.sunColor.rgb * tint * smoothstep(-0.12, 0.1, sunL.y);
+    // At sunrise and sunset the game's light is still level and the renderer's sun off (under ~3 degrees): a warm
+    // light of their own for the clouds, from just under the horizon to ~10 degrees up (user: the night sky didn't
+    // light up with the sunrise).
+    float dawn = smoothstep(-0.1, 0.0, sunL.y) * (1.0 - smoothstep(0.08, 0.25, sunL.y));
+    return max(sun, vec3(1.0, 0.72, 0.55) * tint * 0.8 * dawn);
 }
 
 // The glow under the clouds round sunset: their undersides lit pink by the light low in the sky (most with the sun
