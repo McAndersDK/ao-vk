@@ -20,10 +20,13 @@ vec3 SunLight(vec3 sunL)
     vec3 tint = mix(vec3(1.0), mix(vec3(1.0, 0.8, 0.58), vec3(1.0, 0.6, 0.5), smoothstep(0.75, 1.0, low)), low);
     vec3 hue;
     if (GameCloudHue(hue)) {
-        float strength = dot(FL.sunColor.rgb, vec3(0.3, 0.59, 0.11)) / max(dot(hue, vec3(0.3, 0.59, 0.11)), 0.05);
+        // (FL.sunColor.w: the sun's brightness before a low sun is dimmed for the ground by the clouds hiding it)
+        float strength = FL.sunColor.w / max(dot(hue, vec3(0.3, 0.59, 0.11)), 0.05);
         return hue * strength * smoothstep(-0.12, 0.1, sunL.y);
     }
-    return FL.sunColor.rgb * tint * smoothstep(-0.12, 0.1, sunL.y);
+    float luma = dot(FL.sunColor.rgb, vec3(0.3, 0.59, 0.11));
+    vec3 sun = luma > 1e-4 ? FL.sunColor.rgb * (FL.sunColor.w / luma) : vec3(FL.sunColor.w);
+    return sun * tint * smoothstep(-0.12, 0.1, sunL.y);
 }
 
 // The glow under the clouds round sunset: their undersides lit by the light low in the sky (most with the sun at the

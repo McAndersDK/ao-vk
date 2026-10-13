@@ -319,7 +319,7 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
     fl->sunDir[0] = sunDir[0]; fl->sunDir[1] = sunDir[1]; fl->sunDir[2] = sunDir[2];
     fl->sunDir[3] = m_hdr ? m_hdrHeadroom : m_lightHeadroom;
     for (int i = 0; i < 3; ++i) fl->sunColor[i] = m_shadowValid ? m_shadowSunColor[i] : m_frameSunColor[i];
-    fl->sunColor[3] = 0.0f;
+    fl->sunColor[3] = m_frameSunLuma;            // (the clouds' light: not dimmed by the clouds hiding the sun)
     // The moon's light on the ground and grass (night.cpp); whether the shadow map is its. The sun's true direction
     // (below the horizon too) for the clouds' light.
     for (int i = 0; i < 3; ++i) fl->moon[i] = m_moonColour[i];

@@ -103,19 +103,26 @@ void Device::DrawSun()
     // How much of each is seen: this frame slot's measure (made when it last ran: its commands are done now), eased -
     // the glare swelling in as a sun comes out (~0.35 s), going quickly as it goes behind something (~0.08 s).
     // Not measured (looking away, or no cloud pass this frame): kept as known - unless there are no clouds at all.
-    float target[4];
-    for (int k = 0; k < 4; ++k) target[k] = m_cloudParams.enable ? m_sunSeen[k] : 1.0f;
+    float target[4], clearTarget[4];
+    for (int k = 0; k < 4; ++k) {
+        target[k] = m_cloudParams.enable ? m_sunSeen[k] : 1.0f;
+        clearTarget[k] = m_cloudParams.enable ? m_sunClear[k] : 1.0f;
+    }
     if (m_sunVisMeasured[m_frameIndex] && m_sunVisCpu) {
-        vmaInvalidateAllocation(m_allocator, m_sunVisAllocation, m_sunVisStride * m_frameIndex, 16);
+        vmaInvalidateAllocation(m_allocator, m_sunVisAllocation, m_sunVisStride * m_frameIndex, 32);
         const float* seen = reinterpret_cast<const float*>(m_sunVisCpu + m_sunVisStride * m_frameIndex);
-        for (uint32_t k = 0; k < m_sunVisCount[m_frameIndex] && k < 4; ++k)
+        for (uint32_t k = 0; k < m_sunVisCount[m_frameIndex] && k < 4; ++k) {
             if (seen[k] >= 0.0f) target[k] = std::min(seen[k], 1.0f);
+            if (seen[4 + k] >= 0.0f) clearTarget[k] = std::min(seen[4 + k], 1.0f);
+        }
         m_sunVisMeasured[m_frameIndex] = false;
     }
     const float dt = m_sunSeenClock < 0.0 ? 1.0f : float(std::clamp(m_frameClock - m_sunSeenClock, 0.0, 1.0));
     m_sunSeenClock = m_frameClock;
-    for (int k = 0; k < 4; ++k)
+    for (int k = 0; k < 4; ++k) {
         m_sunSeen[k] += (target[k] - m_sunSeen[k]) * (1.0f - std::exp(-dt / (target[k] > m_sunSeen[k] ? 0.35f : 0.08f)));
+        m_sunClear[k] += (clearTarget[k] - m_sunClear[k]) * (1.0f - std::exp(-dt / 1.0f));   // (the light: slower)
+    }
     m_sunViewProj = MulMatrix(m_view, m_proj);
     const float scale = std::clamp(m_sunSize, 0.1f, 3.0f);
     for (size_t k = 0; k < sprites.size(); ++k) {
@@ -146,23 +153,24 @@ void Device::DrawSun()
         d.seed = float(k) * 17.31f;
         m_sunsDrawn.push_back(d);
     }
-    // How much of the sun - the sprite nearest the light's way - the clouds and the land let through (RenderShadowMap:
-    // low, where the cloud shadow map can't reach, the frame's sun dimmed by it).
+    // How much of the sun - the sprite nearest the light's way - the clouds let through (not the land: that's where the
+    // camera stands; RenderShadowMap: low, where the cloud shadow map can't reach, the frame's sun dimmed by it).
     {
         const float* l = m_sunLuminance > 0.0f ? m_sunDir : m_trueSunDir;
         float best = -2.0f;
         for (size_t k = 0; k < m_sunsDrawn.size() && k < 4; ++k) {
             const float* d = m_sunsDrawn[k].dir;
             const float dot = -(d[0] * l[0] + d[1] * l[1] + d[2] * l[2]);
-            if (dot > best) { best = dot; m_sunThrough = m_sunSeen[k]; }
+            if (dot > best) { best = dot; m_sunThrough = m_sunClear[k]; }
         }
         if (best < 0.9f) m_sunThrough = 1.0f;    // (no sprite near the light: not known)
     }
     DrawSuns(false);
     if (m_frameNumber % 600 == 50) {
-        Log("suns: %zu sprites (last frame's), %zu drawn; seen %.2f %.2f %.2f %.2f; the light's through %.2f",
+        Log("suns: %zu sprites (last frame's), %zu drawn; seen %.2f %.2f %.2f %.2f; clouds let %.2f %.2f %.2f %.2f through; the light's %.2f",
             m_sunSprites.size(), m_sunsDrawn.size(), double(m_sunSeen[0]), double(m_sunSeen[1]), double(m_sunSeen[2]),
-            double(m_sunSeen[3]), double(m_sunThrough));
+            double(m_sunSeen[3]), double(m_sunClear[0]), double(m_sunClear[1]), double(m_sunClear[2]),
+            double(m_sunClear[3]), double(m_sunThrough));
         for (const SunSprite& s : m_sunSprites)
             Log("  sprite: hub %u towards (%.3f %.3f %.3f) size %.3f tint %.2f %.2f %.2f rim %.2f", s.hub,
                 double(s.dir[0]), double(s.dir[1]), double(s.dir[2]), double(s.size), double(s.colour[0]),
@@ -235,7 +243,7 @@ void Device::MeasureSunVisibility(VkCommandBuffer cmd, Texture* clouds)
     VkDescriptorImageInfo depthInfo{m_pointSampler, m_depthView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkDescriptorImageInfo cloudInfo{m_cloudClampSampler, (clouds ? clouds : m_blackTexture)->m_view,
                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkDescriptorBufferInfo outInfo{m_sunVisBuffer, m_sunVisStride * m_frameIndex, 16};
+    VkDescriptorBufferInfo outInfo{m_sunVisBuffer, m_sunVisStride * m_frameIndex, 32};
     VkWriteDescriptorSet wr[3] = {};
     for (uint32_t i = 0; i < 3; ++i) {
         wr[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;

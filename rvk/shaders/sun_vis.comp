@@ -3,7 +3,9 @@
 // after the depth pre-pass and the cloud layer's march. 64 points over the core's disc on the screen: sky there (the
 // pre-pass left its depth at the clear value) and how little cloud covers it (the layer's alpha: its coverage). One
 // workgroup a sprite; the mean over the points on the screen written for the CPU (read a frame or two later, eased:
-// the glare swelling in), -1 when none is (looking away: the CPU keeps what it knew).
+// the glare swelling in), -1 when none is (looking away: the CPU keeps what it knew). Also how much the clouds alone let
+// through, over the points that are sky: the land between the camera and the sun left out - that is the camera's,
+// the clouds' is the place's (the frame's sun is dimmed by it; with the land, a wall darkened the clouds - user).
 layout(local_size_x = 64) in;
 layout(push_constant) uniform Params {
     vec4 sun[4];        // xy: the core's middle (pixels), z: its radius (pixels), w: 1 on screen ahead, 0 not
@@ -11,15 +13,16 @@ layout(push_constant) uniform Params {
 } P;
 layout(binding = 0) uniform sampler2D sceneDepth;
 layout(binding = 1) uniform sampler2D clouds;
-layout(binding = 2) buffer Out { float seen[4]; } O;
+layout(binding = 2) buffer Out { float seen[4]; float clear[4]; } O;
 
-shared float s_seen[64], s_on[64];
+shared float s_seen[64], s_on[64], s_clear[64], s_sky[64];
 
 void main()
 {
     uint k = gl_WorkGroupID.x, i = gl_LocalInvocationID.x;
     vec4 s = P.sun[k];
     float seen = 0.0, on = 0.0;                 // (on: a point on the screen - else unknown)
+    float clear = 0.0, skyHere = 0.0;           // (the clouds alone, where it is sky: not the land - camera-free)
     if (s.w > 0.5) {
         float rr = s.z * sqrt((float(i) + 0.5) / 64.0), a = float(i) * 2.3999632;
         vec2 p = s.xy + rr * vec2(cos(a), sin(a));
@@ -28,15 +31,24 @@ void main()
             float cover = P.info.w > 0.5 ? clamp(textureLod(clouds, p / P.info.xy, 0.0).a, 0.0, 1.0) : 0.0;
             seen = sky ? 1.0 - cover : 0.0;
             on = 1.0;
+            clear = sky ? 1.0 - cover : 0.0;
+            skyHere = sky ? 1.0 : 0.0;
         }
     }
     s_seen[i] = seen;
     s_on[i] = on;
+    s_clear[i] = clear;
+    s_sky[i] = skyHere;
     barrier();
     for (uint n = 32u; n > 0u; n >>= 1u) {
-        if (i < n) { s_seen[i] += s_seen[i + n]; s_on[i] += s_on[i + n]; }
+        if (i < n) {
+            s_seen[i] += s_seen[i + n]; s_on[i] += s_on[i + n];
+            s_clear[i] += s_clear[i + n]; s_sky[i] += s_sky[i + n];
+        }
         barrier();
     }
-    if (i == 0u)                                 // (-1: not on the screen - the CPU keeps what it knew)
+    if (i == 0u) {                               // (-1: not known - the CPU keeps what it knew)
         O.seen[k] = s_on[0] > 0.5 ? s_seen[0] / s_on[0] : -1.0;
+        O.clear[k] = s_sky[0] > 0.5 ? s_clear[0] / s_sky[0] : -1.0;
+    }
 }

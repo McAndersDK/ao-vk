@@ -1176,8 +1176,13 @@ void Device::RenderShadowMap(VkCommandBuffer cmd)
     const float upNow = -m_sunDir[1];
     const float lowShade = 1.0f - std::clamp((upNow - 0.05f) / 0.05f, 0.0f, 1.0f);
     const float through = 1.0f + (std::clamp(m_sunThrough, 0.0f, 1.0f) - 1.0f) * lowShade;
-    for (int i = 0; i < 3; ++i)
-        m_frameSunColor[i] = (haveSun ? m_sunColor[i] : lowSun ? m_sunColor[i] * lowFade : 0.0f) * through;
+    float undimmed[3];
+    for (int i = 0; i < 3; ++i) {
+        undimmed[i] = haveSun ? m_sunColor[i] : lowSun ? m_sunColor[i] * lowFade : 0.0f;
+        m_frameSunColor[i] = undimmed[i] * through;
+    }
+    // (The clouds themselves aren't dimmed: they're lit above the bank that hides the sun from the ground.)
+    m_frameSunLuma = 0.3f * undimmed[0] + 0.59f * undimmed[1] + 0.11f * undimmed[2];
     m_frameLightsDirty = true;
     // The world camera: the one most casters were drawn with.
     uint32_t world = 0;

@@ -993,7 +993,9 @@ private:
     bool m_sunVisMeasured[kFramesInFlight] = {};
     uint32_t m_sunVisCount[kFramesInFlight] = {};
     float m_sunSeen[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    float m_sunClear[4] = {1.0f, 1.0f, 1.0f, 1.0f};   // ... how much of each the clouds alone let through (eased)
     float m_sunThrough = 1.0f;                   // ... the one nearest the light's way (its light let through)
+    float m_frameSunLuma = 0.0f;                 // the frame sun's brightness before that (the clouds' own light)
     double m_sunSeenClock = -1.0;
     void MeasureSunVisibility(VkCommandBuffer cmd, Texture* clouds);
     std::vector<SunSprite> m_sunSprites;
