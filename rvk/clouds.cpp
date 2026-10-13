@@ -650,6 +650,7 @@ void Device::DrawClouds(VkCommandBuffer cmd)
     float eyeNow[3];
     for (int i = 0; i < 3; ++i)
         eyeNow[i] = -(camera.m[3][0] * camera.m[i][0] + camera.m[3][1] * camera.m[i][1] + camera.m[3][2] * camera.m[i][2]);
+    UpdateCloudDrift();
     if (layer) {   // The layer's base: RVK_CloudHeight above the eye's ground, following its height slowly.
         const float target = eyeNow[1] + m_cloudParams.height;
         const double gap = m_cloudBaseClock < 0.0 ? 1e9 : m_frameClock - m_cloudBaseClock;
@@ -967,15 +968,9 @@ void Device::MakeCloudShadow(VkCommandBuffer cmd)
                  std::min(m_cloudParams.density, 1.5f);
     sf.info[2] = std::min(sf.info[2], 1.0f);
     sf.info[3] = area * 0.2f;                    // (a few cloud shadows across the map)
-    // Drifting (the wind's way when there is one - the rain's - else a slow breeze), 6 world units a second.
-    {
-        float wx = m_rainWind[0], wz = m_rainWind[2];
-        const float wl = std::sqrt(wx * wx + wz * wz);
-        if (wl < 0.1f) { wx = 0.8f; wz = 0.6f; } else { wx /= wl; wz /= wl; }
-        const float t = float(std::fmod(m_frameClock, 3600.0));
-        sf.drift[0] = -wx * t * 6.0f;
-        sf.drift[1] = -wz * t * 6.0f;
-    }
+    // Drifting with the clouds (UpdateCloudDrift).
+    sf.drift[0] = m_cloudDrift[0];
+    sf.drift[1] = m_cloudDrift[1];
     uint32_t count = 0;
     for (const CloudPuff& p : m_cloudPuffs) {
         if (count >= kShadowPuffs || !p.texture)
@@ -1053,6 +1048,26 @@ void Device::MakeCloudShadow(VkCommandBuffer cmd)
     Transition(cmd, m_cloudShadowMap, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 
+// How far the clouds have drifted (world x, z) and evolved (the noise's y), added up frame by frame: the wind's way
+// (the rain's, else a slow breeze) eased over seconds, 8 world units a second. (Its direction times the time since
+// the start, as before, swung the whole field by kilometres whenever the game's gusty wind turned.)
+void Device::UpdateCloudDrift()
+{
+    const double now = m_frameClock;
+    const float dt = m_cloudDriftClock < 0.0 ? 0.0f : float(std::clamp(now - m_cloudDriftClock, 0.0, 0.25));
+    m_cloudDriftClock = now;
+    float wx = m_rainWind[0], wz = m_rainWind[2];
+    const float wl = std::sqrt(wx * wx + wz * wz);
+    if (wl < 0.1f) { wx = 0.8f; wz = 0.6f; } else { wx /= wl; wz /= wl; }
+    const float k = 1.0f - std::exp(-dt / 10.0f);
+    m_cloudWindDir[0] += (wx - m_cloudWindDir[0]) * k;
+    m_cloudWindDir[1] += (wz - m_cloudWindDir[1]) * k;
+    const float dl = std::max(std::sqrt(m_cloudWindDir[0] * m_cloudWindDir[0] + m_cloudWindDir[1] * m_cloudWindDir[1]), 1e-3f);
+    m_cloudDrift[0] -= m_cloudWindDir[0] / dl * 8.0f * dt;
+    m_cloudDrift[1] -= m_cloudWindDir[1] / dl * 8.0f * dt;
+    m_cloudDrift[2] += 1.5f * dt;
+}
+
 // RVK_CloudLayer: the weather map round the camera - the game's sky's cloudiness as a drifting field (fixed in the
 // world), the cloud type and density from the weather (rain: storm clouds; the game's flat storm sheets: layered
 // cloud). Outside any rendering.
@@ -1112,13 +1127,8 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
     wf.info[1] = m_cloudCloudy;
     wf.info[2] = m_cloudType;
     wf.info[3] = 1.0f;
-    {   // Drifting with the wind (the rain's, else a slow breeze), 8 world units a second.
-        float wx = m_rainWind[0], wz = m_rainWind[2];
-        const float wl = std::sqrt(wx * wx + wz * wz);
-        if (wl < 0.1f) { wx = 0.8f; wz = 0.6f; } else { wx /= wl; wz /= wl; }
-        wf.drift[0] = -wx * float(clock) * 8.0f;
-        wf.drift[1] = -wz * float(clock) * 8.0f;
-    }
+    wf.drift[0] = m_cloudDrift[0];             // (UpdateCloudDrift)
+    wf.drift[1] = m_cloudDrift[1];
     wf.drift[2] = 9000.0f;
     wf.drift[3] = std::clamp(m_cloudParams.cover, -1.0f, 1.0f);
     if (m_frameNumber % 600 == 1)
@@ -1196,14 +1206,10 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered)
     lf.shape[1] = 1.0f / 700.0f;
     lf.shape[2] = 0.55f * m_cloudParams.detail;
     lf.shape[3] = 0.012f * m_cloudParams.density;
-    {   // The wind carries the shapes (and they evolve: up through the noise).
-        float wx = m_rainWind[0], wz = m_rainWind[2];
-        const float wl = std::sqrt(wx * wx + wz * wz);
-        if (wl < 0.1f) { wx = 0.8f; wz = 0.6f; } else { wx /= wl; wz /= wl; }
-        lf.wind[0] = -wx * float(clock) * 8.0f;
-        lf.wind[1] = float(clock) * 1.5f;
-        lf.wind[2] = -wz * float(clock) * 8.0f;
-    }
+    // The wind carries the shapes (and they evolve: up through the noise) - UpdateCloudDrift.
+    lf.wind[0] = m_cloudDrift[0];
+    lf.wind[1] = m_cloudDrift[2];
+    lf.wind[2] = m_cloudDrift[1];
     lf.wind[3] = m_prepassClearZ;
     // The game's cloud colour (its puffs lit as it lit them, by their opacity), stylised around it.
     float tint[3] = {0.0f, 0.0f, 0.0f}, weight = 0.0f;

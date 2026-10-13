@@ -1648,6 +1648,10 @@ private:
     float m_cloudBase = 0.0f;                    // the layer's base (world y), easing after the eye's height
     float m_cloudCloudy = 0.0f, m_cloudType = 0.5f;   // the weather map's cloudiness and type, eased
     double m_cloudWeatherClock = -1.0;
+    float m_cloudDrift[3] = {};                  // the clouds' drift (world x, z) and evolution (UpdateCloudDrift)
+    float m_cloudWindDir[2] = {0.8f, 0.6f};
+    double m_cloudDriftClock = -1.0;
+    void UpdateCloudDrift();
     double m_cloudBaseClock = -1.0;
     void MakeCloudWeather(VkCommandBuffer cmd, const float eye[3]);
     void MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered);
