@@ -50,8 +50,9 @@ vec4 Aerial(vec3 light, float alpha, float dist, vec3 dir)
 {
     float air = 1.0 - exp(-dist / L.haze.w);
     float low = HorizonBand(dir, L.horizon.x);
-    // (By night at least a quarter of the air's colour, as the game's sheets have: the heaps grey among them - user.)
-    float haze = max(max(min(air * 1.1, 1.0), low), 0.25 * Night());
+    // (By night at least a quarter of the air's colour, as the game's sheets have: the heaps grey among them - user;
+    // 40% deep in the night - without the afterglow stuck on, darker than the sky round them: storm clouds - user.)
+    float haze = max(max(min(air * 1.1, 1.0), low), mix(0.25, 0.4, Night()) * Night());
     light = mix(light, AirColour(L.haze.rgb, low) * alpha, haze);
     return vec4(light, alpha) * (1.0 - smoothstep(0.6 * L.layer.w, L.layer.w, dist));
 }
