@@ -1060,6 +1060,7 @@ private:
     float m_cacheRefusedFarD = 0.0f;
     uint32_t m_cacheKeptSolid = 0;               // (since start)
     uint32_t m_cacheTraceLines = 0;              // (the churn trace's lines so far: 300 at most)
+    uint32_t m_cacheCollisionsLogged = 0;        // (solid casters seen changing pose: logged, 20 at most)
     uint32_t m_shadowMemory = 1;                 // RVK_ShadowMem: remembered casters drawn into the sun's shadows
     uint32_t m_memoryTraceFrames = 0;            // (frames left of the counts' trace)
     bool m_hillShade = true;                     // RVK_HillShade: the terrain's shade from a low sun (terrain_sun.cpp)

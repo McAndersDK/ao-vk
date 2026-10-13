@@ -495,6 +495,29 @@ void Device::RecordShadowCaster(uint32_t primitive, uint32_t fvf, uint32_t strid
         e.lastSeen = m_frameNumber;
         e.lastSeenTime = now;
         if (std::memcmp(&e.world, &m_world, sizeof(m_world)) != 0) {
+            // Only what can sway records its sway: plants (marked) and cut-out casters (crowns, leaves, fronds - the
+            // game sways its trees by tilting their matrices). A solid caster's matrix changing is the game's
+            // rounding, or another piece taken for it: a wall's segments recorded "sway" and played it back out of
+            // view - their shadows blinked (user, 2026-10-13).
+            const bool canSway = c.texture != nullptr || c.sway[3] > 0.5f || c.leafKey != 0;
+            if (!canSway) {
+                float apart = 0.0f;
+                for (int a = 0; a < 4; ++a)
+                    for (int b = 0; b < 3; ++b)
+                        apart = std::max(apart, std::fabs(e.world.m[a][b] - m_world.m[a][b]) / (a == 3 ? 0.05f : 0.01f));
+                if (apart > 1.0f && m_cacheCollisionsLogged < 20) {   // (moved more than 5 cm / turned more than ~0.6 deg)
+                    ++m_cacheCollisionsLogged;
+                    Log("caster cache: solid %016llx changed pose while seen: at (%.2f %.2f %.2f) -> (%.2f %.2f %.2f), row 0 "
+                        "(%.3f %.3f %.3f) -> (%.3f %.3f %.3f), v %u i %u", (unsigned long long)key,
+                        double(e.world.m[3][0]), double(e.world.m[3][1]), double(e.world.m[3][2]), double(m_world.m[3][0]),
+                        double(m_world.m[3][1]), double(m_world.m[3][2]), double(e.world.m[0][0]), double(e.world.m[0][1]),
+                        double(e.world.m[0][2]), double(m_world.m[0][0]), double(m_world.m[0][1]), double(m_world.m[0][2]),
+                        c.vertexCount, c.indexCount);
+                }
+                e.world = m_world;
+                e.sway.clear();
+                return;
+            }
             e.world = m_world;                   // the latest pose: where an out-of-view playback starts
             if (e.sway.size() < kSwaySamples && now - e.lastSwaySample >= kSwayStep) {
                 e.sway.push_back(m_world);
