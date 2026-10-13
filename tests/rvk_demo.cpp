@@ -1387,6 +1387,7 @@ bool g_waterPool = false;         // --water-pool: the lake's water only a 6 x 6
 bool g_waterWall = false;         // --water-wall: a steep sheet of the water mesh standing in the lake (a fall)
 bool g_waterShelf = false;        // --water-shelf: the mesh terraced - the surface with a lower shore shelf in front
                                   // (as Anarchy Online hangs its aprons), which used to render as a "mountain of water"
+bool g_fixedClock = false;        // --fixed-clock MS: the renderer's clock steps MS a frame (no sleeping: benchmarks)
 bool g_waterWalker = false;       // --water-walker: a "character" standing in the lake with its feet under the surface,
                                   // bobbing along: the surface ripples around it (RVK_WaterSwim)
 bool g_waterJump = false;         // --water-jump: the walker jumps out of the water and lands (RVK_WakeSplash)
@@ -1670,7 +1671,7 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
         // A "character" swimming (--water-walker): a tall body in the lake, its feet under the surface, bobbing along.
         // Flagged a character (SetDrawVisual), so the renderer knows where it is - and ripples the water around it.
         if (g_waterWalker) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(16));   // (the demo renders faster than the game: the
+            if (!g_fixedClock) std::this_thread::sleep_for(std::chrono::milliseconds(16));   // (the demo renders faster than the game: the
                                                                           //  water's simulation runs on real time)
             std::vector<VtxMesh> cv;
             std::vector<uint16_t> ci;
@@ -1711,7 +1712,7 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
         } else {
             dev.DrawWater(water.data(), uint32_t(water.size()), waterIdx.data(), uint32_t(waterIdx.size()));
             if (g_smokeWalker) {                 // (drawn after the water: the bodies are taken from last frame's draws)
-                std::this_thread::sleep_for(std::chrono::milliseconds(16));
+                if (!g_fixedClock) std::this_thread::sleep_for(std::chrono::milliseconds(16));
                 std::vector<VtxMesh> cv;
                 std::vector<uint16_t> ci;
                 const float wx = -3.0f + 3.5f * std::sin(float(frame) * 0.01f);   // ~2 m/s at 60 fps
@@ -2826,6 +2827,7 @@ int main(int argc, char** argv)
         else if (a == "--point-shadow-sun") pointShadowTest = pointShadowSun = shadows = true;
         else if (a == "--frame-ms" && i + 1 < argc) frameMs = std::atoi(argv[++i]);
         else if (a == "--cache-test" && i + 1 < argc) { cacheTest = std::atoi(argv[++i]); shadowTest = shadows = true; }
+        else if (a == "--fixed-clock" && i + 1 < argc) { g_fixedClock = true; Device::SetFixedClock(std::atof(argv[++i]) * 1e-3); }
         else if (a == "--dump" && i + 1 < argc) dump = argv[++i];
         else if (a == "--bench" && i + 1 < argc) bench = std::atoi(argv[++i]);
         else if (a == "--game-ms" && i + 1 < argc) g_benchGameMs = std::atof(argv[++i]);

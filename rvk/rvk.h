@@ -133,6 +133,7 @@ public:
     // window may be null (headless: no swapchain, screenshots still work).
     bool Init(HWND window, uint32_t width, uint32_t height, std::string* error);
     bool Resize(uint32_t width, uint32_t height);        // main target size; call outside a frame
+    static void SetFixedClock(double step);              // tests: the clock steps `step` s a frame (0 = real time)
     bool SetWindow(HWND window);                         // attach (or change) the presentation window later
     HWND Window() const { return m_window; }
     const DeviceInfo& Info() const { return m_info; }
@@ -990,6 +991,7 @@ private:
     static double SwayClock();
     d3d::Matrix SwayPose(const CachedCaster& e) const;
     void CaptureSun(const d3d::Light& light);
+    static void TickFixedClock();
     bool ShadowReceiver(uint32_t fvf) const;
     bool IsShadowCaster(uint32_t primitive, uint32_t fvf) const;
     bool IsTerrain(uint32_t fvf) const;

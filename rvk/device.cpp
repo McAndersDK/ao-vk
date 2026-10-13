@@ -1592,6 +1592,7 @@ void Device::BeginFrame()
     m_tessChars.clear();
     if (m_frameNumber == 1200)
         SavePipelineCache("after the first frames");   // (the pipelines made on demand since the start)
+    TickFixedClock();                            // (tests: SetFixedClock)
     CollectWaterBodies();                        // the water's ripples follow the characters of the last frame
     m_windTimePrev = m_windTime;
     m_frameClock = SwayClock();

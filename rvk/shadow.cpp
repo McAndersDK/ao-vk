@@ -85,11 +85,23 @@ float Dot(const float a[3], const float b[3]) { return a[0] * b[0] + a[1] * b[1]
 
 }  // namespace
 
+namespace {
+double g_fixedClockStep = 0.0;                   // SetFixedClock: seconds a frame (0 = real time)
+uint64_t g_fixedClockTicks = 0;
+}  // namespace
+
 double Device::SwayClock()
 {
+    if (g_fixedClockStep > 0.0)
+        return 1000.0 + double(g_fixedClockTicks) * g_fixedClockStep;
     using namespace std::chrono;
     return duration<double>(steady_clock::now().time_since_epoch()).count();
 }
+
+// Tests and benchmarks: the clock (simulations, wind, sway) steps `step` seconds a frame instead of following real
+// time, so a demo can render flat out - no sleeping, the GPU stays at its clocks - and still simulate at a game's pace.
+void Device::SetFixedClock(double step) { g_fixedClockStep = step; }
+void Device::TickFixedClock() { ++g_fixedClockTicks; }
 
 // The pose of a remembered caster while out of view: its recorded sway played back and forth, starting from the
 // latest sample (backwards first), interpolated between samples. Without a recording: the last pose seen.
