@@ -12,10 +12,10 @@ scenes=(
   smoke1      "--water-lake --smoke --water-z -20 --water-pitch 0.05"
   smoke2      "--water-lake --smoke --smoke-two --water-z -20 --water-pitch 0.05"
   smokegame   "--water-lake --smoke --smoke-game --water-z -20 --water-pitch 0.05"
-  smokeclose  "--water-lake --smoke --smoke-two --water-z -13 --water-pitch 0.05"
+  smokeclose  "--water-lake --smoke --smoke-two --water-z -15 --water-pitch 0.05"
   rain        "--water-lake --rain 1"
   watersim    "--water-lake --water-walker --water-z 24 --water-height 4 --water-pitch 0.22"
-  waterfall   "--water-lake --water-wall"
+  waterfall   "--water-lake --water-mesh C:\\linux\\client\\water-mesh.bin --water-eye 2088 30.3 2341"
   particles   "--particle-test"
 )
 for name in ${(ko)scenes}; do

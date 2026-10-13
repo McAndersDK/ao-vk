@@ -85,15 +85,17 @@ layout(set = 0, binding = 13) uniform sampler2D waterSim;
 
 vec2 Disturbance(vec2 xz, out vec3 state)
 {
+    // Faded out towards the field's edge (its outermost band is wiped as the camera moves); beyond it nothing to read.
+    float away = max(abs(xz.x - W.camera.x), abs(xz.y - W.camera.z));
+    float fade = 1.0 - smoothstep(0.28, 0.4, away * W.ripple.z);
+    state = vec3(0.0);
+    if (fade <= 0.0)
+        return vec2(0.0);
     vec2 uv = xz * W.ripple.z;
     float e = 1.0 / kSimN;
     float hl = texture(waterSim, uv - vec2(e, 0.0)).x, hr = texture(waterSim, uv + vec2(e, 0.0)).x;
     float hd = texture(waterSim, uv - vec2(0.0, e)).x, hu = texture(waterSim, uv + vec2(0.0, e)).x;
-    state = texture(waterSim, uv).xyz;
-    // Faded out towards the field's edge (its outermost band is wiped as the camera moves).
-    float away = max(abs(xz.x - W.camera.x), abs(xz.y - W.camera.z));
-    float fade = 1.0 - smoothstep(0.28, 0.4, away * W.ripple.z);
-    state *= fade;
+    state = texture(waterSim, uv).xyz * fade;
     return vec2(hr - hl, hu - hd) / (2.0 * W.ripple.w) * fade;
 }
 
@@ -267,13 +269,15 @@ void main()
     vec3 N = fall ? normalize(vFlowN) : mesh ? normalize(cross(dFdx(vPos), dFdy(vPos))) : normalize(vNormal);
     if (dot(N, V) < 0.0 && mesh) N = -N;
     float rippleFade = 1.0 - smoothstep(25.0, 220.0, dist);
-    vec2 slope = mesh ? vec2(0.0) : Ripples(vPos.xz, t) * (W.look2.z * 0.22 * rippleFade);
+    // (Each layer only where it shows: what is faded out entirely is not computed.)
+    vec2 slope = mesh || rippleFade <= 0.0 ? vec2(0.0) : Ripples(vPos.xz, t) * (W.look2.z * 0.22 * rippleFade);
     // Characters in the water disturb the surface around them (the simulated field: wakes, bow waves, their rings).
     vec3 disturb = vec3(0.0);
-    if (!mesh && W.ripple.x > 0.5)
+    if (!mesh && W.ripple.x > 0.5 && rippleFade > 0.0)
         slope += Disturbance(vPos.xz, disturb) * (3.0 * W.ripple.y * rippleFade);
-    if (!mesh && W.fall2.w > 0.0)                // rain falling on it (rvk rain.cpp)
-        slope += RainRipples(vPos.xz, t, 0.35 + 0.6 * W.fall2.w) * (0.18 * W.fall2.w * (1.0 - smoothstep(15.0, 45.0, dist)));
+    float rainNear = 1.0 - smoothstep(15.0, 45.0, dist);
+    if (!mesh && W.fall2.w > 0.0 && rainNear > 0.0)   // rain falling on it (rvk rain.cpp)
+        slope += RainRipples(vPos.xz, t, 0.35 + 0.6 * W.fall2.w) * (0.18 * W.fall2.w * rainNear);
     // A fall: the water runs down the sheet, in the fall's own coordinates (vFlow: unbroken over its triangles). It
     // falls as water does - from a start speed, gathering speed - so the pattern is laid out by the time the water
     // takes to come down this far (tau): sliding that by the clock moves it down, faster and stretched longer lower
@@ -493,7 +497,7 @@ void main()
     }
 
     // Where a fall lands: the pool churned white along its foot, the foam broken up and drifting out from it.
-    if (!mesh && W.fall.z > 0.5 && W.fall2.y > 0.0) {
+    if (!mesh && W.fall.z > 0.5 && W.fall2.y > 0.0 && dist < 300.0) {   // (beyond: faded out)
         float best = 1e9, along = 0.0;
         for (int i = 0; i < int(W.fall.z); ++i) {
             FootSegment fs = feet[i];
