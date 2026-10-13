@@ -28,6 +28,12 @@ float NightSky()
     return mix(3.4, 1.0, smoothstep(0.0, 0.25, sun));   // (user: 1.7 x the first 2.0 in game)
 }
 
+// How much it is night for the clouds' light: 0 with the sun up .. 1 with it gone.
+float Night()
+{
+    return 1.0 - smoothstep(0.0, 0.25, dot(FL.sunColor.rgb, vec3(0.3, 0.59, 0.11)));
+}
+
 // Low in the sky, the horizon's band (up to ~12 degrees), as much as the game fogs its clouds (amount): 0 .. amount.
 float HorizonBand(vec3 dir, float amount)
 {

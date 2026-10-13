@@ -49,7 +49,8 @@ vec4 Aerial(vec3 light, float alpha, float dist, vec3 dir)
 {
     float air = 1.0 - exp(-dist / L.haze.w);
     float low = HorizonBand(dir, L.horizon.x);
-    float haze = max(min(air * 1.1, 1.0), low);
+    // (By night at least a quarter of the air's colour, as the game's sheets have: the heaps grey among them - user.)
+    float haze = max(max(min(air * 1.1, 1.0), low), 0.25 * Night());
     light = mix(light, AirColour(L.haze.rgb, low) * alpha, haze);
     return vec4(light, alpha) * (1.0 - smoothstep(0.6 * L.layer.w, L.layer.w, dist));
 }
@@ -180,7 +181,7 @@ vec4 Deck(vec3 eye, vec3 dir, float jitter)
             continue;
         float h = (float(i) + 0.5) / float(kSteps);
         // (Seen from below: mostly its underside - darker than the layer's sunlit tops; thick parts darker still.)
-        vec3 S = (L.ambient.rgb * mix(0.38, 0.8, h) * mix(0.55, 1.0, exp(-d * 2.0)) * NightSky() + sun) * L.tint.rgb * L.tint.w;
+        vec3 S = (L.ambient.rgb * mix(0.38, 0.8, h) * mix(0.55, 1.0, exp(-d * 2.0)) * NightSky() * (1.0 + Night()) + sun) * L.tint.rgb * L.tint.w;
         const vec3 luma = vec3(0.3, 0.59, 0.11);   // (contrast, as the layer: RVK_CloudShade)
         S *= clamp(pow(max(dot(S, luma) / max(dot(L.tint.rgb, luma) * L.tint.w, 1e-3), 1e-3), L.horizon.y - 1.0), 0.15, 3.0);
         float st = exp(-d * sigma * dt);
@@ -290,7 +291,9 @@ void main()
     float cosT = dot(dir, sunL);
     vec3 sunColour = SunLight(sunL);
     vec3 glow = Afterglow(sunL);
-    float nightSky = NightSky();
+    // (By night the heaps' sky light twice the sheets': cloud dimmed inside, they came out greyer and darker than
+    // the game's sheets round them - user.)
+    float nightSky = NightSky() * (1.0 + Night());
     float sigma = L.shape.w;
     float transmit = 1.0;
     vec3 light = vec3(0.0);
