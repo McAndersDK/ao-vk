@@ -171,7 +171,7 @@ vec4 Deck(vec3 eye, vec3 dir, float jitter)
     const int kSteps = 8;
     float dt = (t1 - t0) / float(kSteps);
     float sigma = L.shape.w * 0.9, transmit = 1.0;
-    vec3 sunL = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
+    vec3 sunL = normalize(FL.sunTrue.xyz + vec3(0.0, 1e-6, 0.0));   // (the sun's: below the horizon too)
     vec3 sun = SunLight(sunL) * 0.35 + Afterglow(sunL) * 0.45;   // (its underside: the afterglow on it)
     vec3 light = vec3(0.0);
     for (int i = 0; i < kSteps && transmit > 0.02; ++i) {
@@ -287,7 +287,7 @@ void main()
     }
     // Steps growing with the distance (short near the eye: the near clouds' detail; long far off), at most L.view.z.
     int steps = int(L.view.z);
-    vec3 sunL = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
+    vec3 sunL = normalize(FL.sunTrue.xyz + vec3(0.0, 1e-6, 0.0));   // (the sun's: below the horizon too)
     float cosT = dot(dir, sunL);
     vec3 sunColour = SunLight(sunL);
     vec3 glow = Afterglow(sunL);

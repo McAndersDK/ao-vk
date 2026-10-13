@@ -1959,9 +1959,9 @@ void Device::DrawGrassShadow(VkCommandBuffer cmd, const d3d::Matrix& lightViewPr
     p.wind[1] = 0.56f;
     p.wind[2] = 0.35f;
     p.wind[3] = std::max(m_sway, 0.3f);
-    p.sun[0] = m_sunDir[0];
-    p.sun[1] = m_sunDir[1];
-    p.sun[2] = m_sunDir[2];
+    p.sun[0] = m_shadowLightDir[0];             // (the sun's, or by night the moon's)
+    p.sun[1] = m_shadowLightDir[1];
+    p.sun[2] = m_shadowLightDir[2];
     p.sun[3] = std::max(m_grassGusts, 0.0f);
     p.cascade[0] = 0.5f * texel;
     p.cascade[1] = 0.75f;

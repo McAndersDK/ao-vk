@@ -1274,8 +1274,14 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
         sun.type = LIGHT_DIRECTIONAL;
         sun.diffuse = {0.9f, 0.85f, 0.75f, 1};
         sun.direction = {0.55f, -0.7f, 0.45f};
-        if (g_grassBenchNight)
-            sun.diffuse = {0.12f, 0.14f, 0.22f, 1};
+        if (g_grassBenchNight) {
+            // As the game's nights: its light from the sun under the ground, pointing up, dim blue; a sky seen (the
+            // moon: opposite the sun, night.cpp).
+            sun.diffuse = {0.13f, 0.22f, 0.30f, 1};
+            sun.direction = {-0.5f, 0.59f, 0.63f};
+            dev.SetDrawVisual(uint32_t(VisualKind::Sky), "sky");
+            dev.SetDrawVisual(0, nullptr);
+        }
         dev.SetLight(0, sun);
         dev.LightEnable(0, true);
         dev.SetTextureStageState(0, TSS_COLORARG1, TA_TEXTURE);
@@ -1439,6 +1445,7 @@ float g_cloudShade = 1.6f;        // --cloud-shade X: RVK_CloudShade
 float g_cloudHeight = 900.0f;     // --cloud-height X: RVK_CloudHeight
 float g_cloudLow = 1.0f;          // --cloud-low X: RVK_CloudLow
 float g_cloudSheet = 1.0f;        // --cloud-sheet X: RVK_CloudSheet
+float g_moonLight = 1.0f;         // --moon-light X: RVK_MoonLight
 bool g_cloudLayer = true;         // --cloud-puffs: RVK_CloudLayer off (a volume per puff)
 bool g_cloudsHalf = true;         // --clouds-full: RVK_CloudHalf off        // --clouds-game: ... drawn as the game draws them (RVK_CloudsOn off)
 bool g_fixedClock = false;        // --fixed-clock MS: the renderer's clock steps MS a frame (no sleeping: benchmarks)
@@ -3076,6 +3083,7 @@ int main(int argc, char** argv)
         else if (a == "--water-quality" && i + 1 < argc) g_waterQuality = std::atoi(argv[++i]);
         else if (a == "--water-off") g_waterOff = true;
         else if (a == "--water-night") g_waterNight = true;
+        else if (a == "--moon-light" && i + 1 < argc) g_moonLight = float(std::atof(argv[++i]));
         else if (a == "--water-z" && i + 1 < argc) g_waterZ = float(std::atof(argv[++i]));
         else if (a == "--water-noshadow") shadows = false;
         else if (a == "--water-nohdr") hdr = false;
@@ -3246,6 +3254,7 @@ int main(int argc, char** argv)
     dev.SetSunSoftness(sunSoft);
     dev.SetLeafLight(leaf);
     dev.SetNightGlow(nightGlow);
+    dev.SetMoonLight(g_moonLight);
     dev.SetContactShadows(contact);
     dev.SetSway(sway);
     dev.SetGrassPush(grassPush);

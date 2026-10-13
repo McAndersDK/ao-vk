@@ -35,5 +35,8 @@ layout(set = 0, binding = 4, std140) uniform FrameLights {
     vec4 cloudTint;             // the game's cloud sheets with the layer's light (cloud_light.glsl): their colour (w
     vec4 cloudSky;              // brightness); the sky's light (w: the sheets' strength, 0 none); the air's colour (w:
     vec4 cloudAir;              // the horizon's haze)
+    vec4 moon;                  // the moonlight (rvk night.cpp): its colour on the ground and grass (0 = none); w: 1 =
+                                // the shadow map is the moon's (sunDir: the moon's light), not the sun's
+    vec4 sunTrue;               // towards the sun, below the horizon too (the clouds' light); w: how much it is night
     Light lights[64];
 } FL;

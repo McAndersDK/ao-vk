@@ -424,6 +424,8 @@ public:
     void SetSunSoftness(float s) { m_sunSoftness = s; m_frameLightsDirty = true; }
     void SetLeafLight(float s) { m_leafLight = s; m_frameLightsDirty = true; }
     void SetNightGlow(float s) { m_nightGlow = s; m_frameLightsDirty = true; m_constantsDirty = true; }
+    // The moon's light at night (night.cpp; 0 = none, 1 = as planned).
+    void SetMoonLight(float s) { m_moonLight = s; m_frameLightsDirty = true; m_constantsDirty = true; }
     void SetContactShadows(float s) { m_contact = s; m_constantsDirty = true; }
     void SetEffectGlow(float gain) { if (m_effectGlow != gain) { m_effectGlow = gain; m_constantsDirty = true; } }
     float EffectGlow() const { return m_effectGlow; }
@@ -949,6 +951,22 @@ private:
     uint32_t m_cascadeCount = 0;                 // cascades the map holds
     uint64_t m_cascadeFrame = 0;                 // the far cascades are redrawn on alternate frames
     float m_shadowSunDir[3] = {};
+    // The moon (night.cpp, RVK_MoonLight): once the sun is down, a dim cool light from the moon on the land - the
+    // shadow map drawn from it, the game's night light (from under the ground) turned to come from it.
+    float m_moonLight = 1.0f;                    // RVK_MoonLight (0: none)
+    float m_moonSeenDir[3] = {}, m_moonSeenSize = 0.0f;   // this frame's biggest moon in the sky (towards it)
+    uint64_t m_moonSeenFrame = ~0ull, m_skySeenFrame = ~0ull;
+    float m_moonPos[3] = {0.0f, 1.0f, 0.0f};     // towards the moon (eased)
+    float m_moonDir[3] = {0.0f, -1.0f, 0.0f};    // the direction its light travels
+    float m_moonColour[3] = {};                  // its light now (0: none)
+    float m_moonFade = 0.0f;                     // 0..1: how much the moon lights (night x its height x the setting)
+    float m_shadowLightDir[3] = {0.0f, -1.0f, 0.0f};   // what the shadow map is drawn from: the sun, or the moon
+    bool m_shadowIsMoon = false;                 // ... the moon (FrameLights moon.w)
+    bool m_drawIsSkyMesh = false;                // the current visual is a mesh in the sky (a moon?)
+    void NoteSkyMesh(uint32_t fvf, const void* vertices, uint32_t vertexCount);
+    void UpdateMoon();
+    bool MoonOn() const { return m_moonFade > 0.0f; }
+    bool MoonLightFor(const d3d::Light& game, bool terrain, d3d::Light* out) const;
     float m_sunColor[3] = {}, m_shadowSunColor[3] = {};   // this frame's sun / the shadow map's
     bool CreateShadowResources(std::string* error);
     void DestroyShadowResources();

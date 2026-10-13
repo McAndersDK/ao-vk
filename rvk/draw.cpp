@@ -302,7 +302,7 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
     fl->taa[2] = FrameNoise();                   // noise patterns move on each frame (averaged by the TAA)
     fl->taa[3] = float(m_windTimePrev);         // the wind's time last frame (plants' motion vectors)
     fl->shadowParams[0] = m_shadowValid ? 1.0f : 0.0f;
-    fl->shadowParams[1] = m_shadowStrength;
+    fl->shadowParams[1] = m_shadowValid && m_shadowIsMoon ? 0.8f * m_shadowStrength : m_shadowStrength;
     fl->shadowParams[2] = float(m_cascadeCount);
     fl->shadowParams[3] = PointShadowStrength();
     // The sun the shadow map was drawn with (shadows lag a frame), or without shadows this frame's.
@@ -311,6 +311,16 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
     fl->sunDir[3] = m_hdr ? m_hdrHeadroom : m_lightHeadroom;
     for (int i = 0; i < 3; ++i) fl->sunColor[i] = m_shadowValid ? m_shadowSunColor[i] : m_frameSunColor[i];
     fl->sunColor[3] = 0.0f;
+    // The moon's light on the ground and grass (night.cpp); whether the shadow map is its. The sun's true direction
+    // (below the horizon too) for the clouds' light.
+    for (int i = 0; i < 3; ++i) fl->moon[i] = m_moonColour[i];
+    fl->moon[3] = m_shadowValid && m_shadowIsMoon ? 1.0f : 0.0f;
+    {
+        float l = std::sqrt(m_sunDir[0] * m_sunDir[0] + m_sunDir[1] * m_sunDir[1] + m_sunDir[2] * m_sunDir[2]);
+        const bool known = m_sunLuminance > 0.0f && l > 0.0f;
+        for (int i = 0; i < 3; ++i) fl->sunTrue[i] = known ? -m_sunDir[i] / l : -m_frameSunDir[i];
+        fl->sunTrue[3] = night;
+    }
     fl->pbr[0] = m_pbr.specular;
     fl->pbr[1] = m_pbr.ambient;
     fl->pbr[2] = m_ssr > 0.0f ? m_pbr.reflections : 0.0f;
@@ -1395,6 +1405,10 @@ void Device::SetDrawVisual(uint32_t kind, const char* className, uint32_t owner,
     // (A sky visual is named by its class chain, "VisualSingleCloud_t<...".)
     m_drawIsCloudPuff = className && std::strncmp(className, "VisualSingleCloud_t", 19) == 0 &&
                         (className[19] == 0 || className[19] == '<');
+    if (VisualKind(kind) == VisualKind::Sky)
+        m_skySeenFrame = m_frameNumber;
+    m_drawIsSkyMesh = VisualKind(kind) == VisualKind::Sky && className &&
+                      std::strncmp(className, "GenericMeshObject_t", 19) == 0;
     m_drawOwner = owner;
     m_drawVisual = visual;
 }
@@ -2083,6 +2097,8 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
         return;                                  // replaced by sun shadows
     if (m_drawIsCloudPuff && CaptureCloudPuff(fvf, vertices, vertexCount, indices, indexCount))
         return;                                  // replaced by a volume (DrawClouds)
+    if (m_drawIsSkyMesh && !m_external && !m_drawGpu)
+        NoteSkyMesh(fvf, vertices, vertexCount);   // the moons (night.cpp)
     if (IsTerrain(fvf) && IsMultiplyPass())
         m_terrainLitPassCur = true;
     // (The terrain's base pass: its light pass multiplies, its fog white - not the scene's fog colour.)
@@ -2584,9 +2600,21 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
             // saturates the ground's lighting pass and local lights (the player's) vanish on it.
             if (override && terrain && slot.light.type == d3d::LIGHT_DIRECTIONAL)
                 continue;
-            FillGpuLight(slot.light, slot.cosHalfTheta, slot.cosHalfPhi, c.lights[lightCount++], LightScale(slot.light));
+            // By night the game's light from under the ground comes from the moon (night.cpp).
+            d3d::Light moonLight;
+            const bool moon = override && slot.light.type == d3d::LIGHT_DIRECTIONAL &&
+                              VisualKind(m_drawVisualKind) != VisualKind::Sky && MoonLightFor(slot.light, false, &moonLight);
+            FillGpuLight(moon ? moonLight : slot.light, slot.cosHalfTheta, slot.cosHalfPhi, c.lights[lightCount++],
+                         LightScale(slot.light));
             if (slot.light.type != d3d::LIGHT_DIRECTIONAL) ++localLights;
         }
+    // ... and the ground, which the game keeps directional light off, gets the moon's.
+    if ((flags & F_LIGHTING) && override && terrain && lightCount < kMaxLights) {
+        d3d::Light moonLight{}, none{};
+        none.type = d3d::LIGHT_DIRECTIONAL;
+        if (MoonLightFor(none, true, &moonLight))
+            FillGpuLight(moonLight, 0.0f, 0.0f, c.lights[lightCount++], 1.0f);
+    }
     c.lightInfo[0] = lightCount;
     c.lightInfo[1] = localLights;
     c.lightInfo[2] = override ? carrier : 0;   // frame light (index + 1) this draw carries: it doesn't light it

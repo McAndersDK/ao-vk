@@ -1149,13 +1149,17 @@ void Device::DrawShadowItem(VkCommandBuffer cmd, ShadowBind& bind, ShadowItem& i
 void Device::RenderShadowMap(VkCommandBuffer cmd)
 {
     bool haveSun = m_sunLuminance > 0.0f && m_sunDir[1] < -0.05f;   // below the horizon / grazing: none
+    // With the sun down, the moon's light (night.cpp) - the map drawn from it.
+    UpdateMoon();
+    const bool moon = !haveSun && MoonOn();
+    const float* lightDir = haveSun ? m_sunDir : m_moonDir;
     m_shadowValid = false;
     m_shadowItemsCount = m_shadowStaticItems = m_shadowAnimatedItems = 0;
     m_shadowDrawn = m_shadowCulled = m_shadowStaticDrawn = m_shadowAnimatedDrawn = 0;
     m_shadowCollectMs = m_shadowCullMs = m_shadowDrawMs = 0.0;
     m_animatedItems.clear();
     // The sun for effects that don't need the shadow map (light through leaves, contact shadows).
-    if (haveSun) std::memcpy(m_frameSunDir, m_sunDir, sizeof(m_sunDir));
+    if (haveSun || moon) std::memcpy(m_frameSunDir, lightDir, sizeof(m_frameSunDir));
     for (int i = 0; i < 3; ++i) m_frameSunColor[i] = haveSun ? m_sunColor[i] : 0.0f;
     m_frameLightsDirty = true;
     // The world camera: the one most casters were drawn with.
@@ -1189,11 +1193,12 @@ void Device::RenderShadowMap(VkCommandBuffer cmd)
     CollectShadowItems();
     m_shadowCollectMs = ProfileCpu() - collectStart;
     ProfileCpuAdd("shadow collect", collectStart);
-    if (!m_shadows || !haveSun)
+    if (!m_shadows || !(haveSun || moon))
         return;
 
-    // Light view: z along the sun's direction; each cascade centred ahead of the camera, snapped to its texels.
-    float z[3] = {m_sunDir[0], m_sunDir[1], m_sunDir[2]};
+    // Light view: z along the sun's (moon's) direction; each cascade centred ahead of the camera, snapped to its texels.
+    std::memcpy(m_shadowLightDir, lightDir, sizeof(m_shadowLightDir));
+    float z[3] = {lightDir[0], lightDir[1], lightDir[2]};
     float up[3] = {0.0f, 1.0f, 0.0f};
     if (std::fabs(z[1]) > 0.99f) { up[1] = 0.0f; up[2] = 1.0f; }
     float x[3], y[3];
@@ -1324,8 +1329,9 @@ void Device::RenderShadowMap(VkCommandBuffer cmd)
                  VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
     m_shadowImageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     m_cascadeCount = count;
-    std::memcpy(m_shadowSunDir, m_sunDir, sizeof(m_sunDir));
-    std::memcpy(m_shadowSunColor, m_sunColor, sizeof(m_sunColor));
+    std::memcpy(m_shadowSunDir, lightDir, sizeof(m_shadowSunDir));
+    for (int i = 0; i < 3; ++i) m_shadowSunColor[i] = haveSun ? m_sunColor[i] : 0.0f;   // (the moon: FrameLights moon)
+    m_shadowIsMoon = !haveSun;
     m_shadowValid = true;
 }
 

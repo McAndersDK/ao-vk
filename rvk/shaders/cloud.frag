@@ -94,7 +94,7 @@ void main()
     vec3 towardSun = normalize(C.sun.xyz);
     float sunStep = 0.5 * gHalf;
     vec3 viewW = normalize(mat3(C.world) * dir);
-    vec3 sunW = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
+    vec3 sunW = normalize(FL.sunTrue.xyz + vec3(0.0, 1e-6, 0.0));   // (the sun's: below the horizon too)
     float cosT = dot(viewW, sunW);
     float phase = 0.85 + 0.9 * pow(max(cosT, 0.0), 8.0);           // the lit side; a silver rim looking at the sun
     vec3 sunColour = C.sunColour.rgb;

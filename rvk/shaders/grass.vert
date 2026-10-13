@@ -267,8 +267,15 @@ void main()
                 FL.shadowParams.y;
     vec3 groundN = normalize(vec3(up.x * 0.5, 1.0, up.z * 0.5));
     vec3 sun = GF.sunColour.rgb * max(dot(groundN, -normalize(GF.sunDir.xyz + vec3(0.0, -1e-6, 0.0))), 0.0);
+    // By night the moon's light (as on the ground: FL.moon), the map then its - its shadow takes only the moon's.
+    float moonShade = 1.0;
+    if (FL.moon.w > 0.5) {
+        moonShade = shade;
+        shade = 1.0;
+    }
+    vec3 moon = FL.moon.rgb * (max(dot(groundN, -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0))), 0.0) * moonShade);
     vec3 base = min(baked + amb + sun, vec3(1.0)) * shade, local = LocalLights(p, groundN) * GF.look.y;
-    vec3 light = base + local;
+    vec3 light = base + local + moon;
     // The colour: a gentle root-to-tip gradient around the ground's own brightness, the base darkened by the canopy
     // around it (in a dense tuft deeper) - over the blade's area (wider at the root) each averages 1, so the field as a
     // whole is as bright as its ground - and the root going over to the ground's own colour (as bright as the blade's:

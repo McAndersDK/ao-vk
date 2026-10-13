@@ -433,7 +433,7 @@ vec3 CloudSheet(vec4 tex)
 {
     const vec3 luma = vec3(0.3, 0.59, 0.11);
     vec3 dir = normalize(vPosW - C.eyePos.xyz);
-    vec3 sunL = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
+    vec3 sunL = normalize(FL.sunTrue.xyz + vec3(0.0, 1e-6, 0.0));
     float thick = clamp(tex.a, 0.0, 1.0);
     const float g = 0.6;
     float phase = min((1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * dot(dir, sunL), 1.5), 8.0);
@@ -494,8 +494,14 @@ void main()
         localScale = 1.0 / max(shade, 0.05);
         shade = 1.0;
     }
+    // By night the map is the moon's (FL.moon.w): its shadow takes only the moon's light - the ground's lightmap and
+    // ambient (the night's own light, not the moon's) stay.
+    float moonShade = 1.0;
     if ((C.flags.x & F_SHADOWTEX) != 0u) {
-        texShade = shade;
+        if (FL.moon.w > 0.5)
+            moonShade = shade;
+        else
+            texShade = shade;
         shade = 1.0;
     }
     bool shadeSun = (C.flags.x & (F_PERPIXEL | F_LIGHTING)) == (F_PERPIXEL | F_LIGHTING);
@@ -550,7 +556,7 @@ void main()
         }
         vec3 ambient = vec3(0.0), diff = vec3(0.0), spec = vec3(0.0), diffL = vec3(0.0), specL = vec3(0.0);
         // Sunlight is shadowed: by the receiver's shade, or in the ground's lighting pass by the lightmap's.
-        float sunScale = (C.flags.x & F_SHADOWTEX) != 0u ? texShade : shadeSun ? shade : 1.0;
+        float sunScale = (C.flags.x & F_SHADOWTEX) != 0u ? texShade * moonShade : shadeSun ? shade : 1.0;
         AccumulateLights(vPosW, n, sunScale, localScale, ambient, diff, spec, diffL, specL);
         // PBR: metals have no diffuse light; the occlusion map takes ambient light away.
         float kd = gPbrOn ? 1.0 - gPbrMetal : 1.0, kAmb = gPbrOn ? kd * gPbrAo : 1.0;
@@ -648,7 +654,7 @@ void main()
         if ((C.flags.x & F_HDR) == 0u) current.rgb = min(current.rgb, vec3(1.0));
     }
     if (!shadeSun)
-        current.rgb *= shade;
+        current.rgb *= FL.moon.w > 0.5 ? mix(1.0, shade, 0.5) : shade;   // (by night the moon's: unlit, half of it)
     // Sunlight through leaves: where the sun is behind a leaf (seen from the camera), its light comes through tinted
     // by the leaf, most looking into the sun; other leaves' shadows still block it. Only textures with holes around
     // this point (their coarse mip's alpha) are leaves - not walls drawn the same way.

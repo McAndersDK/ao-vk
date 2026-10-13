@@ -120,6 +120,10 @@ struct FrameLights {               // binding 4: per-frame data (constants.glsl 
     float cloudTint[4];            // the game's cloud sheets, drawn with the layer's light (cloud_light.glsl): the
     float cloudSky[4];             // clouds' colour (rgb, w brightness); the sky's light on them (rgb, w the sheets'
     float cloudAir[4];             // strength: 0 = none); the air's colour (rgb, w: the horizon's haze)
+    float moon[4];                 // the moonlight (night.cpp): its colour on the ground and grass (0 = none); w: 1 =
+                                   // the shadow map is the moon's (sunDir: the moon's light), not the sun's
+    float sunTrue[4];              // towards the sun, below the horizon too (the clouds' light: sunset, afterglow);
+                                   // w: how much it is night (0 day .. 1)
     GpuLight lights[kFrameLights];
 };
 
