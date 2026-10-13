@@ -580,6 +580,7 @@ public:
         float height = 900.0f;                   // RVK_CloudHeight: the layer's base above the eye's ground (world)
         float shade = 1.6f;                      // RVK_CloudShade: contrast (light and shade; 1 = as lit)
         float low = 1.0f;                        // RVK_CloudLow: the low deck (stratus), x (0: none)
+        float sheet = 1.0f;                      // RVK_CloudSheet: the game's flat sheets behind the layer, x (0: none)
     };
     void SetCloudParams(const CloudParams& params);
     void SmokeSourceFrame(uint64_t key, const SmokeSource& source);
@@ -1618,6 +1619,10 @@ private:
     };
     CloudParams m_cloudParams;
     std::vector<CloudPuff> m_cloudPuffs;         // this frame's, taken from the sky's draws
+    // The game's sheets drawn behind the layer (RVK_CloudSheet; FrameLights cloudTint/Sky/Air), with the layer's
+    // colours (last frame's: MarchCloudLayer).
+    bool CloudSheetsOn() const { return m_cloudParams.enable && m_cloudParams.layer && m_cloudParams.sheet > 0.0f; }
+    float m_sheetTint[4] = {}, m_sheetSky[4] = {}, m_sheetAir[4] = {};
     bool m_cloudsDrawn = false;                  // drawn this frame (where the sky ended)
     bool m_drawIsCloudPuff = false;              // the current visual is a cloud puff (SetDrawVisual)
     bool m_cloudNoiseMade = false;

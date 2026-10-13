@@ -1,0 +1,44 @@
+// Light on clouds, shared by the cloud layer (cloud_layer.frag) and the game's cloud sheets drawn with it
+// (ffp_main.glsl, MAT_CLOUDSHEET). The includer declares the frame lights (FL).
+
+// The sunlight reaching the clouds: reddened low in the sky (its long way through the air - orange, then pink near
+// the horizon), gone a little after it sets (the clouds stay lit a while: they're high).
+vec3 SunLight(vec3 sunL)
+{
+    float low = 1.0 - smoothstep(0.0, 0.35, sunL.y);
+    low *= low;                                  // (golden first; pink only in its last few degrees)
+    vec3 tint = mix(vec3(1.0), mix(vec3(1.0, 0.8, 0.58), vec3(1.0, 0.6, 0.5), smoothstep(0.75, 1.0, low)), low);
+    return FL.sunColor.rgb * tint * smoothstep(-0.12, 0.1, sunL.y);
+}
+
+// The glow under the clouds round sunset: their undersides lit pink by the light low in the sky (most with the sun
+// at the horizon and a little after). Scaled as the sky's light (about 1).
+vec3 Afterglow(vec3 sunL)
+{
+    float g = smoothstep(-0.14, -0.02, sunL.y) * (1.0 - smoothstep(0.02, 0.12, sunL.y));
+    return vec3(1.0, 0.5, 0.55) * g;
+}
+
+// How much the sky's light is raised with the sun gone (night; 1 by day): lit only by the sky, cloud dimmed inside
+// to 0.4 came out a third as light as the game's own night clouds (user: brightness 3 to look right) - the sky's
+// light then carries the game's colour on its own.
+float NightSky()
+{
+    float sun = dot(FL.sunColor.rgb, vec3(0.3, 0.59, 0.11));
+    return mix(3.4, 1.0, smoothstep(0.0, 0.25, sun));   // (user: 1.7 x the first 2.0 in game)
+}
+
+// Low in the sky, the horizon's band (up to ~12 degrees), as much as the game fogs its clouds (amount): 0 .. amount.
+float HorizonBand(vec3 dir, float amount)
+{
+    float low = 1.0 - smoothstep(0.0, 0.22, dir.y);
+    return amount * low * low * (3.0 - 2.0 * low);
+}
+
+// The air's colour before clouds: the game's fog colour (haze) at the horizon (low: HorizonBand), where the clouds
+// meet its sky; above, paler and whiter - the game's teal fog made the whole sky's clouds teal (user: whiter).
+vec3 AirColour(vec3 haze, float low)
+{
+    float grey = dot(haze, vec3(0.3, 0.59, 0.11));
+    return mix(mix(vec3(grey), haze, 0.35) * 1.25, haze, low);
+}

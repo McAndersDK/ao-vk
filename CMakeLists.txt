@@ -55,6 +55,7 @@ foreach(shader ffp.vert ffp.tesc ffp.tese ffp.frag ffp_glow.frag ffp_nocut.frag 
                 "${CMAKE_CURRENT_SOURCE_DIR}/rvk/shaders/rain_common.glsl"
                 "${CMAKE_CURRENT_SOURCE_DIR}/rvk/shaders/clouds_common.glsl"
                 "${CMAKE_CURRENT_SOURCE_DIR}/rvk/shaders/cloud_shadow_common.glsl"
+                "${CMAKE_CURRENT_SOURCE_DIR}/rvk/shaders/cloud_light.glsl"
         COMMENT "glslc ${shader}")
     list(APPEND RVK_SHADER_INCS "${out}")
 endforeach()

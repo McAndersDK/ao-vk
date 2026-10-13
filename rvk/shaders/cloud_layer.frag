@@ -7,6 +7,7 @@
 // orders, a forward lobe for silver edges, powdery dark edges) and from the sky (lighter at the tops), tinted by the
 // game's own cloud colour. Premultiplied; filtered up over the scene (cloud_up.frag).
 #include "frame_lights.glsl"                    // FL (binding 4): the sun, the TAA's noise
+#include "cloud_light.glsl"                     // the sun, the afterglow, the night's sky on clouds
 
 layout(set = 0, binding = 0, std140) uniform LayerFrame {
     mat4 invViewProj;   // clip -> world (the world camera; D3D row-vector convention, as the scene's)
@@ -27,7 +28,7 @@ layout(set = 0, binding = 0, std140) uniform LayerFrame {
     vec4 shadowArea;    // the shadow map (RVK_CLOUD_SHADOW): its corner x, z (world), its size, the plane it lies in
                         // (world y)
     vec4 deck;          // the low deck (stratus: the game's flat sheets and dull overcast): x how much (0..1), y its
-                        // base, z its top (world y)
+                        // base, z its top (world y); w: the game's sheets' faint shadow (RVK_CloudSheet)
 } L;
 layout(set = 0, binding = 1) uniform sampler2D weatherMap;
 layout(set = 0, binding = 2) uniform sampler3D shapeNoise;
@@ -40,33 +41,6 @@ const float kPi = 3.14159265;
 
 float Remap(float v, float lo, float hi, float a, float b) { return a + (v - lo) * (b - a) / max(hi - lo, 1e-5); }
 
-// The sunlight reaching the clouds: reddened low in the sky (its long way through the air - orange, then pink near
-// the horizon), gone a little after it sets (the clouds stay lit a while: they're high).
-vec3 SunLight(vec3 sunL)
-{
-    float low = 1.0 - smoothstep(0.0, 0.35, sunL.y);
-    low *= low;                                  // (golden first; pink only in its last few degrees)
-    vec3 tint = mix(vec3(1.0), mix(vec3(1.0, 0.8, 0.58), vec3(1.0, 0.6, 0.5), smoothstep(0.75, 1.0, low)), low);
-    return FL.sunColor.rgb * tint * smoothstep(-0.12, 0.1, sunL.y);
-}
-
-// The glow under the clouds round sunset: their undersides lit pink by the light low in the sky (most with the sun
-// at the horizon and a little after). Scaled as the sky's light (about 1).
-vec3 Afterglow(vec3 sunL)
-{
-    float g = smoothstep(-0.14, -0.02, sunL.y) * (1.0 - smoothstep(0.02, 0.12, sunL.y));
-    return vec3(1.0, 0.5, 0.55) * g;
-}
-
-// How much the sky's light is raised with the sun gone (night; 1 by day): lit only by the sky, cloud dimmed inside
-// to 0.4 came out a third as light as the game's own night clouds (user: brightness 3 to look right) - the sky's
-// light then carries the game's colour on its own.
-float NightSky()
-{
-    float sun = dot(FL.sunColor.rgb, vec3(0.3, 0.59, 0.11));
-    return mix(3.4, 1.0, smoothstep(0.0, 0.25, sun));   // (user: 1.7 x the first 2.0 in game)
-}
-
 // The air between the eye and a cloud dist away (premultiplied light, alpha): its colour goes towards the game's
 // distance colour (the more the farther - wholly far off - and low in the sky the more the game fogs its clouds). The
 // cloud stays as opaque as it is: the air in front of it hides what's behind as well (thinning far clouds instead
@@ -74,14 +48,9 @@ float NightSky()
 vec4 Aerial(vec3 light, float alpha, float dist, vec3 dir)
 {
     float air = 1.0 - exp(-dist / L.haze.w);
-    float low = 1.0 - smoothstep(0.0, 0.22, dir.y);   // (the horizon's band: up to ~12 degrees)
-    low = L.horizon.x * low * low * (3.0 - 2.0 * low);
+    float low = HorizonBand(dir, L.horizon.x);
     float haze = max(min(air * 1.1, 1.0), low);
-    // (The air's colour: the game's fog colour at the horizon, where the clouds meet its sky; above, paler and
-    // whiter - the game's teal fog made the whole layer teal, user: whiter.)
-    float grey = dot(L.haze.rgb, vec3(0.3, 0.59, 0.11));
-    vec3 airColour = mix(mix(vec3(grey), L.haze.rgb, 0.35) * 1.25, L.haze.rgb, low);
-    light = mix(light, airColour * alpha, haze);
+    light = mix(light, AirColour(L.haze.rgb, low) * alpha, haze);
     return vec4(light, alpha) * (1.0 - smoothstep(0.6 * L.layer.w, L.layer.w, dist));
 }
 
@@ -259,6 +228,14 @@ void main()
         od += ds * dspan / sunL.y * L.shape.w * 0.9;
     }
     float light = exp(-od * 0.25);                // (softened: thin cloud a light shade, thick cloud dark)
+    // The game's sheets (RVK_CloudSheet, L.deck.w): a faint veil's shadow - fixed in the world, drifting with the wind
+    // (the sheets themselves are kept round the eye: their own shadow would slide with the player), high up, fibrous.
+    if (L.deck.w > 0.0) {
+        vec3 q = p + sunL * ((L.layer.y + 1500.0 - p.y) / sunL.y) + L.wind.xyz * 0.6;
+        float n = textureLod(detailNoise, vec3(q.x / 4000.0, 0.37, q.z / 1500.0), 0.0).r * 0.7 +
+                  textureLod(detailNoise, vec3(q.z / 1700.0 + 0.3, 0.71, q.x / 900.0), 0.0).g * 0.3;
+        light *= 1.0 - L.deck.w * smoothstep(0.38, 0.7, n);
+    }
     outScene = vec4(light, light, light, 1.0);
 }
 #else

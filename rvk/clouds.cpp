@@ -478,7 +478,7 @@ bool Device::CaptureCloudPuff(uint32_t fvf, const void* vertices, uint32_t verte
         vertexCount < 3 || (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZ)
         return false;
     if (m_cloudPuffs.size() >= kMaxPuffs)
-        return true;                              // (hidden all the same)
+        return !CloudSheetsOn();                  // (hidden all the same - or drawn, a sheet)
     const FvfLayout layout = DecodeFvf(fvf);
     const uint8_t* base = static_cast<const uint8_t*>(vertices);
     CloudPuff p{};
@@ -644,7 +644,7 @@ bool Device::CaptureCloudPuff(uint32_t fvf, const void* vertices, uint32_t verte
     m_cloudPuffs.push_back(p);
     (void)indices;
     (void)indexCount;
-    return true;
+    return !CloudSheetsOn();                     // (RVK_CloudSheet: drawn, a sheet behind the layer - DrawTransform)
 }
 
 // The puffs taken this frame, drawn as volumes where the sky ends (no depth test: only the sky is there yet). Far ones
@@ -1171,7 +1171,10 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
     // the camera - the layer mustn't pulse with them. (Only how cloudy and what kind: where the puffs are says nothing
     // about the world - they stay round the eye.)
     const float present = 1.0f - std::exp(-0.5f * cover);   // (the puffs drawn: ~1 for any sky the game has clouds in)
-    const float cloudy = std::clamp(present * (0.42f + 0.05f * flatShare) + smoothstep01(0.0f, 0.2f, rain) * 0.55f, 0.0f, 1.0f);
+    // (With the game's sheets drawn behind (RVK_CloudSheet): the heaps sparser - the sheets the veil, as the game's.)
+    const float sheets = CloudSheetsOn() ? std::min(m_cloudParams.sheet, 1.0f) : 0.0f;
+    const float cloudy = std::clamp(present * (0.42f + 0.05f * flatShare - 0.09f * sheets) +
+                                    smoothstep01(0.0f, 0.2f, rain) * 0.55f, 0.0f, 1.0f);
     // (Flat sheets: lumpy layered cloud - stratocumulus - not a thin stratus band, which seen from below at a low
     // angle smears into waves and streaks.)
     const float type = std::clamp(0.5f + 0.5f * rain - 0.12f * flatShare * (1.0f - rain), 0.0f, 1.0f);
@@ -1359,6 +1362,11 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
             double(weight > 0.0f ? 100.0f * fogged / weight : 0.0f), double(m_cloudHaze[0]),
             double(m_cloudHaze[1]), double(m_cloudHaze[2]));
     lf.haze[3] = 18000.0f;
+    // The game's sheets (next frame's draws: FrameLights) take the same colours.
+    std::memcpy(m_sheetTint, lf.tint, sizeof(m_sheetTint));
+    std::memcpy(m_sheetSky, lf.ambient, sizeof(m_sheetSky));
+    for (int k = 0; k < 3; ++k) m_sheetAir[k] = lf.haze[k];
+    m_sheetAir[3] = lf.horizon[0];
     lf.view[0] = float(hw);
     lf.view[1] = float(hh);
     lf.view[2] = float(std::clamp(m_cloudParams.steps * 3u, 32u, 192u));
@@ -1370,6 +1378,8 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     lf.deck[0] = std::clamp((deckOverride >= 0.0f ? deckOverride : m_cloudDeck) * m_cloudParams.low, 0.0f, 1.0f);
     lf.deck[1] = m_cloudBase - 0.55f * m_cloudParams.height;   // (between the ground and the layer's base)
     lf.deck[2] = lf.deck[1] + kDeckThickness;
+    // The game's sheets' faint shadow (the shadow map), while it draws them.
+    lf.deck[3] = CloudSheetsOn() && !m_cloudPuffs.empty() ? 0.25f * std::min(m_cloudParams.sheet, 1.0f) : 0.0f;
     void* cpu = nullptr;
     const VkDeviceSize offset = Allocate(sizeof(LayerFrame), 256, &cpu);
     std::memcpy(cpu, &lf, sizeof(lf));

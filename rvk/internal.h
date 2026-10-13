@@ -53,7 +53,7 @@ struct DrawTransform {
                                    // ground under it (world y, float bits: where its fallen leaves lie)
 };
 constexpr float kSkySceneryHaze = 2000.0f;     // the sky's scenery's haze: its colour left e^-(distance / this)
-enum : uint32_t { kMatPbr = 1, kMatBase = 2, kMatAlbedo = 4, kMatEmissive = 8, kMatPicked = 16, kMatSky = 32 };   // DrawTransform
+enum : uint32_t { kMatPbr = 1, kMatBase = 2, kMatAlbedo = 4, kMatEmissive = 8, kMatPicked = 16, kMatSky = 32, kMatCloudSheet = 64 };   // DrawTransform
                                                  // mat[2]: has an ORM map; it is the ground base's; stage 0 draws an
                                                  // albedo map; has an emissive map; its texture was picked
 // GPU-driven M2: one record a draw (binding 12). `constIndex` selects the shared DrawConstants it draws with; the
@@ -117,6 +117,9 @@ struct FrameLights {               // binding 4: per-frame data (constants.glsl 
     float clouds[4];               // the clouds' shadow map (clouds.cpp): its corner x, z (world), 1 / its size, its
                                    // bindless image + 1 | sampler << 20 (as the float's bits; 0 = none)
     float clouds2[4];              // ... the cloud layer's height (world y), the shadow's strength
+    float cloudTint[4];            // the game's cloud sheets, drawn with the layer's light (cloud_light.glsl): the
+    float cloudSky[4];             // clouds' colour (rgb, w brightness); the sky's light on them (rgb, w the sheets'
+    float cloudAir[4];             // strength: 0 = none); the air's colour (rgb, w: the horizon's haze)
     GpuLight lights[kFrameLights];
 };
 

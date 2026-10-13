@@ -32,5 +32,8 @@ layout(set = 0, binding = 4, std140) uniform FrameLights {
     vec4 clouds;                // the clouds' shadow map (rvk clouds.cpp): corner x, z, 1 / size, its bindless image + 1 |
                                 // sampler << 20 (as the float's bits; 0 = none)
     vec4 clouds2;               // ... the cloud layer's height (world y), the shadow's strength
+    vec4 cloudTint;             // the game's cloud sheets with the layer's light (cloud_light.glsl): their colour (w
+    vec4 cloudSky;              // brightness); the sky's light (w: the sheets' strength, 0 none); the air's colour (w:
+    vec4 cloudAir;              // the horizon's haze)
     Light lights[64];
 } FL;

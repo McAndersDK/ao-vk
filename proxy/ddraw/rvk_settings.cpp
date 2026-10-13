@@ -157,6 +157,7 @@ Setting g_settings[] = {
     {"RVK_CloudHeight", "Clouds: the layer's height",                              "Experimental",     Float, 200, 3000, 50, 900, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudShade",  "Clouds: contrast (light and shade; 1 as lit)",            "Experimental",     Float, 0.5f, 3, 0.1f, 1.6f, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudLow",    "Clouds: low grey deck on overcast days, x (0 none)",      "Experimental",     Float, 0, 2, 0.1f, 1, nullptr, 0, "RVK_CloudsOn"},
+    {"RVK_CloudSheet",  "Clouds: the game's flat sheets behind them, x (0 none)",  "Experimental",     Float, 0, 2, 0.1f, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_SmokeGame",  "Smoke: the game's smoke sprites too",                     "Experimental",     Bool,  0, 1, 1, 0, nullptr, 0, "RVK_SmokeOn"},
 
     {"RVK_SunShadow",  "Sun shadows",                                              "Shadows",          Bool,  0, 1, 1, 1, "RANDYVK_SHADOWS", 0},
@@ -514,6 +515,7 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
         c.height = V("RVK_CloudHeight");
         c.shade = V("RVK_CloudShade");
         c.low = V("RVK_CloudLow");
+        c.sheet = V("RVK_CloudSheet");
         d->SetCloudParams(c);
     }
     else if (std::strncmp(n, "RVK_Vol", 7) == 0) d->SetVolume(V("RVK_Volume"), V("RVK_VolHaze"), V("RVK_VolShafts"),

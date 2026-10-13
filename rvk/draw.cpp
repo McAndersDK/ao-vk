@@ -342,6 +342,11 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
         }
     }
     std::memcpy(&fl->clouds[3], &clouds, 4);
+    // The game's cloud sheets (RVK_CloudSheet), coloured as the layer's clouds.
+    std::memcpy(fl->cloudTint, m_sheetTint, sizeof(fl->cloudTint));
+    std::memcpy(fl->cloudSky, m_sheetSky, sizeof(fl->cloudSky));
+    std::memcpy(fl->cloudAir, m_sheetAir, sizeof(fl->cloudAir));
+    fl->cloudSky[3] = CloudSheetsOn() && m_sheetTint[3] > 0.0f ? std::min(m_cloudParams.sheet, 2.0f) : 0.0f;
     fl->prevView = m_prevView;                   // the world camera last frame (motion vectors)
     fl->prevProj = m_prevProj;
     m_frameLightIndices.clear();
@@ -2796,6 +2801,8 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
         dt.mat[2] |= kMatPicked;                 // (texture picking: flashes)
     if (VisualKind(m_drawVisualKind) == VisualKind::Sky || (m_drawMesh && m_drawMesh->skyScenery))
         dt.mat[2] |= kMatSky;                    // (the sky and its scenery: kept inside the far plane, ffp.vert)
+    if (m_drawIsCloudPuff && CloudSheetsOn())
+        dt.mat[2] |= kMatCloudSheet;             // (the game's cloud sheets, lit as the cloud layer: ffp_main.glsl)
     if (m_drawEmissive) {                        // (sampled with the ORM map's sampler, set either way)
         dt.mat[3] = BindlessImage(m_drawEmissive);
         dt.mat[2] |= kMatEmissive;

@@ -42,6 +42,7 @@ float PointShadow(Light l, vec3 posW, vec3 n, float nl)
 #include "lighting.glsl"
 #include "env_common.glsl"
 #include "wind.glsl"
+#include "cloud_light.glsl"
 
 layout(location = 0) in vec4 vDiffuse;
 layout(location = 1) in vec4 vSpecular;
@@ -424,6 +425,26 @@ float LeafMask()
     return D.leaf.w > 0.0 ? LeafMaskAt(vSet0, vTex0.xy * vec2(textureSize(TEX0, 0))) : 1.0;
 }
 
+// The game's cloud sheets (MAT_CLOUDSHEET: its flat sky sheets, drawn behind the cloud layer) lit as the layer lights
+// its clouds - the whitened game colour, the sky's light (raised by night), the sun through a thin sheet (bright and
+// silvery towards it, thick parts darker), the sunset's colours and afterglow - and hazed as the layer by the air
+// (the game's fog colour at the horizon, paler above). tex: the sheet's texture (alpha: its shape; colour: shading).
+vec3 CloudSheet(vec4 tex)
+{
+    const vec3 luma = vec3(0.3, 0.59, 0.11);
+    vec3 dir = normalize(vPosW - C.eyePos.xyz);
+    vec3 sunL = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
+    float thick = clamp(tex.a, 0.0, 1.0);
+    const float g = 0.6;
+    float phase = min((1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * dot(dir, sunL), 1.5), 8.0);
+    vec3 tint = FL.cloudTint.rgb;
+    vec3 sun = SunLight(sunL) * (0.3 + 0.2 * phase) * (1.0 - 0.45 * thick) * mix(tint, vec3(dot(tint, luma)), 0.5);
+    vec3 sky = FL.cloudSky.rgb * mix(1.0, 0.72, thick) * NightSky() * tint;
+    vec3 S = (sun + sky + Afterglow(sunL) * 0.6 * tint) * FL.cloudTint.w * mix(0.8, 1.05, dot(tex.rgb, luma));
+    float low = HorizonBand(dir, FL.cloudAir.w);
+    return mix(S, AirColour(FL.cloudAir.rgb, low), max(0.25, low));
+}
+
 void main()
 {
     gRecord = vRecord;
@@ -689,7 +710,13 @@ void main()
     if (gPbrOn && !gPbrBase)
         albedo *= (1.0 - gPbrMetal) * gPbrAo;
 #endif
-    if ((C.flags.x & F_FOG) != 0u) {
+    // The game's cloud sheets: coloured as the cloud layer's clouds, hazed by its air (not the game's fog).
+    bool cloudSheet = (D.mat.z & MAT_CLOUDSHEET) != 0u && FL.cloudSky.w > 0.0;
+    if (cloudSheet) {
+        current.rgb = CloudSheet(Sample(0u));
+        current.a = clamp(current.a * FL.cloudSky.w, 0.0, 1.0);
+    }
+    if ((C.flags.x & F_FOG) != 0u && !cloudSheet) {
         float f = vFogFactor;
         uint table = C.flags.z;
         if (table != 0u) {
