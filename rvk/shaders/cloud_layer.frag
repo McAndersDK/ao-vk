@@ -64,7 +64,7 @@ vec3 Afterglow(vec3 sunL)
 float NightSky()
 {
     float sun = dot(FL.sunColor.rgb, vec3(0.3, 0.59, 0.11));
-    return mix(2.0, 1.0, smoothstep(0.0, 0.25, sun));
+    return mix(3.4, 1.0, smoothstep(0.0, 0.25, sun));   // (user: 1.7 x the first 2.0 in game)
 }
 
 // The air between the eye and a cloud dist away (premultiplied light, alpha): its colour goes towards the game's
