@@ -79,17 +79,22 @@ void main()
     float spikes = Spikes(at, r);
     float rays = r < 0.9 ? 0.18 * Rays(at, r) * step(0.1, r) : 0.0;
     float fade = mix(1.0, P.colour.w, clamp(r, 0.0, 1.0));   // (the vertex tint across the fan)
-    vec3 whole = (hue * glow + vec3(0.35 * spikes + rays + band)) * 1.2 * fade;
+    // (its crisp detail - spikes, rays - only as much as the sun is seen: through thick cloud even a tenth of it, in
+    // HDR, showed as a sharp burst through the cloud - user dump 2026-10-13)
+    float detail = 0.1 + 0.9 * seen;
+    vec3 soft = (hue * glow + vec3(band)) * 1.2 * fade;
+    vec3 whole = soft + vec3(0.35 * spikes + rays) * 1.2 * fade * detail;
     // The body (a sun's smallest sprite: coreShare 1; its big ones' cores, magnified, stay soft glows in their tint):
     // a soft white-hot middle and its spikes, whiter than the tint (the game's sprites, added in 8 bits, clip to white).
     vec3 hot = P.colour.rgb + 0.6 * max(P.colour.r, max(P.colour.g, P.colour.b));
-    float body = coreShare * (exp(-pow(r / 0.09, 2.0)) * 3.0 + spikes * 0.8);
+    float body = coreShare * (exp(-pow(r / 0.09, 2.0)) * 3.0 + spikes * 0.8 * detail);
     vec3 light;
     if (P.view.z > 0.5) {
         // Over the clouds: the glow's bleed - less behind thick cloud or the land (seen: of its core) - and the glare
         // of a sun seen, swelling in as it comes out: a soft white bloom round the body, the rays brighter.
         float glare = coreShare * seen * (exp(-r / 0.16) * 0.45 + exp(-r / 0.5) * 0.12 + rays * 1.5);
-        light = P.colour.rgb * whole * bleed * (0.35 + 0.65 * seen) + hot * glare * 0.6;
+        // (the bleed soft only: rays and spikes drawn over cloud look like a hole in it)
+        light = P.colour.rgb * soft * bleed * (0.35 + 0.65 * seen) + hot * glare * 0.6;
     } else {
         light = hot * body + P.colour.rgb * whole * (1.0 - bleed);
     }
