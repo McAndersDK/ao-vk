@@ -1528,6 +1528,8 @@ private:
         SmokeImage look;                         // what the drawing reads: R density, G the sunlight reaching it; B A
                                                  // the same a step before (RGBA16F, written by the simulation's last stage)
         SmokeImage pressure;                     // RVK_SmokeExact: its pressure (each step's solve starts from the last's)
+        SmokeImage flow;                         // its velocity for the drawing's wisps: half the cells a side, RGBA8
+                                                 // (/ kFlowMax)
     };
     SmokeParams m_smokeParams;
     std::vector<SmokeVolume> m_smokeVolumes;
@@ -1538,6 +1540,8 @@ private:
     uint32_t m_smokeN = 0;                       // the shared scratch images' cells a side (the most a volume has)
     double m_smokeLastClock = -1.0;
     VkSampler m_smokeSampler = VK_NULL_HANDLE, m_smokeRepeatSampler = VK_NULL_HANDLE;
+    VkBuffer m_smokeBounds = VK_NULL_HANDLE;     // per volume: the cells with smoke (lowest, highest; the simulation's)
+    VmaAllocation_T* m_smokeBoundsAllocation = nullptr;
     VkDescriptorSetLayout m_smokeSimSetLayout = VK_NULL_HANDLE, m_smokeSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_smokeSimLayout = VK_NULL_HANDLE, m_smokeLayout = VK_NULL_HANDLE;
     VkPipeline m_smokeSimPipeline = VK_NULL_HANDLE, m_smokePipeline = VK_NULL_HANDLE;

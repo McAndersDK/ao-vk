@@ -16,6 +16,13 @@ layout(set = 0, binding = 0) uniform SmokeFrame {
                         // fine (per world unit); w a seed
     vec4 look;          // x: how opaque it is drawn (RVK_SmokeOpaque: its finished colour and cover, x); y: how far
                         // from the state a step before to the latest (the simulation steps less often than frames)
+    uvec4 info;         // x: its slot in the bounds; y: lamps; z: cells a side
+    uvec4 lamps[2];     // the lamps reaching the box (indices in FL.lights)
 } S;
+
+// The cells with smoke (smoke_sim.comp stage 7): [2 slot] the lowest, [2 slot + 1] the highest; empty: lowest > highest.
+layout(set = 0, binding = 6, std430) readonly buffer SmokeBounds { uvec4 bounds[]; } SB;
+
+const float kSmokeFlowMax = 4.0;                // the flow image's range (world / s; rvk/smoke.cpp kFlowMax)
 
 float SmokeViewZ(float d) { return S.proj.y / (min(d, 0.9999999) - S.proj.x); }

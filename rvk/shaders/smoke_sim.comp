@@ -11,6 +11,7 @@
 //     was there, so it cannot overshoot: much sharper than moving it once), the source's added, fading
 //   7 the sunlight reaching each cell through the smoke; with the density, the rendering's image (look)
 //   10 (once) the wisps' noise for the rendering: tiling, 3 octaves of value noise
+//   11 the velocity for the rendering's wisps (half the cells a side, 8 bits)
 // Characters (B) stir it: the smoke in one moves with it, a moving one leaves eddies behind it.
 // Velocities in world units / s, the box P.a.w world units across; the box may move with its source (P.e.xyz: by how
 // much since last frame, in box units) - the contents stay where they are in the world.
@@ -28,6 +29,7 @@ layout(set = 0, binding = 8, rgba16f) uniform readonly image3D velRead;   // exa
 layout(set = 0, binding = 9, rgba16f) uniform image3D lookImg;   // stage 7: R density, G sunlight; B A the last step's
 layout(set = 0, binding = 10) uniform sampler3D forwardIn;       // stage 8: the forward step (the curl image)
 layout(set = 0, binding = 12, r16f) uniform writeonly image3D noiseOut;   // stage 10
+layout(set = 0, binding = 14, rgba8_snorm) uniform writeonly image3D flowOut;   // stage 11 (half the cells a side)
 // The characters in the box (rvk/smoke.cpp SmokeBodies): upright capsules the smoke moves with and flows round.
 layout(set = 0, binding = 11, std140) uniform Bodies {
     vec4 info;          // x: how many; y: how strongly they stir it (RVK_SmokeStir)
@@ -44,7 +46,13 @@ layout(push_constant) uniform Params {
     vec4 e;     // xyz: the box's move since last frame (box units); w: stage 4: 1 = the first Jacobi step (pressure
                 // from 0; else from the image's - RVK_SmokeExact); stage 0: the step's number (the source's jitter)
     vec4 f;     // xyz: towards the sun (unit); w: the smoke's extinction (per world unit at density 1)
+    vec4 g;     // x: the volume's slot in the bounds; y: stage 11: 1 / the flow image's range (world / s)
 } P;
+
+// Each volume's cells with smoke in them (now or a step before), for the drawing: [2 slot] the lowest, [2 slot + 1]
+// the highest (made empty before stage 7, which widens them).
+layout(set = 0, binding = 13, std430) buffer Bounds { uvec4 bounds[]; };
+shared uint sLow[3], sHigh[3];
 
 // How much of a cell is inside a character (0..1) and how near it is (1 at its surface, 0 a body width away).
 float InBody(vec3 uvw, int i, out float near_)
@@ -215,7 +223,19 @@ void main()
     } else if (stage == 10) {
         float w = 0.55 * TileNoise(uvw * 8.0, 8) + 0.3 * TileNoise(uvw * 16.0 + 5.0, 16) + 0.15 * TileNoise(uvw * 32.0 + 3.0, 32);
         imageStore(noiseOut, id, vec4(w));
+    } else if (stage == 11) {
+        // (Each cell the average of the 2^3 under it: filtered at their shared corner.)
+        int half_ = n / 2;
+        if (any(greaterThanEqual(id, ivec3(half_))))
+            return;
+        vec3 v = texture(velIn, (vec3(id) + 0.5) / float(half_)).xyz;
+        imageStore(flowOut, id, vec4(clamp(v * P.g.y, -1.0, 1.0), 0.0));
     } else if (stage == 7) {
+        if (gl_LocalInvocationIndex == 0u) {
+            sLow[0] = sLow[1] = sLow[2] = 0xFFFFFFFFu;
+            sHigh[0] = sHigh[1] = sHigh[2] = 0u;
+        }
+        barrier();
         // Towards the sun, to the box's edge: the smoke the light goes through.
         vec3 s = P.f.xyz;
         float stepLen = 1.5 / float(n), optical = 0.0;
@@ -228,6 +248,20 @@ void main()
         }
         // (With the last step's, which the drawing blends from: the simulation steps less often than frames.)
         vec2 last = imageLoad(lookImg, id).rg;
-        imageStore(lookImg, id, vec4(texelFetch(densIn, id, 0).r, exp(-optical * P.f.w * stepLen * size), last));
+        float now = texelFetch(densIn, id, 0).r;
+        imageStore(lookImg, id, vec4(now, exp(-optical * P.f.w * stepLen * size), last));
+        // The bounds (the drawing skips smoke thinner than this): the group's, then the volume's.
+        if (max(now, last.x) >= 1e-4) {
+            uvec3 u = uvec3(id);
+            atomicMin(sLow[0], u.x); atomicMin(sLow[1], u.y); atomicMin(sLow[2], u.z);
+            atomicMax(sHigh[0], u.x); atomicMax(sHigh[1], u.y); atomicMax(sHigh[2], u.z);
+        }
+        barrier();
+        if (gl_LocalInvocationIndex == 0u && sLow[0] <= sHigh[0]) {
+            uint slot = uint(P.g.x) * 2u;
+            atomicMin(bounds[slot].x, sLow[0]); atomicMin(bounds[slot].y, sLow[1]); atomicMin(bounds[slot].z, sLow[2]);
+            atomicMax(bounds[slot + 1u].x, sHigh[0]); atomicMax(bounds[slot + 1u].y, sHigh[1]);
+            atomicMax(bounds[slot + 1u].z, sHigh[2]);
+        }
     }
 }

@@ -8,11 +8,13 @@
 
 layout(set = 0, binding = 1) uniform sampler3D look;        // R density, G the sunlight reaching it (0..1); B A the
                                                             // same a simulation step before
-layout(set = 0, binding = 2) uniform sampler3D velocity;    // xyz the flow (world / s)
+layout(set = 0, binding = 2) uniform sampler3D flow;        // xyz the flow (/ kSmokeFlowMax world / s; half the cells)
 layout(set = 0, binding = 3) uniform sampler2D sceneDepth;
 layout(set = 0, binding = 5) uniform sampler3D wispNoise;   // R tiling noise, 8 lattice cells across (smoke_sim.comp 10)
 
 layout(location = 0) in vec3 vWorld;
+layout(location = 1) flat in vec3 vLow;     // the part of the box drawn (with smoke in it)
+layout(location = 2) flat in vec3 vHigh;
 
 layout(location = 0) out vec4 outScene;
 layout(location = 1) out vec4 outGlow;
@@ -52,7 +54,7 @@ void main()
     vec3 eye = S.camera.xyz;
     vec3 dir = normalize(vWorld - eye);
     // The far faces only (outward normal away from the camera): the face this point is on is the nearest wall.
-    vec3 f = (vWorld - S.box.xyz) / S.box.w;
+    vec3 f = (vWorld - vLow) / max(vHigh - vLow, vec3(1e-6));
     vec3 near0 = f, near1 = 1.0 - f;
     vec3 n = vec3(0.0);
     float best = 1e9;
@@ -64,7 +66,7 @@ void main()
         discard;
     // Where the ray is in the box.
     vec3 inv = 1.0 / mix(dir, vec3(1e-6), lessThan(abs(dir), vec3(1e-6)));
-    vec3 t0 = (S.box.xyz - eye) * inv, t1 = (S.box.xyz + S.box.w - eye) * inv;
+    vec3 t0 = (vLow - eye) * inv, t1 = (vHigh - eye) * inv;
     vec3 tmin = min(t0, t1), tmax = max(t0, t1);
     float enter = max(max(max(tmin.x, tmin.y), tmin.z), 0.0);
     float leave = min(min(tmax.x, tmax.y), tmax.z);
@@ -78,7 +80,8 @@ void main()
         outScene = vec4(0.0);
         return;
     }
-    int steps = int(S.ambient.w);
+    // Steps about a box's length / S.ambient.w apart (a short ray few), at most that many.
+    int steps = clamp(int(ceil((leave - enter) * S.ambient.w / S.box.w)), 1, int(S.ambient.w));
     float ds = (leave - enter) / float(steps);
     float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))) + FL.taa.z);
     vec3 L = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
@@ -87,7 +90,7 @@ void main()
     vec3 sun = FL.sunColor.rgb * mix(0.35, 1.0, phase);
     float transmit = 1.0;
     vec3 light = vec3(0.0);
-    uint lamps = min(FL.info.x, 64u);
+    uint lamps = S.info.y;
     for (int i = 0; i < steps && transmit > 0.01; ++i) {
         vec3 p = eye + dir * (enter + (float(i) + noise) * ds);
         vec3 uvw = (p - S.box.xyz) / S.box.w;
@@ -99,16 +102,13 @@ void main()
         // Wisps: thin smoke frays right through, thick keeps more of its body (the average kept: 2 x the noise's 0.5).
         float fray = S.detail.x * mix(0.55, 1.0, 1.0 - smoothstep(0.0, 0.6, dens));
         if (fray > 0.0)
-            dens *= mix(1.0, 2.0 * smoothstep(0.3, 0.7, Detail(p, texture(velocity, uvw).xyz)), fray);
+            dens *= mix(1.0, 2.0 * smoothstep(0.3, 0.7, Detail(p, texture(flow, uvw).xyz * kSmokeFlowMax)), fray);
         float a = 1.0 - exp(-dens * S.colour.w * ds);
         // The sky's light, too, less inside the smoke (as far in as the sun's is shadowed, about).
         float sunIn = now.y;
         vec3 lit = S.ambient.rgb * mix(0.45, 1.0, sunIn) + sun * sunIn;
         for (uint k = 0u; k < lamps; ++k) {
-            Light li = FL.lights[k];
-            uint type = uint(li.position.w + 0.5);
-            if (type != 1u && type != 2u)
-                continue;
+            Light li = FL.lights[S.lamps[k >> 2u][k & 3u]];
             float d = distance(li.position.xyz, p);
             if (d >= li.direction.w)
                 continue;
