@@ -137,7 +137,8 @@ bool Device::CreateHdrResources(std::string* error)
         return Check(vkCreateDescriptorSetLayout(m_device, &sl, nullptr, out), "post set layout", error);
     };
     auto pipelineLayout = [&](VkDescriptorSetLayout set, VkPipelineLayout* out) {
-        VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 128};
+        // (160: the tone mapping's air (RVK_Atmos) - past Vulkan's guaranteed 128; desktop GPUs give 256.)
+        VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 160};
         VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         pl.setLayoutCount = 1;
         pl.pSetLayouts = &set;
@@ -145,6 +146,9 @@ bool Device::CreateHdrResources(std::string* error)
         pl.pPushConstantRanges = &push;
         return Check(vkCreatePipelineLayout(m_device, &pl, nullptr, out), "post pipeline layout", error);
     };
+    if (m_props.limits.maxPushConstantsSize < 160)
+        Log("post: this GPU allows %u bytes of push constants, the tone mapping needs 160 (RVK_Atmos): expect errors",
+            m_props.limits.maxPushConstantsSize);
     if (!setLayout(kTonemapInputs, &m_tonemapSetLayout) || !pipelineLayout(m_tonemapSetLayout, &m_tonemapLayout) ||
         !setLayout(4, &m_bloomSetLayout) || !pipelineLayout(m_bloomSetLayout, &m_bloomLayout))
         return false;
@@ -540,7 +544,7 @@ void Device::TonemapInputsPass(VkCommandBuffer cmd, Texture* dst, VkPipeline pip
         w[i].pImageInfo = &images[i];
     }
     vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_tonemapLayout, 0, kTonemapInputs, w);
-    float push[24] = {};
+    float push[40] = {};
     std::memcpy(push, params, 16 * sizeof(float));
     if (depthView == m_depthView && m_aoProjValid) {
         push[7] = float(int(push[7]) | 16);      // (the depth is the scene's: the grading's distance, the land's haze)
@@ -554,15 +558,14 @@ void Device::TonemapInputsPass(VkCommandBuffer cmd, Texture* dst, VkPipeline pip
 // The haze over the distant land (RVK_VolLand; tonemap.frag): out[0..3] its colour - the game's fog colour (what the
 // far land fades into) cooled and a little lighter, as the air's blue - and how much; out[4..7] the game's fog start
 // and end (view depth: from there the game's own fog takes over), 0 0 if none. Off (strength 0) without the fog.
-void Device::LandHaze(float out[8]) const
+void Device::LandHaze(float out[24]) const
 {
+    for (int k = 0; k < 24; ++k) out[k] = 0.0f;
     float fog[4], fogParams[4];
     SceneFog(fog, fogParams);
     const bool linear = fog[3] > 0.5f && uint32_t(fogParams[3]) == 3 && fogParams[1] > fogParams[0] && fogParams[1] > 1.0f;
-    if (m_landHaze <= 0.0f || !linear) {
-        for (int k = 0; k < 8; ++k) out[k] = 0.0f;
+    if (m_landHaze <= 0.0f || !linear)
         return;
-    }
     const float l = 0.3f * fog[0] + 0.59f * fog[1] + 0.11f * fog[2];
     const float cool[3] = {0.78f, 0.95f, 1.25f};
     for (int k = 0; k < 3; ++k) out[k] = std::max(0.0f, fog[k] + (l * cool[k] - fog[k]) * 0.45f) * 1.08f;
@@ -570,6 +573,34 @@ void Device::LandHaze(float out[8]) const
     out[4] = fogParams[0];
     out[5] = fogParams[1];
     out[6] = out[7] = 0.0f;
+    // The air (RVK_Atmos; tonemap.frag Air): out[8..23]. Its density at the eye: about 45% hazed at the game's fog
+    // end on the level, more with the sky's cloud and rain (sky.cpp); its scale height; the sun's glow.
+    if (m_atmos) {
+        const auto& v = m_aoView.m;
+        const float vary = std::clamp(m_cloudParams.vary, 0.0f, 1.0f);
+        const float weather = (1.0f + (0.7f + 0.7f * SkyCloudiness() - 1.0f) * vary) * (1.0f + std::clamp(m_rain, 0.0f, 1.0f));
+        out[8] = m_aoProj.m[0][0];
+        out[9] = m_aoProj.m[1][1];
+        out[10] = 0.6f / fogParams[1] * weather;
+        out[11] = 150.0f;
+        // (D3D row vectors: a world direction's view-space form is d.x * row 0 + d.y * row 1 + d.z * row 2.)
+        for (int k = 0; k < 3; ++k) out[12 + k] = v[1][k];
+        out[15] = 0.6f;
+        // Towards the sun, or by night the moon; their light through the air.
+        const bool moon = MoonOn() && m_frameSunColor[0] + m_frameSunColor[1] + m_frameSunColor[2] <= 0.0f;
+        float to[3], light[3];
+        for (int k = 0; k < 3; ++k) {
+            to[k] = moon ? -m_moonDir[k] : -m_trueSunDir[k];
+            light[k] = moon ? m_moonColour[k] : m_frameSunColor[k];
+        }
+        const float tl = std::max(std::sqrt(to[0] * to[0] + to[1] * to[1] + to[2] * to[2]), 1e-6f);
+        for (int k = 0; k < 3; ++k) to[k] /= tl;
+        for (int k = 0; k < 3; ++k) out[16 + k] = to[0] * v[0][k] + to[1] * v[1][k] + to[2] * v[2][k];
+        out[19] = 0.75f;
+        const float low = 1.0f - std::clamp(to[1] / 0.3f, 0.0f, 1.0f), low2 = low * low;
+        const float tint[3] = {1.0f, 1.0f - 0.35f * low2, 1.0f - 0.6f * low2};
+        for (int k = 0; k < 3; ++k) out[20 + k] = light[k] * tint[k] * (moon ? 1.0f : 0.5f);
+    }
     if (m_frameNumber % 600 == 3)
         Log("land haze: colour %.2f %.2f %.2f x %.2f, the game's fog %.0f..%.0f", double(out[0]), double(out[1]),
             double(out[2]), double(out[3]), double(out[4]), double(out[5]));

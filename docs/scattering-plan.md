@@ -1,6 +1,6 @@
 # Light scattering in the air (atmosphere)
 
-Status: planned (2026-10-13). Replaces the separate, hand-tuned air effects - the land haze (RVK_VolLand,
+Status: phase 1 done analytically (2026-10-13, see below); later phases open. Replaces the separate, hand-tuned air effects - the land haze (RVK_VolLand,
 tonemap.frag), the clouds' Aerial() / AirColour() / HorizonBand() (cloud_light.glsl, cloud_layer.frag), the sunset
 tints (SunLight, Afterglow) - with one model of the air everything is lit through. Builds on the volumetric light
 (volume.frag), the cloud layer, the nights (docs/night-plan.md).
@@ -45,6 +45,17 @@ game's global ambient, the ground's lightmap pass, grass) tinted towards it - da
 colour (replaces the night ambient tint idea in the night plan).
 
 **Setting.** `RVK_Atmos` (0..1, default 1 when done; 0 = the current look). Names <= 15 characters.
+
+## Phase 1 as built: analytic, not tables
+
+AO's far clip is 1-3 km and the sky dome is the game's own: no views through planet-scale air, so the tables
+(Hillaire) would cost and add little. tonemap.frag Air() instead: per land pixel, the air's optical depth along the
+ray with density falling off with height (exponential, scale height 150 units, integrated analytically: valleys below
+the eye hazier, peaks above clearer), extinction per channel (0.8, 1.0, 1.3: the far land bluer), in-scattered light =
+the game's fog colour (the zone's air) + the sun's (moon's) glow - a Henyey-Greenstein forward lobe (g 0.75, x0.6), its
+light golden then red low. Density 0.6 / the game's fog end x the sky weather (0.7 clear .. 1.4 overcast, x2 rain),
+so on level ground at the fog end about as hazy as the old flat haze. RVK_Atmos (0: the old flat haze);
+RVK_VolLand its strength. Clouds keep their Aerial() for now. Push constants 160 bytes (desktop GPUs: 256).
 
 ## Phases
 

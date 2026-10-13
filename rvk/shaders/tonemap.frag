@@ -38,6 +38,26 @@ vec3 Grade(vec3 c, float far)
     return c;
 }
 
+// The air between the eye and a surface z (view depth) away (RVK_Atmos, docs/scattering-plan.md): thicker low down -
+// valleys below the eye hazier, peaks above clearer (exponential with height, integrated along the ray) - its
+// extinction taking red first (the far land bluer), the light it scatters the game's fog colour (the zone's air) and,
+// towards the sun, its glow (a forward lobe: hazy air round a low sun lights up), the sun's light reddened as it sets.
+vec3 Air(vec3 c, float z)
+{
+    vec2 uv = gl_FragCoord.xy / vec2(textureSize(scene, 0));
+    vec3 V = vec3((uv.x * 2.0 - 1.0) / P.air0.x, (1.0 - uv.y * 2.0) / P.air0.y, 1.0) * z;
+    float dist = length(V);
+    vec3 dir = V / max(dist, 1e-4);
+    float x = dot(V, P.air1.xyz) / P.air0.w;      // (height over the eye, in scale heights)
+    float f = abs(x) < 1e-3 ? 1.0 : (1.0 - exp(-x)) / x;
+    float tau = P.air0.z * dist * clamp(f, 0.0, 4.0);
+    vec3 through = exp(-tau * vec3(0.8, 1.0, 1.3));
+    float g = P.air2.w, cosT = dot(dir, P.air2.xyz);
+    float phase = min((1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * cosT, 1.5), 10.0);
+    vec3 scattered = (1.0 - through) * P.haze.rgb + (1.0 - exp(-tau)) * P.air3.rgb * (phase * P.air1.w);
+    return c * through + scattered;
+}
+
 void main()
 {
     vec4 s = texelFetch(scene, ivec2(gl_FragCoord.xy), 0);
@@ -58,9 +78,13 @@ void main()
         // eye out - each ridge farther paler and bluer - and giving way to the game's own fog where that starts
         // (its fog end the far land's colour: no seam with the sky).
         if (P.haze.w > 0.0 && P.fog.y > P.fog.x) {
-            float air = 1.0 - exp(-z / (0.4 * P.fog.y));
             float gameFog = clamp((z - P.fog.x) / (P.fog.y - P.fog.x), 0.0, 1.0);
-            c = mix(c, P.haze.rgb, P.haze.w * air * (1.0 - gameFog));
+            if (P.air0.z > 0.0) {
+                c = mix(c, Air(c, z), min(P.haze.w * 2.5, 1.0) * (1.0 - gameFog));
+            } else {
+                float air = 1.0 - exp(-z / (0.4 * P.fog.y));
+                c = mix(c, P.haze.rgb, P.haze.w * air * (1.0 - gameFog));
+            }
         }
     }
     c = max((c + Volumetric() + glow) * P.params.y, vec3(0.0));

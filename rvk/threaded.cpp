@@ -863,6 +863,11 @@ void ThreadedDevice::SetNightDark(float s)
     Enqueue([this, s](const uint8_t*) { m_device.SetNightDark(s); });
 }
 
+void ThreadedDevice::SetAtmos(bool on)
+{
+    Enqueue([this, on](const uint8_t*) { m_device.SetAtmos(on); });
+}
+
 void ThreadedDevice::SetContactShadows(float s)
 {
     Enqueue([this, s](const uint8_t*) { m_device.SetContactShadows(s); });

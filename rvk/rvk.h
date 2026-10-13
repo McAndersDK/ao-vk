@@ -291,7 +291,7 @@ public:
     void SetGi(float strength, float radius) { m_giStrength = strength; m_giRadius = radius; }
     // With HDR: light scattered by the air - sun shafts (strength; 0 = off), lamp glow (relative), haze density.
     // rays: light shafts through the cloud layer's gaps, x; land: haze over the distant land (0..1).
-    void LandHaze(float out[8]) const;
+    void LandHaze(float out[24]) const;
     void SetVolume(float strength, float haze, float shafts, float rays = 1.0f, float land = 0.4f)
     { m_volume = strength; m_volumeHaze = haze; m_volumeShafts = shafts; m_volumeRays = rays; m_landHaze = land; }
     // With HDR: screen-space reflections - strength (0 = off), reflectivity of water, glossy surfaces, wet ground.
@@ -428,6 +428,8 @@ public:
     void SetMoonLight(float s) { m_moonLight = s; m_frameLightsDirty = true; m_constantsDirty = true; }
     // How dark nights get (tonemap.frag; 0 = as the game, 1 = moonlit blue, 2 = dark).
     void SetNightDark(float s) { m_nightDark = s; }
+    // The air's light scattering over distance (tonemap.frag Air; RVK_Atmos; off: the plain land haze).
+    void SetAtmos(bool on) { m_atmos = on; }
     // Tests: the sky weather's clock (seconds, as UTC; < 0 the wall clock).
     void SetSkyTime(double t) { m_skyTime = t; }
     void SetContactShadows(float s) { m_contact = s; m_constantsDirty = true; }
@@ -962,6 +964,7 @@ private:
     // shadow map drawn from it, the game's night light (from under the ground) turned to come from it.
     float m_moonLight = 1.0f;                    // RVK_MoonLight (0: none)
     float m_nightDark = 1.0f;                    // RVK_NightDark (0: as the game)
+    bool m_atmos = true;                         // RVK_Atmos
     float m_moonSeenDir[3] = {}, m_moonSeenSize = 0.0f;   // this frame's biggest moon in the sky (towards it)
     uint64_t m_moonSeenFrame = ~0ull, m_skySeenFrame = ~0ull;
     float m_moonPos[3] = {0.0f, 1.0f, 0.0f};     // towards the moon (eased)

@@ -203,6 +203,7 @@ Setting g_settings[] = {
     {"RVK_VolShafts",  "Shaft contrast (0 = physical)",                            "HDR and effects",  Float, 0, 3, 0.25f, 1, nullptr, 0, "RVK_VolOn"},
     {"RVK_VolRays",    "Light rays through gaps in the clouds",                    "HDR and effects",  Float, 0, 3, 0.25f, 1, nullptr, 0, "RVK_VolOn"},
     {"RVK_VolLand",    "Haze over distant land (cool, as the air makes it)",       "HDR and effects",  Float, 0, 1, 0.05f, 0.4f, nullptr, 0},
+    {"RVK_Atmos",      "Air: haze by height, bluer far off, the sun's glow (off: flat haze)", "HDR and effects", Bool, 0, 1, 1, 1, nullptr, 0},
     {"RVK_SsrOn",      "Reflections (screen-space)",                               "HDR and effects",  Bool,  0, 1, 1, 1, nullptr, 0},
     {"RVK_Ssr",        "Strength",                                                 "HDR and effects",  Float, 0.25f, 2, 0.25f, 1, nullptr, 0, "RVK_SsrOn"},
     {"RVK_SsrWater",   "Water",                                                    "HDR and effects",  Float, 0, 1, 0.05f, 0.25f, nullptr, 0, "RVK_SsrOn"},
@@ -454,6 +455,7 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
     else if (is("RVK_NightGlow")) d->SetNightGlow(V(n));
     else if (is("RVK_MoonLight")) d->SetMoonLight(V(n));
     else if (is("RVK_NightDark")) d->SetNightDark(V(n));
+    else if (is("RVK_Atmos")) d->SetAtmos(V(n) != 0.0f);
     else if (is("RVK_Contact")) d->SetContactShadows(V(n));
     else if (is("RVK_Ao") || is("RVK_AoRadius")) d->SetAo(V("RVK_Ao"), V("RVK_AoRadius"));
     else if (is("RVK_Gi") || is("RVK_GiRadius")) d->SetGi(V("RVK_Gi"), V("RVK_GiRadius"));

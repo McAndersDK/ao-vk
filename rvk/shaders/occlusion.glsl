@@ -20,6 +20,12 @@ layout(push_constant) uniform Push {
     vec4 grade2;        // night (0 day .. 1 night), night tint, vignette, unused
     vec4 haze;          // the haze over the distant land (bit 16 only): rgb its colour, w how much (0: none)
     vec4 fog;           // x, y: the game's fog start and end (view depth)
+    // The air (RVK_Atmos; rvk hdr.cpp LandHaze): light scattered by the air between the eye and the land.
+    vec4 air0;          // x, y: the projection's m[0][0], m[1][1] (view rays), z: the air's density at the eye (per
+                        // world unit; 0: the plain haze instead), w: its scale height (world units)
+    vec4 air1;          // xyz: up (view space), w: the sun's glow in the haze, x
+    vec4 air2;          // xyz: towards the sun - by night the moon (view space), w: the glow's forward lobe (HG g)
+    vec4 air3;          // rgb: the sun's (moon's) light through the air - golden, then red low
 } P;
 
 // A reduced-resolution image at this pixel: of the 4 nearest texels, those at this pixel's depth (the same surface,
