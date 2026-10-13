@@ -523,6 +523,9 @@ void Device::ShadowCutout(uint32_t fvf, Texture** texture, int* texOffset, float
     int offset = DecodeFvf(fvf).offset[4];
     if (offset < 0)
         return;
+    if (m_textures[0]->m_opaque)
+        return;                                  // (every pixel opaque: nothing to cut out - a solid caster, which also
+                                                 // outlives its texture when the game lets that go out of view)
     *texture = m_textures[0];
     *texOffset = offset;
     float ref = alphaTest ? float(m_rs[d3d::RS_ALPHAREF] & 0xFF) / 255.0f : 0.0f;
@@ -640,11 +643,17 @@ void Device::ForgetCachedCaster(std::unordered_map<uint64_t, CachedCaster>::iter
     m_casterCache.erase(it);
 }
 
+// The game let a texture go (out of view, it unloads them): the remembered casters cut out by it are kept, solid -
+// forgotten, a city wall's remembered shadow lost piece after piece while the camera looked away (user, 2026-10-13).
 void Device::ForgetCasterTexture(Texture* texture)
 {
-    for (auto it = m_casterCache.begin(); it != m_casterCache.end();)
-        if (it->second.texture == texture) { auto next = std::next(it); ForgetCachedCaster(it); it = next; }
-        else ++it;
+    for (auto& [key, e] : m_casterCache)
+        if (e.texture == texture) {
+            e.texture = nullptr;
+            e.texOffset = -1;
+            e.alphaRef = -1.0f;
+            ++m_cacheKeptSolid;
+        }
 }
 
 // End of frame: drop streaks that were broken, and cached casters that are gone - ones in the middle of the view
@@ -653,9 +662,10 @@ void Device::UpdateCasterCache()
 {
     if (m_frameNumber % 300 == 0) {
         Log("caster cache: %zu remembered, %zu streaks; this frame %u streaks started, refused %u far (last %.0f from the "
-            "eye (%.1f %.1f %.1f)), %u full, %u without vertices", m_casterCache.size(), m_casterStreaks.size(),
-            m_cacheStreakStarts, m_cacheRefusedFar, double(m_cacheRefusedFarD), double(m_frameEye[0]),
-            double(m_frameEye[1]), double(m_frameEye[2]), m_cacheRefusedFull, m_cacheRefusedNoVertices);
+            "eye (%.1f %.1f %.1f)), %u full, %u without vertices; %u kept solid when the game let their texture go",
+            m_casterCache.size(), m_casterStreaks.size(), m_cacheStreakStarts, m_cacheRefusedFar,
+            double(m_cacheRefusedFarD), double(m_frameEye[0]), double(m_frameEye[1]), double(m_frameEye[2]),
+            m_cacheRefusedFull, m_cacheRefusedNoVertices, m_cacheKeptSolid);
     }
     m_cacheStreakStarts = m_cacheRefusedFar = m_cacheRefusedFull = m_cacheRefusedNoVertices = 0;
     for (auto it = m_casterStreaks.begin(); it != m_casterStreaks.end();)
