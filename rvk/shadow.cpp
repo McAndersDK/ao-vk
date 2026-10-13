@@ -685,7 +685,7 @@ bool Device::WorldCamera() const
 
 bool Device::ShadowReceiver(uint32_t fvf) const
 {
-    if (m_drawIsLabel || !WorldCamera() || !m_shadows || !m_shadowValid || m_target != m_main || (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZ ||
+    if (m_drawIsLabel || !WorldCamera() || !m_shadows || !ShadingOn() || m_target != m_main || (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZ ||
         !m_rs[d3d::RS_ZENABLE] || VisualKind(m_drawVisualKind) == VisualKind::Sky)   // the sky: no shadows on it
         return false;
     if (!m_rs[d3d::RS_ALPHABLENDENABLE])
@@ -708,7 +708,7 @@ bool Device::IsMultiplyPass() const
 // ground = base * min(1, lightmap * shadow + ambient + lights).
 bool Device::ShadowInLightmap(uint32_t fvf) const
 {
-    return !m_drawIsLabel && WorldCamera() && m_shadows && m_shadowValid && m_target == m_main && m_rs[d3d::RS_ZENABLE] &&
+    return !m_drawIsLabel && WorldCamera() && m_shadows && ShadingOn() && m_target == m_main && m_rs[d3d::RS_ZENABLE] &&
            IsTerrain(fvf) && IsMultiplyPass();
 }
 
@@ -751,7 +751,7 @@ bool Device::IsBlobShadow(uint32_t primitive, uint32_t fvf, const void* vertices
 // pass divides its local lights by the same shadow factor so only the (baked) sunlight ends up shadowed.
 bool Device::ShadowCompensated(uint32_t fvf) const
 {
-    return !m_drawIsLabel && WorldCamera() && m_shadows && m_shadowValid && m_target == m_main &&
+    return !m_drawIsLabel && WorldCamera() && m_shadows && ShadingOn() && m_target == m_main &&
            (fvf & d3d::FVF_POSITION_MASK) == d3d::FVF_XYZ && m_rs[d3d::RS_ZENABLE] && IsMultiplyPass() &&
            VisualKind(m_drawVisualKind) != VisualKind::Sky;
 }

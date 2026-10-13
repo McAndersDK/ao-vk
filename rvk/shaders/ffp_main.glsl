@@ -242,11 +242,36 @@ float CloudShadow(vec3 posW)
     return mix(1.0, t, FL.clouds2.y * inside);
 }
 
+// The terrain's shade from a low sun (rvk terrain_sun.cpp): at a point, 1 in the sun, 0 under the terrain hiding it -
+// by the height a point at its place must be to see the sun over the terrain (a map round the eye; 2 units' grace:
+// the ground itself, and what stands on it, not shading itself on the flat). Weighted in low in the sky.
+float TerrainSun(vec3 posW)
+{
+    uint slot = floatBitsToUint(FL.terrainSun.w);
+    if ((slot & 0xFFFFFu) == 0u || FL.terrainSun2.y <= 0.0)
+        return 1.0;
+    vec2 uv = (posW.xz - FL.terrainSun.xy) * FL.terrainSun.z;
+    vec2 edge = min(uv, 1.0 - uv);
+    float inside = smoothstep(0.0, 0.03, min(edge.x, edge.y));
+    if (inside <= 0.0)
+        return 1.0;
+    uint img = (slot & 0xFFFFFu) - 1u, smp = (slot >> 20) & 0xFFu;
+    float need = textureLod(sampler2D(texImages[img], bindlessSamplers[smp]), uv, 0.0).r;
+    float lit = smoothstep(need - 1.0, need + 3.0, posW.y + 2.0);
+    return mix(1.0, lit, FL.terrainSun2.y * inside);
+}
+
 float gCasterVisibility = 1.0, gCloudVisibility = 1.0;   // SunVisibility's two parts: things' shadows, the clouds'
+float gTerrainVisibility = 1.0;                         // ... and the terrain's shade from a low sun (TerrainSun)
 
 float SunVisibility(vec3 posW, vec3 n)
 {
     gCloudVisibility = CloudShadow(posW);
+    gTerrainVisibility = FL.moon.w > 0.5 ? 1.0 : TerrainSun(posW);
+    if (FL.shadowParams.x <= 0.5) {              // (no shadow map: the terrain's shade alone)
+        gCasterVisibility = 1.0;
+        return gCloudVisibility;
+    }
     float v = SunVisibilityCasters(posW, n);
     if (v > 0.0 && (C.flags.x & F_SHADOWCHEAP) == 0u) {
         bool hasN = dot(n, n) > 0.0;
@@ -259,13 +284,21 @@ float SunVisibility(vec3 posW, vec3 n)
     return v * gCloudVisibility;
 }
 
+// The terrain's shade from a low sun at the shadows' own strength (FL.terrainSun2.z: theirs fade out low, it doesn't -
+// under the mountains the ground is wholly in shade, not lit between the trees' faded shadows - user, 2026-10-13).
+float TerrainShade()
+{
+    return 1.0 - (1.0 - gTerrainVisibility) * FL.terrainSun2.z;
+}
+
 // A cloud's shadow takes the sunlight, not the sky's: where a shadow darkens all of a surface's light (the ground's
 // lightmap holds the sun and the sky's light together; unlit surfaces), only about the sun's part of it goes - a cloud
 // over the sun had left the ground near black (user, 2026-10-13).
 const float kCloudSunShare = 0.5;
 float FlatShade()
 {
-    return (1.0 - (1.0 - gCasterVisibility) * FL.shadowParams.y) * (1.0 - kCloudSunShare * (1.0 - gCloudVisibility));
+    return min(1.0 - (1.0 - gCasterVisibility) * FL.shadowParams.y, TerrainShade()) *
+           (1.0 - kCloudSunShare * (1.0 - gCloudVisibility));
 }
 
 float SunVisibilityCasters(vec3 posW, vec3 n)
@@ -414,25 +447,6 @@ float CasterFade()
     return smoothstep(0.05, 0.17, -normalize(FL.sunDir.xyz + vec3(0.0, 1e-6, 0.0)).y);
 }
 
-// The terrain's shade from a low sun (rvk terrain_sun.cpp): at a point, 1 in the sun, 0 under the terrain hiding it -
-// by the height a point at its place must be to see the sun over the terrain (a map round the eye; 2 units' grace:
-// the ground itself, and what stands on it, not shading itself on the flat). Weighted in low in the sky.
-float TerrainSun(vec3 posW)
-{
-    uint slot = floatBitsToUint(FL.terrainSun.w);
-    if ((slot & 0xFFFFFu) == 0u || FL.terrainSun2.y <= 0.0)
-        return 1.0;
-    vec2 uv = (posW.xz - FL.terrainSun.xy) * FL.terrainSun.z;
-    vec2 edge = min(uv, 1.0 - uv);
-    float inside = smoothstep(0.0, 0.03, min(edge.x, edge.y));
-    if (inside <= 0.0)
-        return 1.0;
-    uint img = (slot & 0xFFFFFu) - 1u, smp = (slot >> 20) & 0xFFu;
-    float need = textureLod(sampler2D(texImages[img], bindlessSamplers[smp]), uv, 0.0).r;
-    float lit = smoothstep(need - 1.0, need + 3.0, posW.y + 2.0);
-    return mix(1.0, lit, FL.terrainSun2.y * inside);
-}
-
 float gSunVisibility = 1.0;          // SunVisibility(vPosW, vNormalW) when computed (main)
 bool gSunVisibilityValid = false;
 
@@ -529,7 +543,7 @@ void main()
     if ((C.flags.x & (F_SHADOW | F_SHADOWCOMP | F_SHADOWTEX)) != 0u) {
         gSunVisibility = SunVisibility(vPosW, vNormalW.xyz);
         gSunVisibilityValid = true;
-        shade = 1.0 - (1.0 - gSunVisibility) * FL.shadowParams.y;
+        shade = min(1.0 - (1.0 - gSunVisibility) * FL.shadowParams.y, TerrainShade());
         flatShade = FlatShade();                  // (all of the light: the clouds' only in part)
     }
     if ((C.flags.x & F_SHADOWCOMP) != 0u) {
@@ -599,8 +613,6 @@ void main()
         vec3 ambient = vec3(0.0), diff = vec3(0.0), spec = vec3(0.0), diffL = vec3(0.0), specL = vec3(0.0);
         // Sunlight is shadowed: by the receiver's shade, or in the ground's lighting pass by the lightmap's.
         float sunScale = (C.flags.x & F_SHADOWTEX) != 0u ? texShade * moonShade : shadeSun ? shade : 1.0;
-        if ((C.flags.x & F_SHADOWTEX) == 0u && FL.moon.w <= 0.5)
-            sunScale *= TerrainSun(vPosW);       // (low sun: under the mountains hiding it, no sunlight)
         AccumulateLights(vPosW, n, sunScale, localScale, ambient, diff, spec, diffL, specL);
         // PBR: metals have no diffuse light; the occlusion map takes ambient light away.
         float kd = gPbrOn ? 1.0 - gPbrMetal : 1.0, kAmb = gPbrOn ? kd * gPbrAo : 1.0;

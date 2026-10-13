@@ -1545,6 +1545,8 @@ private:
     void RecentreTerrainSun();
     void UpdateTerrainSun(VkCommandBuffer cmd);
     void TerrainSunLights(float out[8]);
+    // Shadows drawn on things this frame: the shadow map's, or the terrain's shade from a low sun (without the map).
+    bool ShadingOn() const { return m_shadowValid || (m_tsWeight > 0.0f && m_tsMadeFrame != ~0ull); }
     float m_sceneAmbient = -1.0f;
     uint64_t m_sceneAmbientFrame = ~0ull;
     // How much it is night for the grading (tone map, bloom, night glow): the sun's light on flat ground, but no more

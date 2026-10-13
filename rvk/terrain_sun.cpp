@@ -87,8 +87,9 @@ void Device::UpdateTerrainSun(VkCommandBuffer cmd)
         return;
     for (float& v : to) v /= l;
     // (Weighted in under ~20 degrees, full under ~10: higher, things' shadows have it - and mountains rarely.)
+    // (None once it's down: no sunlight to take - by night the ground's lightmap would only darken.)
     const float t = std::clamp((to[1] - 0.17f) / (0.35f - 0.17f), 0.0f, 1.0f);
-    m_tsWeight = 1.0f - t * t * (3.0f - 2.0f * t);
+    m_tsWeight = (1.0f - t * t * (3.0f - 2.0f * t)) * std::clamp((to[1] + 0.03f) / 0.03f, 0.0f, 1.0f);
     if (m_tsWeight <= 0.0f)
         return;
     const float flat = std::sqrt(to[0] * to[0] + to[2] * to[2]);
@@ -185,6 +186,7 @@ void Device::TerrainSunLights(float out[8])
     std::memcpy(&out[3], &slot, 4);
     out[4] = m_tsEye;
     out[5] = m_tsWeight;
+    out[6] = m_shadowStrength;                   // (its strength: the shadows' own, not faded low as theirs are)
 }
 
 }  // namespace rvk

@@ -312,7 +312,7 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
         const float t = std::clamp((up - 0.05f) / (0.17f - 0.05f), 0.0f, 1.0f);
         fl->shadowParams[1] *= t * t * (3.0f - 2.0f * t);
     }
-    fl->shadowParams[2] = float(m_cascadeCount);
+    fl->shadowParams[2] = m_shadowValid ? float(m_cascadeCount) : 0.0f;   // (none: no map - the terrain's shade alone)
     fl->shadowParams[3] = PointShadowStrength();
     // The sun the shadow map was drawn with (shadows lag a frame), or without shadows this frame's.
     const float* sunDir = m_shadowValid ? m_shadowSunDir : m_frameSunDir;
