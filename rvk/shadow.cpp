@@ -502,12 +502,32 @@ void Device::RecordShadowCaster(uint32_t primitive, uint32_t fvf, uint32_t strid
         return;
     }
     CasterStreak& streak = m_casterStreaks[key];
-    if (streak.lastFrame + 1 == m_frameNumber) ++streak.count;
-    else if (streak.lastFrame != m_frameNumber) { streak.count = 1; ++m_cacheStreakStarts; }
+    const float* t = m_world.m[3];
+    if (streak.lastFrame + 1 == m_frameNumber) {
+        ++streak.count;
+        const float dx = t[0] - streak.at[0], dy = t[1] - streak.at[1], dz = t[2] - streak.at[2];
+        if (dx * dx + dy * dy + dz * dz > 0.01f * 0.01f) streak.moved = true;
+    } else if (streak.lastFrame != m_frameNumber) {
+        streak.count = 1;
+        std::memcpy(streak.at, t, sizeof(streak.at));
+        streak.moved = false;
+        ++m_cacheStreakStarts;
+    }
     streak.lastFrame = m_frameNumber;
-    if (streak.count >= kPromoteFrames && !vertices) ++m_cacheRefusedNoVertices;
-    if (streak.count >= kPromoteFrames && vertices)     // (skinned on the GPU: no vertices here to keep)
-        CacheCaster(key, c, vertices, indices);
+    if (streak.count < kPromoteFrames)
+        return;
+    // Remembered only what stands still in the world: not what moved while seen (a character's gear - idle, its
+    // pieces shifted, each new key remembered at an old place and forgotten again: small shadows blinking ~0.4 s,
+    // user 2026-10-13), nor a character's own.
+    if (streak.moved || c.owner != 0) {
+        ++m_cacheRefusedMoving;
+        return;
+    }
+    if (!vertices) {
+        ++m_cacheRefusedNoVertices;
+        return;
+    }
+    CacheCaster(key, c, vertices, indices);     // (skinned on the GPU: no vertices here to keep)
 }
 
 // Alpha-tested and alpha-blended casters are cut out where texture 0 is transparent: the alpha test's reference,
@@ -680,12 +700,13 @@ void Device::UpdateCasterCache()
 {
     if (m_frameNumber % 300 == 0) {
         Log("caster cache: %zu remembered, %zu streaks; this frame %u streaks started, refused %u far (last %.0f from the "
-            "eye (%.1f %.1f %.1f)), %u full, %u without vertices; %u kept solid when the game let their texture go",
+            "eye (%.1f %.1f %.1f)), %u full, %u without vertices, %u moving or a character's; %u kept "
+            "solid when the game let their texture go",
             m_casterCache.size(), m_casterStreaks.size(), m_cacheStreakStarts, m_cacheRefusedFar,
             double(m_cacheRefusedFarD), double(m_frameEye[0]), double(m_frameEye[1]), double(m_frameEye[2]),
-            m_cacheRefusedFull, m_cacheRefusedNoVertices, m_cacheKeptSolid);
+            m_cacheRefusedFull, m_cacheRefusedNoVertices, m_cacheRefusedMoving, m_cacheKeptSolid);
     }
-    m_cacheStreakStarts = m_cacheRefusedFar = m_cacheRefusedFull = m_cacheRefusedNoVertices = 0;
+    m_cacheStreakStarts = m_cacheRefusedFar = m_cacheRefusedFull = m_cacheRefusedNoVertices = m_cacheRefusedMoving = 0;
     for (auto it = m_casterStreaks.begin(); it != m_casterStreaks.end();)
         it = it->second.lastFrame == m_frameNumber ? std::next(it) : m_casterStreaks.erase(it);
     if (!m_frameEyeValid)

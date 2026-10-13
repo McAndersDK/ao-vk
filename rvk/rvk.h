@@ -1049,6 +1049,7 @@ private:
     static constexpr uint32_t kPromoteFrames = 20, kMaxCachedCasters = 16384;
     // (Diagnostics, a frame's: streaks begun, and casters refused by the cache, by why.)
     uint32_t m_cacheStreakStarts = 0, m_cacheRefusedFar = 0, m_cacheRefusedFull = 0, m_cacheRefusedNoVertices = 0;
+    uint32_t m_cacheRefusedMoving = 0;
     float m_cacheRefusedFarD = 0.0f;
     uint32_t m_cacheKeptSolid = 0;               // (since start)
     uint32_t m_cacheTraceLines = 0;              // (the churn trace's lines so far: 300 at most)
@@ -1078,7 +1079,8 @@ private:
     };
     static constexpr double kSwayStep = 0.05;
     static constexpr size_t kSwaySamples = 80;
-    struct CasterStreak { uint64_t lastFrame; uint32_t count; };
+    // (at: where it stood when the streak began; moved: it has moved since - a thing that moves isn't remembered.)
+    struct CasterStreak { uint64_t lastFrame = 0; uint32_t count = 0; float at[3] = {}; bool moved = false; };
     std::unordered_map<uint64_t, CachedCaster> m_casterCache;
     std::unordered_map<uint64_t, CasterStreak> m_casterStreaks;
     std::vector<std::pair<uint64_t, std::pair<VkBuffer, VmaAllocation_T*>>> m_deadBuffers;
