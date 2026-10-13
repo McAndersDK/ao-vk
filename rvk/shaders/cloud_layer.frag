@@ -216,11 +216,21 @@ void main()
     const float kShadowMapSize = 1024.0;          // (rvk clouds.cpp kShadowSize)
     vec3 p = vec3(L.shadowArea.x + gl_FragCoord.x / kShadowMapSize * L.shadowArea.z, L.shadowArea.w,
                   L.shadowArea.y + gl_FragCoord.y / kShadowMapSize * L.shadowArea.z);
+    // The clouds' own shadow, and finer (user's choice, 2026-10-13): their cells are about a kilometre - the land in
+    // view lay wholly in one cloud's shadow or none, and the shadows weren't seen. Two things, both fixed in shape (a
+    // threshold sweeping through noise as a cloud came near grew rings up a mountain, like slicing 3D noise - user):
+    // - the clouds' shadow read at a point pushed about by noise (~60-150 units) moving with the clouds: ragged edges
+    //   that travel with them;
+    // - in the open, small shadows of their own (as many as the sky is cloudy overall, L.sub.w - steady), drifting at
+    //   a quarter of the clouds' speed.
+    vec3 c = p + sunL * ((L.layer.x + 0.35 * (L.layer.y - L.layer.x) - p.y) / sunL.y);
+    vec4 warp = textureLod(shapeNoise, vec3((c.x + L.wind.x) * L.shape.x * 14.0, 0.21, (c.z + L.wind.z) * L.shape.x * 14.0), 0.0);
+    vec3 pw = p + vec3(warp.g - 0.5, 0.0, warp.b - 0.5) * 260.0;
     const int kSamples = 8;
     float od = 0.0, span = (L.layer.y - L.layer.x) / float(kSamples);
     for (int k = 0; k < kSamples; ++k) {
         float y = L.layer.x + span * (float(k) + 0.5);
-        od += Density(p + sunL * ((y - p.y) / sunL.y), true);   // (with the billows: the clouds' own edges)
+        od += Density(pw + sunL * ((y - pw.y) / sunL.y), true);   // (with the billows: the clouds' own edges)
     }
     od *= span / sunL.y * L.shape.w;
     if (L.deck.x > 0.0) {                         // (and the low deck's)
@@ -231,24 +241,17 @@ void main()
         }
         od += ds * dspan / sunL.y * L.shape.w * 0.9;
     }
-    float light = exp(-od * 0.25);                // (softened: thin cloud a light shade, thick cloud dark)
-    // Real and finer together (user's choice, 2026-10-13): the clouds' own shadow says where the shade is, but its
-    // cells are about a kilometre - the land in view lay wholly in one or none, and the shadows weren't seen. Patches
-    // of ~60-150 units break it up: under a cloud mostly shade with small lit gaps, in the open mostly light with a few
-    // small shadows as the sky is cloudy (L.sub.w), its edges ragged. They drift a quarter as fast as the clouds
-    // (their own speed, on patches that small, flickered past).
+    float shade = 1.0 - exp(-od * 0.25);          // (softened: thin cloud a light shade, thick cloud dark)
     {
-        vec3 c = p + sunL * ((L.layer.x + 0.35 * (L.layer.y - L.layer.x) - p.y) / sunL.y);
-        float cover = clamp(0.15 * L.sub.w + 0.85 * (1.0 - light), 0.0, 0.95);
         vec3 q = vec3((c.x + 0.25 * L.wind.x) * L.shape.x * 14.0, 0.43, (c.z + 0.25 * L.wind.z) * L.shape.x * 14.0);
         vec4 n = textureLod(shapeNoise, q, 0.0);
         // (Worley fbm at 4 and 8 cells a tile: values bunched in ~0.45..0.63 - the threshold that leaves `cover` of
         // the ground above it, fitted to their spread.)
         float v = n.g * 0.7 + n.b * 0.3;
-        float t = 0.61 - 0.27 * cover;
-        float patchy = smoothstep(t - 0.012, t + 0.018, v);
-        light = mix(1.0, light, 0.3) * (1.0 - 0.85 * patchy);
+        float t = 0.61 - 0.27 * (0.3 * L.sub.w);
+        shade = max(shade, 0.6 * smoothstep(t - 0.012, t + 0.018, v));
     }
+    float light = 1.0 - shade;
     // The game's sheets (RVK_CloudSheet, L.deck.w): a faint veil's shadow - fixed in the world, drifting with the wind
     // (the sheets themselves are kept round the eye: their own shadow would slide with the player), high up, fibrous.
     if (L.deck.w > 0.0) {
