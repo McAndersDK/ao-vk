@@ -438,7 +438,7 @@ public:
     void SetSunSize(float s) { m_sunSize = s; }
     void SetSunBleed(float s) { m_sunBleed = s; }
     // Remembered shadow casters (things out of view still casting) and the terrain's shade from a low sun, on / off.
-    // (0 off, 1 on, 2 on without the remembered sway, 3 only big things; switched: the churn trace and a few seconds of
+    // (0 off, 1 on, 2 on without the remembered sway, 3 only big things, 4 drawn solid; switched: the churn trace and a few seconds of
     // the shadow items' counts anew - finding a blinking shadow)
     void SetShadowMemory(uint32_t mode) { m_shadowMemory = mode; m_cacheTraceLines = 0; m_memoryTraceFrames = 240; }
     void SetHillShade(bool on) { m_hillShade = on; }

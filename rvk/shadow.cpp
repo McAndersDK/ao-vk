@@ -952,9 +952,10 @@ void Device::CollectShadowItems()
         it.stride = e.stride;
         it.vertexCount = e.vertexCount;
         it.indexCount = e.indexCount;
-        it.texture = e.texture;
-        it.texOffset = e.texOffset;
-        it.alphaRef = e.alphaRef;
+        const bool solid = m_shadowMemory == 4;  // (4: drawn solid - not cut out by their textures)
+        it.texture = solid ? nullptr : e.texture;
+        it.texOffset = solid ? -1 : e.texOffset;
+        it.alphaRef = solid ? -1.0f : e.alphaRef;
         it.world = m_shadowMemory == 2 ? e.world : SwayPose(e);   // (2: without the remembered sway)
         std::memcpy(it.boundsMin, e.boundsMin, sizeof(it.boundsMin));
         std::memcpy(it.boundsMax, e.boundsMax, sizeof(it.boundsMax));
