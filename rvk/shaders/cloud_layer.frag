@@ -195,7 +195,9 @@ vec4 Deck(vec3 eye, vec3 dir, float jitter)
         light += transmit * (1.0 - st) * S;
         transmit *= st;
     }
-    float alpha = 1.0 - transmit;
+    // (Thick cloud wholly opaque: the march stops with 1-2% let through, enough of the sun's bright disc behind it to
+    // show - user. What is left under 4% is none.)
+    float alpha = 1.0 - max(transmit - 0.04, 0.0) / 0.96;
     if (alpha <= 0.0)
         return vec4(0.0);
     return Aerial(light, alpha, t0, dir);
@@ -403,7 +405,9 @@ void main()
         weightSum += transmit * (1.0 - stepT);
         transmit *= stepT;
     }
-    float alpha = 1.0 - transmit;
+    // (Thick cloud wholly opaque: the march stops with 1-2% let through, enough of the sun's bright disc behind it to
+    // show - user. What is left under 4% is none.)
+    float alpha = 1.0 - max(transmit - 0.04, 0.0) / 0.96;
     if (alpha <= 0.0) {
         outScene = deck;
         return;

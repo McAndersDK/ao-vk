@@ -878,6 +878,11 @@ void ThreadedDevice::SetSun(float s)
     Enqueue([this, s](const uint8_t*) { m_device.SetSun(s); });
 }
 
+void ThreadedDevice::SetGameSun(bool on)
+{
+    Enqueue([this, on](const uint8_t*) { m_device.SetGameSun(on); });
+}
+
 void ThreadedDevice::SetContactShadows(float s)
 {
     Enqueue([this, s](const uint8_t*) { m_device.SetContactShadows(s); });

@@ -129,6 +129,7 @@ public:
     void SetAtmos(bool on);
     void SetMist(float s);
     void SetSun(float s);
+    void SetGameSun(bool on);
     void SetContactShadows(float s);
     void SetAo(float strength, float radius);
     void SetGi(float strength, float radius);

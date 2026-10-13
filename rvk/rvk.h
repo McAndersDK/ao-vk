@@ -434,6 +434,8 @@ public:
     void SetMist(float s) { m_mist = s; }
     // The sun's disc (sun.cpp; 0 none, 1 as planned: its brightness).
     void SetSun(float s) { m_sun = s; }
+    // The game's own sun sprites (its glow, VisualSunRays_t), shown or not.
+    void SetGameSun(bool on) { m_gameSun = on; }
     // Tests: the sky weather's clock (seconds, as UTC; < 0 the wall clock).
     void SetSkyTime(double t) { m_skyTime = t; }
     void SetContactShadows(float s) { m_contact = s; m_constantsDirty = true; }
@@ -973,7 +975,8 @@ private:
     float m_mist = 1.0f;                         // RVK_Mist, x (0: none)
     float m_sun = 1.0f;                          // RVK_Sun: the sun's disc, x (0: none; sun.cpp)
     uint64_t m_sunDrawnFrame = ~0ull;            // ... drawn this frame (once: the first of the game's sun sprites)
-    void DrawSun();
+    bool m_gameSun = true;                       // RVK_GameSun: the game's sun sprites drawn (off: our disc alone)
+    void DrawSun(uint32_t fvf, const void* vertices, uint32_t vertexCount);
     std::vector<float> m_mistSamples;            // this frame's terrain heights near the eye
     float m_mistFloor = 0.0f, m_mistAmount = 0.0f, m_mistWet = 0.0f, m_mistSunPrev = 0.0f, m_mistSunTrend = 0.0f;
     bool m_mistFloorSet = false;

@@ -7,13 +7,44 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace rvk {
 
 using namespace vk;
 using namespace detail;
 
-void Device::DrawSun()
+// The way to the game's sun from its first sprite (its middle, through its world matrix, from the eye): the sun's
+// light points elsewhere - lower - and a disc there was a second sun beside the game's (user). False: none to read.
+static bool SpriteDirection(uint32_t fvf, const void* vertices, uint32_t vertexCount, const d3d::Matrix& world,
+                            const d3d::Matrix& view, float out[3])
+{
+    if (!vertices || vertexCount == 0 || (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZ)
+        return false;
+    const FvfLayout layout = DecodeFvf(fvf);
+    const uint8_t* base = static_cast<const uint8_t*>(vertices);
+    float c[3] = {};
+    for (uint32_t i = 0; i < vertexCount; ++i) {
+        float p[3];
+        std::memcpy(p, base + size_t(i) * layout.stride + layout.offset[0], sizeof(p));
+        for (int k = 0; k < 3; ++k) c[k] += p[k] / float(vertexCount);
+    }
+    const auto& w = world.m;
+    const auto& v = view.m;
+    float d[3];
+    for (int j = 0; j < 3; ++j) {
+        const float wc = c[0] * w[0][j] + c[1] * w[1][j] + c[2] * w[2][j] + w[3][j];
+        const float eye = -(v[3][0] * v[j][0] + v[3][1] * v[j][1] + v[3][2] * v[j][2]);
+        d[j] = wc - eye;
+    }
+    const float l = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    if (l < 1e-3f)
+        return false;
+    for (int j = 0; j < 3; ++j) out[j] = d[j] / l;
+    return true;
+}
+
+void Device::DrawSun(uint32_t fvf, const void* vertices, uint32_t vertexCount)
 {
     if (m_sunDrawnFrame == m_frameNumber)
         return;
@@ -21,13 +52,15 @@ void Device::DrawSun()
     if (m_sun <= 0.0f || !m_sunPipeline || !m_rendering || m_target != m_scene || !m_glow || !m_localFraction ||
         !m_motionVectors || !m_albedo || m_external)
         return;
-    // Towards the sun: this frame's (the sprites are drawn with its light set), else the last seen.
-    const float* d = m_sunLuminance > 0.0f ? m_sunDir : m_trueSunDir;
-    float to[3] = {-d[0], -d[1], -d[2]};
-    const float tl = std::sqrt(to[0] * to[0] + to[1] * to[1] + to[2] * to[2]);
-    if (tl < 1e-6f)
-        return;
-    for (float& v : to) v /= tl;
+    // Towards the sun: where the game draws it (its first sprite); else (no vertices) its light's way.
+    float to[3];
+    if (!SpriteDirection(fvf, vertices, vertexCount, m_world, m_view, to)) {
+        const float* d = m_sunLuminance > 0.0f ? m_sunDir : m_trueSunDir;
+        const float tl = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        if (tl < 1e-6f)
+            return;
+        for (int k = 0; k < 3; ++k) to[k] = -d[k] / tl;
+    }
     if (to[1] < -0.03f)
         return;                                  // (under the horizon)
     struct Push {
