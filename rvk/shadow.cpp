@@ -647,6 +647,12 @@ void Device::CacheCaster(uint64_t key, const ShadowCaster& c, const void* vertic
     if (c.indexCount)
         std::memcpy(dst + indexAt, indices, size_t(c.indexCount) * 2);
     m_casterCache.emplace(key, e);
+    if (m_cacheTraceLines < 300 && m_frameNumber > 600) {   // (churn: see UpdateCasterCache)
+        ++m_cacheTraceLines;
+        Log("caster cache frame %llu: remembered %016llx box (%.1f %.1f %.1f)..(%.1f %.1f %.1f) v %u",
+            (unsigned long long)m_frameNumber, (unsigned long long)key, double(e.boundsMin[0]), double(e.boundsMin[1]),
+            double(e.boundsMin[2]), double(e.boundsMax[0]), double(e.boundsMax[1]), double(e.boundsMax[2]), e.vertexCount);
+    }
 }
 
 void Device::ForgetCachedCaster(std::unordered_map<uint64_t, CachedCaster>::iterator it)
@@ -703,6 +709,14 @@ void Device::UpdateCasterCache()
                 ForgetCachedCaster(it);
             } else if (m_frameViewProjValid && BoxInClip(centre, centre, m_frameViewProj, true) == 1) {
                 ++m_forgottenInView;
+                if (m_cacheTraceLines < 300) {   // (churn: forgotten as unseen in view, remembered again later)
+                    ++m_cacheTraceLines;
+                    Log("caster cache frame %llu: forgot %016llx (in view, not drawn) box (%.1f %.1f %.1f)..(%.1f %.1f %.1f) "
+                        "v %u, unseen %llu frames", (unsigned long long)m_frameNumber, (unsigned long long)it->first,
+                        double(e.boundsMin[0]), double(e.boundsMin[1]), double(e.boundsMin[2]), double(e.boundsMax[0]),
+                        double(e.boundsMax[1]), double(e.boundsMax[2]), e.vertexCount,
+                        (unsigned long long)(m_frameNumber - e.lastSeen));
+                }
                 ForgetCachedCaster(it);
             }
         }
