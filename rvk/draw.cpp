@@ -289,6 +289,14 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
     fl->effects[3] = m_grassPush;
     Wind(fl->wind);
     FillPushers(fl, eye);
+    fl->leaves[0] = m_leaf.on ? m_leaf.wind : 0.0f;
+    fl->leaves[1] = m_leaf.on ? m_leaf.flutter : 0.0f;
+    fl->leaves[2] = std::max(m_grassGusts, 0.0f);
+    fl->leaves[3] = m_leaf.on ? m_leaf.core : 0.0f;
+    fl->leafView[0] = std::max(m_leaf.distance, 1.0f);
+    fl->leafView[1] = m_leaf.on ? 1.0f : 0.0f;
+    fl->leafView[2] = m_leaf.on ? m_leaf.fall : 0.0f;
+    fl->leafView[3] = 0.0f;
     fl->taa[0] = TaaActive() ? m_taaJitter[0] : 0.0f;
     fl->taa[1] = TaaActive() ? m_taaJitter[1] : 0.0f;
     fl->taa[2] = FrameNoise();                   // noise patterns move on each frame (averaged by the TAA)
@@ -303,6 +311,22 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
     fl->sunDir[3] = m_hdr ? m_hdrHeadroom : m_lightHeadroom;
     for (int i = 0; i < 3; ++i) fl->sunColor[i] = m_shadowValid ? m_shadowSunColor[i] : m_frameSunColor[i];
     fl->sunColor[3] = 0.0f;
+    fl->pbr[0] = m_pbr.specular;
+    fl->pbr[1] = m_pbr.ambient;
+    fl->pbr[2] = m_ssr > 0.0f ? m_pbr.reflections : 0.0f;
+    fl->pbr[3] = m_pbr.occlusion;
+    fl->pbr2[0] = float(m_pbr.debug);
+    fl->pbr2[1] = m_pbr.enabled ? 1.0f : 0.0f;
+    fl->pbr2[2] = m_pbr.enabled ? m_pbr.emissive : 0.0f;
+    // The environment probe's atlas (hdr.cpp RenderEnvProbe): bindless image slot + 1 (0 = none) in bits 0-19, the
+    // linear sampler's slot in 20-27, its strength (0..1, 1/15 steps) in 28-31 - as the float's bits.
+    uint32_t env = 0;
+    if (m_envReady && m_envAtlas && m_pbr.enabled && m_pbr.probe > 0.0f) {
+        const uint32_t image = BindlessImage(m_envAtlas), sampler = FixedSamplerSlot(2, m_linearSampler);
+        if (image != ~0u && image < (1u << 20) - 1 && sampler < 256)
+            env = (image + 1) | sampler << 20 | uint32_t(std::lround(std::clamp(m_pbr.probe, 0.0f, 1.0f) * 15.0f)) << 28;
+    }
+    std::memcpy(&fl->pbr2[3], &env, 4);
     fl->prevView = m_prevView;                   // the world camera last frame (motion vectors)
     fl->prevProj = m_prevProj;
     m_frameLightIndices.clear();
@@ -385,15 +409,74 @@ uint64_t Device::MotionKey(uint32_t primitive, uint32_t fvf, uint32_t vertexCoun
 // A pre-transformed draw that belongs to the interface, not the 3D scene. The water (VisualLiquid_t) is drawn from
 // vertices the game transforms with ProcessVertices: pre-transformed too, but with a specular colour (FVF 0x1C4), in the
 // middle of the scene - taking it for the interface ended the scene early wherever water was in view.
-bool Device::IsInterfaceDraw(uint32_t fvf)
+bool Device::IsInterfaceDraw(uint32_t fvf) const
 {
     return (fvf & d3d::FVF_POSITION_MASK) == d3d::FVF_XYZRHW && !IsWater(fvf);
 }
 
-// Plants that sway in the wind: small (0.2 - 3 units tall), lit, drawn into the scene with a cut-out texture (the
-// vertex shader keeps those whose texture is mostly holes - leaves, grass), and static: their vertices are the same as
-// last frame (a character's hair or cloak is CPU-skinned, its vertices change every frame). out: DrawTransform sway.
-bool Device::SwayParams(uint32_t fvf, uint32_t stride, const void* vertices, uint32_t vertexCount, float out[4])
+// Whether a mesh is one plane: 95% of its triangles' area faces one way (either side) and its vertices lie within 6%
+// of its size from that plane - a sign, a banner, a poster, a window's frame. Positions first in the vertex (FVF_XYZ).
+bool detail::OnePlane(uint32_t primitive, uint32_t stride, const void* vertices, uint32_t vertexCount,
+                      const uint16_t* indices, uint32_t indexCount)
+{
+    const auto* base = static_cast<const uint8_t*>(vertices);
+    auto pos = [&](uint32_t i, float p[3]) { std::memcpy(p, base + size_t(i) * stride, 12); };
+    const uint32_t n = indices ? indexCount : vertexCount;
+    const uint32_t triangles = primitive == d3d::TriangleList ? n / 3 : n >= 3 ? n - 2 : 0;
+    if ((primitive != d3d::TriangleList && primitive != d3d::TriangleStrip && primitive != d3d::TriangleFan) || !triangles)
+        return false;
+    auto corner = [&](uint32_t t, int k) {
+        uint32_t j = primitive == d3d::TriangleList ? t * 3 + k : primitive == d3d::TriangleStrip ? t + k : k == 0 ? 0 : t + k;
+        return indices ? uint32_t(indices[j]) : j;
+    };
+    // The normal of the largest triangle, then the share of the area facing the same way.
+    float axis[3] = {}, best = 0.0f, total = 0.0f;
+    std::vector<float> normals(size_t(triangles) * 4, 0.0f);
+    for (uint32_t t = 0; t < triangles; ++t) {
+        uint32_t i0 = corner(t, 0), i1 = corner(t, 1), i2 = corner(t, 2);
+        if (i0 >= vertexCount || i1 >= vertexCount || i2 >= vertexCount)
+            continue;
+        float a[3], b[3], c[3];
+        pos(i0, a); pos(i1, b); pos(i2, c);
+        const float e1[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]}, e2[3] = {c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+        float nx = e1[1] * e2[2] - e1[2] * e2[1], ny = e1[2] * e2[0] - e1[0] * e2[2], nz = e1[0] * e2[1] - e1[1] * e2[0];
+        const float area = std::sqrt(nx * nx + ny * ny + nz * nz);
+        if (area <= 1e-12f)
+            continue;
+        float* o = &normals[size_t(t) * 4];
+        o[0] = nx / area; o[1] = ny / area; o[2] = nz / area; o[3] = area;
+        total += area;
+        if (area > best) { best = area; axis[0] = o[0]; axis[1] = o[1]; axis[2] = o[2]; }
+    }
+    if (total <= 0.0f)
+        return false;
+    float facing = 0.0f;
+    for (uint32_t t = 0; t < triangles; ++t) {
+        const float* o = &normals[size_t(t) * 4];
+        if (std::fabs(o[0] * axis[0] + o[1] * axis[1] + o[2] * axis[2]) > 0.9f) facing += o[3];
+    }
+    if (facing < 0.95f * total)
+        return false;
+    float lo = 1e30f, hi = -1e30f, mn[3] = {1e30f, 1e30f, 1e30f}, mx[3] = {-1e30f, -1e30f, -1e30f};
+    for (uint32_t i = 0; i < vertexCount; ++i) {
+        float p[3];
+        pos(i, p);
+        const float d = p[0] * axis[0] + p[1] * axis[1] + p[2] * axis[2];
+        lo = std::min(lo, d); hi = std::max(hi, d);
+        for (int k = 0; k < 3; ++k) { mn[k] = std::min(mn[k], p[k]); mx[k] = std::max(mx[k], p[k]); }
+    }
+    const float size = std::sqrt((mx[0] - mn[0]) * (mx[0] - mn[0]) + (mx[1] - mn[1]) * (mx[1] - mn[1]) +
+                                 (mx[2] - mn[2]) * (mx[2] - mn[2]));
+    return hi - lo < 0.06f * size;
+}
+
+// Plants that sway in the wind: small (0.2 - 3 units tall, at most 6 across), lit, drawn into the scene with a
+// cut-out texture (the vertex shader keeps those whose texture is mostly holes - leaves, grass), not one flat plane
+// (signs, banners, posters - from a survey of the game's 10,600 static meshes: a third of the non-plants that passed
+// the rest, a few single-card plants), and static: their vertices are the same as last frame (a character's hair or
+// cloak is CPU-skinned, its vertices change every frame). out: DrawTransform sway.
+bool Device::SwayParams(uint32_t primitive, uint32_t fvf, uint32_t stride, const void* vertices, uint32_t vertexCount,
+                        const uint16_t* indices, uint32_t indexCount, float out[4])
 {
     if ((m_sway <= 0.0f && m_grassPush <= 0.0f) || m_target != m_scene || !m_textures[0] || !m_rs[d3d::RS_LIGHTING] || m_drawIsLabel ||
         (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZ || IsTerrain(fvf) || !m_rs[d3d::RS_ZWRITEENABLE] ||
@@ -401,7 +484,7 @@ bool Device::SwayParams(uint32_t fvf, uint32_t stride, const void* vertices, uin
         !m_drawMesh)
         return false;
     // A texture with no transparent texel never moves: the shaders scale sway and push by its holes (ffp.vert
-    // smoothstep(0.92, 0.7, mean alpha) = 0). Most blended statics of plant size are such props - not split, kept on
+    // SwayHoles(mean alpha) = 0). Most blended statics of plant size are such props - not split, kept on
     // the GPU and in the depth pre-pass.
     if (m_textures[0]->m_opaque)
         return false;
@@ -422,6 +505,19 @@ bool Device::SwayParams(uint32_t fvf, uint32_t stride, const void* vertices, uin
     float lo = m_drawMesh->boundsMin[axis], hi = m_drawMesh->boundsMax[axis];
     float height = (hi - lo) * scale;
     if (height < 0.2f || height > 3.0f)
+        return false;
+    // Across (the other two model axes, scaled): a plant this short isn't 6 units wide - a bridge, a railing, a rope
+    // between posts is.
+    for (int i = 0; i < 3; ++i) {
+        if (i == axis)
+            continue;
+        const float len = std::sqrt(w[i][0] * w[i][0] + w[i][1] * w[i][1] + w[i][2] * w[i][2]);
+        if ((m_drawMesh->boundsMax[i] - m_drawMesh->boundsMin[i]) * len > 6.0f)
+            return false;
+    }
+    if (m_drawMesh->flatShape < 0)
+        m_drawMesh->flatShape = OnePlane(primitive, stride, vertices, vertexCount, indices, indexCount) ? 1 : 0;
+    if (m_drawMesh->flatShape == 1)
         return false;
     bool down = w[axis][1] < 0.0f;
     out[0] = down ? hi : lo;
@@ -1203,9 +1299,10 @@ void Device::DrawMeshInfo(uint32_t fvf, uint32_t stride, const void* vertices, u
     if (m_drawSlot && m_drawStaticBuffer) { m_drawSlot->mesh = placed; m_drawSlot->meshKey = key; }
 }
 
-bool Device::IsWater(uint32_t fvf)
+bool Device::IsWater(uint32_t fvf) const
 {
-    return fvf == (d3d::FVF_XYZRHW | d3d::FVF_DIFFUSE | d3d::FVF_SPECULAR | (1u << d3d::FVF_TEXCOUNT_SHIFT));
+    return m_drawProcessed &&
+           fvf == (d3d::FVF_XYZRHW | d3d::FVF_DIFFUSE | d3d::FVF_SPECULAR | (1u << d3d::FVF_TEXCOUNT_SHIFT));
 }
 
 bool Device::GlowDraw(uint32_t fvf) const
@@ -1270,11 +1367,12 @@ uint32_t Device::CarriedLight(uint32_t fvf, const void* vertices, uint32_t verte
     return 0;
 }
 
-void Device::SetDrawVisual(uint32_t kind, const char* className, uint32_t owner)
+void Device::SetDrawVisual(uint32_t kind, const char* className, uint32_t owner, uint32_t visual)
 {
     m_drawVisualKind = kind;
     m_drawVisualName = className ? className : "";
     m_drawOwner = owner;
+    m_drawVisual = visual;
 }
 
 void Device::SetSceneLights(const SceneLight* lights, uint32_t count)
@@ -1412,7 +1510,10 @@ void Device::DrawSkinned(uint32_t primitive, uint32_t fvf, skin::Job& job, uint3
         m_drawGpu = SkinOnGpu(job);
     if (m_drawGpu) {
         ProfileDrawSection("draw: skinning", since);
+        if (m_pickActive)                            // picking: this frame only, the piece skinned on the CPU too
+            m_pickSkinned = job.Skinned() + startVertex;
         Draw(primitive, fvf, nullptr, vertexCount, indices, indexCount);
+        m_pickSkinned = nullptr;
     } else {
         const skin::Vertex* vertices = job.Skinned();
         m_drawSkinBase = vertices;
@@ -1944,6 +2045,11 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     if (m_grassOn && !m_external && vertices && IsTerrain(fvf))
         CaptureTerrain(primitive, layout, vertices, vertexCount, indices, indexCount);
     DrawMeshInfo(fvf, layout.stride, vertices, vertexCount, indices, indexCount);
+    // (A GPU-skinned character has no vertices here: DrawSkinned hands the pick its CPU-skinned ones.)
+    if (m_pickActive && !m_external && (vertices || m_pickSkinned) && (m_textures[0] || m_drawVisual) &&
+        (m_target == m_scene || m_target == m_main) && (fvf & d3d::FVF_POSITION_MASK) == d3d::FVF_XYZ &&
+        m_rs[d3d::RS_ZENABLE])
+        PickDraw(primitive, layout, vertices ? vertices : m_pickSkinned, vertexCount, indices, indexCount);
     // ... and solid objects lying on the ground keep it off where they are (not characters, effects, the sky, plants
     // or anything see-through; grass.cpp CaptureCover).
     if (m_grassOn && !m_external && vertices && !IsTerrain(fvf) && m_target == m_scene &&
@@ -1956,9 +2062,14 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
             CaptureCover(primitive, layout, vertices, vertexCount, indices, indexCount);
     }
     PushCandidateDraw(fvf);
+    // A canopy (leaves.cpp): its leaves, baked the first time it is seen, drawn just before it (DrawLeaves). A solid
+    // draw may be a tree's trunk (where its fallen leaves lie).
+    CanopyParams(primitive, fvf, layout, vertices, vertexCount, indices, indexCount);
+    if (!m_drawLeaves && !m_external)
+        NoteSolidDraw(fvf);
     // A swaying plant: its big quads split into small ones (cached), so they bend rather than tilt as a whole.
     float sway[4] = {};
-    bool swaying = !m_external && SwayParams(fvf, layout.stride, vertices, vertexCount, sway);
+    bool swaying = !m_external && SwayParams(primitive, fvf, layout.stride, vertices, vertexCount, indices, indexCount, sway);
     if (swaying) {
         const void* before = vertices;
         const uint16_t* indicesBefore = indices;
@@ -2024,11 +2135,12 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     }
 
     // The frame's light list (binding 4): rebuilt when lights changed; always bound, as layouts require.
-    // Only lit draws read it; the others bind any in-range part of the ring.
-    bool needLights = (m_lightOverride && m_pixelLighting && m_rs[d3d::RS_LIGHTING] &&
-                       (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZRHW) || ShadowReceiver(fvf) ||
-                      ShadowCompensated(fvf) || motion ||
-                      (TaaActive() && m_target == m_scene && (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZRHW);
+    // Only lit draws read it; the others bind any in-range part of the ring. Every 3D draw: the scene shader reads the
+    // frame block on all of them (the PBR settings, debug view and probe in FL.pbr / FL.pbr2, the TAA jitter) - a draw
+    // without one written this frame read whatever lay at offset 0 of the ring (displaced on screen; with enhancements
+    // off, a stray debug view greyed the scene, flickering). It is written once a frame, so this costs nothing per draw.
+    bool needLights = (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZRHW || ShadowReceiver(fvf) ||
+                      ShadowCompensated(fvf) || motion;
     VkDeviceSize frameLightsOffset = m_frameLightsGeneration == m_ringGeneration ? m_frameLightsOffset : 0;
     if (needLights && (m_frameLightsDirty || m_frameLightsGeneration != m_ringGeneration))   // once per frame
         frameLightsOffset = WriteFrameLights();
@@ -2037,6 +2149,16 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     // Per-draw world matrix: written into this draw's record.
     void* cpu;
     DrawTransform dt{};
+    if (m_drawLeaves) {                          // a canopy with leaves: its branches sway (ffp.vert BranchSway)
+        dt.leaf[0] = m_drawLeaves->centre[0];
+        dt.leaf[1] = m_drawLeaves->centre[1];
+        dt.leaf[2] = m_drawLeaves->centre[2];
+        dt.leaf[3] = m_drawLeaves->kind == Canopy::Palm ? -m_drawLeaves->radius : m_drawLeaves->radius;
+        dt.leafSet[0] = m_drawLeaves->first;
+        dt.leafSet[1] = m_drawLeafCount | m_drawLeafFall << 16;
+        dt.leafSet[2] = m_drawLeaves->count;
+        std::memcpy(&dt.leafSet[3], &m_drawLeafGround, 4);
+    }
     VkDeviceSize prevPositionsOffset = 0, prevPositionsBytes = 0;   // binding 8 (animated meshes' last positions)
     VkBuffer prevPositionsBuffer = f.ring;
     dt.world = m_world;
@@ -2054,6 +2176,13 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
                      m_drawMesh->boundsMin[0], m_drawMesh->boundsMin[1], m_drawMesh->boundsMin[2],
                      m_drawMesh->boundsMax[0], m_drawMesh->boundsMax[1], m_drawMesh->boundsMax[2], w[0][0], w[0][1],
                      w[0][2], w[1][0], w[1][1], w[1][2], w[2][0], w[2][1], w[2][2]);
+    }
+    if (m_dumpFile && m_drawLeaves) {            // frame dump: the canopy's leaves (after its D line)
+        static const char* const kKinds[] = {"none", "shrub", "tree", "palm"};
+        std::fprintf(m_dumpFile, "  leaves: %s, %u baked, %u drawn, %u falling slots (ground y %.2f) | crown (%.2f %.2f %.2f) r %.2f\n",
+                     kKinds[uint32_t(m_drawLeaves->kind)], m_drawLeaves->count, m_drawLeafCount, m_drawLeafFall,
+                     m_drawLeafGround,
+                     m_drawLeaves->centre[0], m_drawLeaves->centre[1], m_drawLeaves->centre[2], m_drawLeaves->radius);
     }
     ProfileDrawSection("draw: sway", since);
     FrameLightMask(fvf, layout.stride, vertices, vertexCount, dt.lightMask);
@@ -2151,7 +2280,8 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
         } else if (m_rs[d3d::RS_LIGHTING] && IsMultiplyPass()) {
             auto it = m_terrainBases.find(TerrainChunkKey(vertices, vertexCount, layout.stride, indexCount));
             if (it != m_terrainBases.end() &&
-                (m_bump > 0.0f || (m_normalMaps && m_pixelLighting && it->second->m_normalMap)))
+                (m_bump > 0.0f || (m_normalMaps && m_pixelLighting && it->second->m_normalMap) ||
+                 (m_pbr.enabled && m_pixelLighting && it->second->m_ormMap)))
                 m_drawBumpBase = it->second;
         }
     }
@@ -2159,12 +2289,30 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     // The texture's own normal map (F_NORMALMAP), when it is the surface (stage 0, plain coordinates) of a per-pixel
     // lit draw; for the ground's lightmap pass, the normal map of its chunk's base texture (as the generated normals).
     Texture* normalMap = nullptr;
-    if (m_normalMaps && m_pixelLighting && m_textures[0] && m_textures[0]->m_normalMap && !terrain &&
-        m_rs[d3d::RS_LIGHTING] && m_tss[0][d3d::TSS_COLOROP] != d3d::TOP_DISABLE &&
-        !(m_tss[0][d3d::TSS_TEXTURETRANSFORMFLAGS] & 256u) && (m_tss[0][d3d::TSS_TEXCOORDINDEX] & 0xFFFF0000u) == 0)
+    bool surfaceStage0 = m_pixelLighting && m_textures[0] && !terrain && m_rs[d3d::RS_LIGHTING] &&
+                         m_tss[0][d3d::TSS_COLOROP] != d3d::TOP_DISABLE &&
+                         !(m_tss[0][d3d::TSS_TEXTURETRANSFORMFLAGS] & 256u) &&
+                         (m_tss[0][d3d::TSS_TEXCOORDINDEX] & 0xFFFF0000u) == 0;
+    if (m_normalMaps && surfaceStage0 && m_textures[0]->m_normalMap)
         normalMap = m_textures[0]->m_normalMap;
     else if (m_normalMaps && m_pixelLighting && m_drawBumpBase && m_drawBumpBase->m_normalMap)
         normalMap = m_drawBumpBase->m_normalMap;
+    // Its PBR material (occlusion / roughness / metallic map), on the same terms. In the record, not the constants.
+    m_drawOrm = nullptr;
+    m_drawOrmBase = false;
+    if (m_pbr.enabled && surfaceStage0 && m_textures[0]->m_ormMap) {
+        m_drawOrm = m_textures[0]->m_ormMap;
+    } else if (m_pbr.enabled && m_pixelLighting && m_drawBumpBase && m_drawBumpBase->m_ormMap) {
+        m_drawOrm = m_drawBumpBase->m_ormMap;
+        m_drawOrmBase = true;
+    }
+    // Its emissive map: stage 0's, wherever that texture is drawn as the surface (lit or not; not the ground's passes).
+    m_drawEmissive = nullptr;
+    if (m_pbr.enabled && m_pbr.emissive > 0.0f && m_textures[0] && m_textures[0]->m_emissiveMap && !terrain &&
+        (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZRHW &&
+        m_tss[0][d3d::TSS_COLOROP] != d3d::TOP_DISABLE && !(m_tss[0][d3d::TSS_TEXTURETRANSFORMFLAGS] & 256u) &&
+        (m_tss[0][d3d::TSS_TEXCOORDINDEX] & 0xFFFF0000u) == 0)
+        m_drawEmissive = m_textures[0]->m_emissiveMap;
     // The foliage level of detail depends on the draw's distance, not the render state: part of the block's key, or
     // a run of plants with the same state would all get the first one's (flickering as the camera moves).
     uint32_t foliageLod = FoliageFar() ? (m_drawSway[3] > 0.5f ? 2u : 1u) : 0u;
@@ -2315,14 +2463,33 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     c.flags[0] = flags;
     c.flags[1] = m_rs[d3d::RS_FOGVERTEXMODE];
     c.flags[2] = m_rs[d3d::RS_FOGTABLEMODE];
-    c.flags[3] = m_rs[d3d::RS_ALPHAFUNC];
+    // (Bit 8: in the interface layer, a draw replacing what is there - blended ONE, ZERO - covers it fully, whatever
+    // its alpha: on the frame it would. The PF map's light-map tiles have alpha 0; as coverage they left the map's
+    // black parts see-through.)
+    const bool layerReplace = m_uiLayerActive && m_target == m_uiLayer && m_rs[d3d::RS_ALPHABLENDENABLE] &&
+                              m_rs[d3d::RS_SRCBLEND] == d3d::BLEND_ONE && m_rs[d3d::RS_DESTBLEND] == d3d::BLEND_ZERO;
+    c.flags[3] = m_rs[d3d::RS_ALPHAFUNC] | (layerReplace ? 256u : 0u);
     c.matSources[0] = m_rs[d3d::RS_DIFFUSEMATERIALSOURCE];
     c.matSources[1] = m_rs[d3d::RS_AMBIENTMATERIALSOURCE];
     c.matSources[2] = m_rs[d3d::RS_SPECULARMATERIALSOURCE];
     c.matSources[3] = m_rs[d3d::RS_EMISSIVEMATERIALSOURCE];
+    // A stage without a texture whose colour operation reads the texture (an argument it uses is D3DTA_TEXTURE) is
+    // disabled, and so the stages after it - as native Direct3D does (DXVK's fixed function does the same): the
+    // PF map's white wash is drawn untextured with MODULATE(TEXTURE, DIFFUSE) and must come out its vertex colour,
+    // not black. (Alpha arguments and implicit sampling don't count.)
+    bool stagesOff = false;
     for (int s = 0; s < 2; ++s) {
         const auto& t = m_tss[s];
-        c.stageA[s][0] = t[d3d::TSS_COLOROP];
+        uint32_t colorOp = t[d3d::TSS_COLOROP];
+        if (!stagesOff && colorOp != d3d::TOP_DISABLE && !m_textures[s]) {
+            const bool arg1 = colorOp != d3d::TOP_SELECTARG2, arg2 = colorOp != d3d::TOP_SELECTARG1;
+            if ((arg1 && (t[d3d::TSS_COLORARG1] & 0xFu) == d3d::TA_TEXTURE) ||
+                (arg2 && (t[d3d::TSS_COLORARG2] & 0xFu) == d3d::TA_TEXTURE))
+                stagesOff = true;
+        }
+        if (stagesOff)
+            colorOp = d3d::TOP_DISABLE;
+        c.stageA[s][0] = colorOp;
         c.stageA[s][1] = t[d3d::TSS_COLORARG1];
         c.stageA[s][2] = t[d3d::TSS_COLORARG2];
         c.stageA[s][3] = t[d3d::TSS_ALPHAOP];
@@ -2489,7 +2656,7 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
         ShadeClass(shade);
     }
     uint64_t groupKey = 0;
-    if (m_groupIndirect && indices && !m_external && !(m_particlePending && fvf == kParticleFvf)) {
+    if (m_groupIndirect && indices && !m_external && !(m_particlePending && fvf == kParticleFvf) && !m_drawLeafCount) {
         bool hdr = m_target->m_format == Format::RGBA16F;
         uint32_t pipelineClass = m_drawTess ? 6u + (hdr ? 1u : 0u)
                                             : TopologyClass(primitive) + (hdr ? 3u : 0u);
@@ -2532,9 +2699,11 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
 
     // Bindless textures (set 1, M1): the draw's four textures and four samplers by index, so nothing per-draw is
     // bound as an image descriptor. The indices live in the draw's record (constants.glsl D.texIdx/sampIdx).
-    Texture* texStage0 = m_textures[0] ? m_textures[0] : m_blackTexture;
-    Texture* texStage1 = m_textures[1] ? m_textures[1] : m_blackTexture;
-    Texture* bumpBase = m_drawBumpBase ? m_drawBumpBase : m_blackTexture;
+    // A texture's albedo map (SetMaterialMaps) is drawn in its place.
+    auto drawn = [this](Texture* t) { return !t ? m_blackTexture : t->m_albedoMap && m_pbr.albedoMaps ? t->m_albedoMap : t; };
+    Texture* texStage0 = drawn(m_textures[0]);
+    Texture* texStage1 = drawn(m_textures[1]);
+    Texture* bumpBase = drawn(m_drawBumpBase);
     Texture* normalTex = normalMap ? normalMap : m_flatNormal;
     dt.texIdx[0] = BindlessImage(texStage0);
     dt.texIdx[1] = BindlessImage(texStage1);
@@ -2544,6 +2713,24 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     dt.sampIdx[1] = StageSamplerSlot(1);
     dt.sampIdx[2] = FixedSamplerSlot(0, m_bumpSampler);
     dt.sampIdx[3] = FixedSamplerSlot(1, m_normalSampler);
+    // The PBR material (the shader uses it only where the draw is lit per pixel and isn't far foliage).
+    if (m_drawOrm) {
+        dt.mat[0] = BindlessImage(m_drawOrm);
+        dt.mat[1] = FixedSamplerSlot(1, m_normalSampler);
+        dt.mat[2] = kMatPbr | (m_drawOrmBase ? kMatBase : 0u);
+    } else {
+        dt.mat[0] = dt.texIdx[3];               // a valid slot even unused
+        dt.mat[1] = dt.sampIdx[3];
+    }
+    if (m_textures[0] && texStage0 == m_textures[0]->m_albedoMap) dt.mat[2] |= kMatAlbedo;   // (debug view 7)
+    if (m_pickHighlight && m_textures[0] == m_pickHighlight)
+        dt.mat[2] |= kMatPicked;                 // (texture picking: flashes)
+    if (m_drawEmissive) {                        // (sampled with the ORM map's sampler, set either way)
+        dt.mat[3] = BindlessImage(m_drawEmissive);
+        dt.mat[2] |= kMatEmissive;
+    } else {
+        dt.mat[3] = dt.mat[0];
+    }
     // GPU-driven M2: this draw's record, and the frame's two arrays (bindings 0 = constants, 12 = records) pushed
     // once per frame's command buffer. The record index travels in firstInstance (gl_InstanceIndex).
     uint32_t recordIndex = AppendRecord(constIndex, dt);
@@ -2626,6 +2813,11 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     }
     }
 
+    // A canopy's leaves (leaves.cpp), before the canopy itself: its state is set up now; DrawLeaves puts it back.
+    if (m_drawLeafCount)
+        DrawLeaves(cmd, recordIndex, primitive, fvf, layout.stride, frameLightsOffset, prevPositionsBuffer,
+                   prevPositionsOffset, prevPositionsBytes, smoothBuffer, smoothOffset, smoothBytes);
+
     // Would an instanced batch cover this draw together with the one before it? Only static snapshots share their
     // vertex data across draws; ring copies are unique per draw, so those never merge.
     uint64_t batchKey = 0;
@@ -2679,6 +2871,74 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
         DrawParticles(*block);
     }
     ProfileDrawSection("draw: state + descriptors + draw", since);
+}
+
+}  // namespace rvk
+
+namespace rvk {
+
+// Texture picking (RequestPick): the draw's triangles in clip space against the picked point, in the viewport's
+// coordinates; the nearest hit (depth) so far keeps its stage 0 texture. One frame, on the CPU.
+void Device::PickDraw(uint32_t primitive, const detail::FvfLayout& layout, const void* vertices, uint32_t vertexCount,
+                      const uint16_t* indices, uint32_t indexCount)
+{
+    if ((primitive != d3d::TriangleList && primitive != d3d::TriangleStrip && primitive != d3d::TriangleFan) ||
+        layout.offset[0] < 0 || !m_target || !m_viewport.width || !m_viewport.height)
+        return;
+    const float tx = m_pickX * float(m_target->m_width), ty = m_pickY * float(m_target->m_height);
+    const float px = (tx - float(m_viewport.x)) / float(m_viewport.width) * 2.0f - 1.0f;
+    const float py = 1.0f - (ty - float(m_viewport.y)) / float(m_viewport.height) * 2.0f;
+    if (std::fabs(px) > 1.0f || std::fabs(py) > 1.0f)
+        return;
+    const d3d::Matrix m = MulMatrix(MulMatrix(m_world, m_view), m_proj);
+    const auto* base = static_cast<const uint8_t*>(vertices);
+    auto clip = [&](uint32_t i, float out[3]) {
+        float p[3];
+        std::memcpy(p, base + size_t(i) * layout.stride + layout.offset[0], 12);
+        float c[4];
+        for (int k = 0; k < 4; ++k)
+            c[k] = p[0] * m.m[0][k] + p[1] * m.m[1][k] + p[2] * m.m[2][k] + m.m[3][k];
+        if (c[3] <= 1e-6f)
+            return false;
+        out[0] = c[0] / c[3];
+        out[1] = c[1] / c[3];
+        out[2] = c[2] / c[3];
+        return true;
+    };
+    const uint32_t n = indices ? indexCount : vertexCount;
+    const uint32_t triangles = primitive == d3d::TriangleList ? n / 3 : n >= 3 ? n - 2 : 0;
+    for (uint32_t t = 0; t < triangles; ++t) {
+        uint32_t k[3];
+        if (primitive == d3d::TriangleList) {
+            k[0] = t * 3; k[1] = t * 3 + 1; k[2] = t * 3 + 2;
+        } else if (primitive == d3d::TriangleStrip) {
+            k[0] = t; k[1] = t + 1; k[2] = t + 2;
+        } else {
+            k[0] = 0; k[1] = t + 1; k[2] = t + 2;
+        }
+        float a[3], b[3], c[3];
+        uint32_t i0 = indices ? indices[k[0]] : k[0], i1 = indices ? indices[k[1]] : k[1], i2 = indices ? indices[k[2]] : k[2];
+        if (i0 >= vertexCount || i1 >= vertexCount || i2 >= vertexCount || !clip(i0, a) || !clip(i1, b) || !clip(i2, c))
+            continue;
+        const float det = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1]);
+        if (std::fabs(det) < 1e-12f)
+            continue;
+        const float l0 = ((b[1] - c[1]) * (px - c[0]) + (c[0] - b[0]) * (py - c[1])) / det;
+        const float l1 = ((c[1] - a[1]) * (px - c[0]) + (a[0] - c[0]) * (py - c[1])) / det;
+        const float l2 = 1.0f - l0 - l1;
+        if (l0 < 0.0f || l1 < 0.0f || l2 < 0.0f)
+            continue;
+        const float z = l0 * a[2] + l1 * b[2] + l2 * c[2];
+        if (z < 0.0f || z > 1.0f || z >= m_pickDepth)
+            continue;
+        m_pickDepth = z;
+        m_pickBest = m_textures[0];
+        m_pickBestVisual = m_drawVisual;
+        m_pickBestOwner = m_drawOwner;
+        m_pickBestKind = m_drawVisualKind;
+        m_pickBestVertices = vertexCount;
+        m_pickBestIndices = indexCount;
+    }
 }
 
 }  // namespace rvk

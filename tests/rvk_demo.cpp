@@ -6,7 +6,10 @@
 // --window opens a window and animates until it is closed.
 #include "rvk.h"
 #include "threaded.h"
+#include "material_maps.h"
 
+#include <chrono>
+#include <thread>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -854,6 +857,228 @@ void RunNormalMapTest(D& dev, int frames, const std::string& shot, float bump)
         dev.DestroyTexture(t);              // the normal maps go with their textures
 }
 
+// PBR test (--pbr-test [--hdr] [--ssr 1] [--pbr-debug N]): a grid of spheres, roughness rising to the right
+// (0.05 .. 1), lit by a warm sun from the upper left and a blue point light at the lower right, over a floor.
+//   row 0: the game's own lighting (no material; Blinn-Phong specular, power 20) on red; last: a grey texture
+//          whose albedo map is a checker (SetMaterialMaps albedo, must show the checker); middle: glowing cyan
+//          bands (an emissive map, SetEmissiveMap)
+//   row 1: red non-metal      row 2: gold metal      row 3: silver metal (last column: occlusion map stripes)
+// The floor has a material too: a checker, smooth-ish non-metal (roughness 0.3), reflecting the spheres with --ssr.
+uint32_t g_pbrDebug = 0;      // --pbr-debug N: RVK_PbrDebug's views
+bool g_pbrOff = false;        // --pbr-off: materials attached but PBR lighting off (RVK_Pbr 0)
+float g_pbrProbe = 1.0f;      // --pbr-probe S: the environment probe's strength (0 = the analytic sky only)
+bool g_pbrDebugLate = false;  // --pbr-debug-late: the debug view only in the last frames (the probe learns the scene)
+float g_pick[2] = {-1.0f, -1.0f};   // --pick X Y: texture picking at (X, Y) of the target (0..1); prints which ball
+bool g_pbrRoom = false;       // --pbr-room: unlit coloured walls around (red left, green right, blue ahead), for the
+                              // environment probe: mirror balls show red on their left, green on their right
+// --pbr-maps DIR: the side-loaded files, through the proxy's loader (rvk/material_maps.h): the floor gets
+// floor_n.png, floor_ao.png / floor_r.png / floor_m.png (separate) and floor_d.png; the bottom row's middle ball
+// ball_n.png and ball_orm.png (packed). Missing files are skipped.
+std::string g_pbrMaps;
+
+template <typename D>
+void AttachFileMaps(D& dev, Texture* tex, const std::string& stem)
+{
+    auto file = [&](const char* suffix) {
+        std::string p = g_pbrMaps + "\\" + stem + suffix;
+        return GetFileAttributesA(p.c_str()) != INVALID_FILE_ATTRIBUTES ? p : std::string();
+    };
+    LARGE_INTEGER freq, t0, t1;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&t0);
+    maps::MaterialFiles f;
+    f.normal = file("_n.png");
+    f.packed = file("_orm.png");
+    f.parts[0] = file("_ao.png");
+    f.parts[1] = file("_r.png");
+    f.parts[2] = file("_m.png");
+    f.albedo = file("_d.png");
+    f.emissive = file("_e.png");
+    maps::Decoded d = maps::Decode(f);
+    maps::Attach(dev, tex, d);
+    QueryPerformanceCounter(&t1);
+    std::printf("pbr maps: %s: orm from %s, albedo %s, emissive %s (%.1f ms)%s%s\n", stem.c_str(),
+                d.ormFrom.empty() ? "(none)" : d.ormFrom.c_str(), d.albedo.Empty() ? "no" : "yes",
+                d.emissive.Empty() ? "no" : "yes",
+                double(t1.QuadPart - t0.QuadPart) * 1000.0 / double(freq.QuadPart), d.errors.empty() ? "" : " errors: ",
+                d.errors.c_str());
+}
+
+template <typename D>
+void RunPbrTest(D& dev, int frames, const std::string& shot)
+{
+    const int kSeg = 32, kRing = 24;
+    std::vector<VtxMesh> sphere;
+    std::vector<uint16_t> sphereIdx;
+    for (int r = 0; r <= kRing; ++r)
+        for (int sgm = 0; sgm <= kSeg; ++sgm) {
+            float th = kPi * r / kRing, ph = 2 * kPi * sgm / kSeg;
+            float x = std::sin(th) * std::cos(ph), y = std::cos(th), z = std::sin(th) * std::sin(ph);
+            sphere.push_back({x * 0.45f, y * 0.45f, z * 0.45f, x, y, z, 0xFFFFFFFF, float(sgm) / kSeg * 4, float(r) / kRing * 2});
+        }
+    for (int r = 0; r < kRing; ++r)
+        for (int sgm = 0; sgm < kSeg; ++sgm) {
+            uint16_t a = uint16_t(r * (kSeg + 1) + sgm), b = uint16_t(a + kSeg + 1);
+            for (uint16_t i : {a, b, uint16_t(a + 1), uint16_t(a + 1), b, uint16_t(b + 1)}) sphereIdx.push_back(i);
+        }
+    auto solid = [&](uint32_t argb) { return dev.CreateTexture(1, 1, &argb); };
+    auto orm = [&](float ao, float rough, float metal) {
+        uint32_t px = 0xFF000000u | uint32_t(std::lround(ao * 255)) << 16 | uint32_t(std::lround(rough * 255)) << 8 |
+                      uint32_t(std::lround(metal * 255));
+        return solid(px);
+    };
+    const float rough[5] = {0.05f, 0.25f, 0.45f, 0.7f, 1.0f};
+    const uint32_t albedo[4] = {0xFFB02020, 0xFFB02020, 0xFFE0B050, 0xFFD8D8D8};
+    Texture* tex[4][5] = {};
+    for (int row = 0; row < 4; ++row)
+        for (int col = 0; col < 5; ++col) {
+            tex[row][col] = solid(albedo[row]);
+            if (row > 0) {
+                Texture* m = orm(1.0f, rough[col], row >= 2 ? 1.0f : 0.0f);
+                if (row == 3 && col == 4) {          // occlusion stripes on a half-rough silver ball
+                    dev.DestroyTexture(m);
+                    std::vector<uint32_t> px(64 * 64);
+                    for (uint32_t y = 0; y < 64; ++y)
+                        for (uint32_t x = 0; x < 64; ++x)
+                            px[y * 64 + x] = 0xFF000000u | ((x / 8) % 2 ? 0x20u : 0xFFu) << 16 | 0x80u << 8 | 0xFFu;
+                    m = dev.CreateTexture(64, 64, px.data());
+                }
+                dev.SetMaterialMaps(tex[row][col], m, nullptr);
+            }
+        }
+    {   // row 0, last: the albedo map replaces the grey texture
+        auto checker = Checker(64, 8, 0xFFF0F0F0, 0xFF2040C0);
+        dev.SetMaterialMaps(tex[0][4], nullptr, dev.CreateTexture(64, 64, checker.data()));
+        std::vector<uint32_t> bands(64 * 64);  // row 0, middle: cyan bands glowing, black between
+        for (uint32_t y = 0; y < 64; ++y)
+            for (uint32_t x = 0; x < 64; ++x)
+                bands[y * 64 + x] = (y / 4) % 4 == 0 ? 0xFF40E0FFu : 0xFF000000u;
+        dev.SetEmissiveMap(tex[0][2], dev.CreateTexture(64, 64, bands.data()));
+    }
+    auto floorPixels = Checker(64, 8, 0xFF909090, 0xFF505050);
+    Texture* floor = dev.CreateTexture(64, 64, floorPixels.data());
+    dev.SetMaterialMaps(floor, orm(1.0f, 0.3f, 0.0f), nullptr);
+    if (!g_pbrMaps.empty()) {
+        AttachFileMaps(dev, floor, "floor");
+        AttachFileMaps(dev, tex[3][2], "ball");
+    }
+    dev.SetPixelLighting(true);
+    Device::PbrSettings pbr;
+    pbr.enabled = !g_pbrOff;
+    pbr.debug = g_pbrDebugLate ? 0u : g_pbrDebug;
+    pbr.probe = g_pbrProbe;
+    dev.SetPbr(pbr);
+
+    Texture* wallTex[3] = {solid(0xFFC03020), solid(0xFF30B040), solid(0xFF3050C0)};
+    const VtxMesh walls[3][4] = {
+        {{-10, -3, -8, 1, 0, 0, 0xFFFFFFFF, 0, 0}, {-10, 12, -8, 1, 0, 0, 0xFFFFFFFF, 0, 1},
+         {-10, -3, 25, 1, 0, 0, 0xFFFFFFFF, 1, 0}, {-10, 12, 25, 1, 0, 0, 0xFFFFFFFF, 1, 1}},
+        {{10, -3, -8, -1, 0, 0, 0xFFFFFFFF, 0, 0}, {10, 12, -8, -1, 0, 0, 0xFFFFFFFF, 0, 1},
+         {10, -3, 25, -1, 0, 0, 0xFFFFFFFF, 1, 0}, {10, 12, 25, -1, 0, 0, 0xFFFFFFFF, 1, 1}},
+        {{-10, -3, 25, 0, 0, -1, 0xFFFFFFFF, 0, 0}, {-10, 12, 25, 0, 0, -1, 0xFFFFFFFF, 0, 1},
+         {10, -3, 25, 0, 0, -1, 0xFFFFFFFF, 1, 0}, {10, 12, 25, 0, 0, -1, 0xFFFFFFFF, 1, 1}}};
+    VtxMesh floorQuad[4] = {{-8, 0, -4, 0, 1, 0, 0xFFFFFFFF, 0, 0}, {8, 0, -4, 0, 1, 0, 0xFFFFFFFF, 8, 0},
+                            {-8, 0, 12, 0, 1, 0, 0xFFFFFFFF, 0, 8}, {8, 0, 12, 0, 1, 0, 0xFFFFFFFF, 8, 8}};
+    for (int frame = 0; frame < frames; ++frame) {
+        if (frame == frames - 1)
+            dev.RequestScreenshot(shot);
+        if (g_pick[0] >= 0.0f && frame == frames - 4)
+            dev.RequestPick(g_pick[0], g_pick[1]);
+        if (g_pick[0] >= 0.0f && frame == frames - 2) {
+            Texture* picked = dev.LastPick().texture;
+            std::string what = picked == floor ? "the floor" : picked ? "another texture" : "nothing";
+            for (int r = 0; r < 4; ++r)
+                for (int c = 0; c < 5; ++c)
+                    if (picked == tex[r][c]) what = "ball row " + std::to_string(r) + " column " + std::to_string(c);
+            std::printf("pick: %s (serial %u)\n", what.c_str(), dev.LastPick().serial);
+            dev.SetPickHighlight(picked);
+        }
+        if (g_pbrDebugLate && frame == frames - 3) {
+            pbr.debug = g_pbrDebug;
+            dev.SetPbr(pbr);
+        }
+        dev.BeginFrame();
+        dev.SetViewport({0, 0, kWidth, kHeight, 0.0f, 1.0f});
+        dev.Clear(CLEAR_TARGET | CLEAR_ZBUFFER, 0xFF8098B8, 1.0f);
+        dev.SetRenderState(RS_ZENABLE, 1);
+        dev.SetRenderState(RS_ZWRITEENABLE, 1);
+        dev.SetRenderState(RS_ZFUNC, CMP_LESSEQUAL);
+        dev.SetRenderState(RS_CULLMODE, CULL_NONE);
+        dev.SetRenderState(RS_LIGHTING, 1);
+        dev.SetRenderState(RS_AMBIENT, 0xFF505860);
+        dev.SetRenderState(RS_DIFFUSEMATERIALSOURCE, MCS_MATERIAL);
+        dev.SetRenderState(RS_NORMALIZENORMALS, 1);
+        dev.SetRenderState(RS_FOGENABLE, 1);
+        dev.SetRenderState(RS_FOGTABLEMODE, FOG_LINEAR);
+        dev.SetRenderState(RS_FOGCOLOR, 0xFF8098B8);
+        float fogStart = 60.0f, fogEnd = 200.0f;
+        uint32_t bits;
+        std::memcpy(&bits, &fogStart, 4); dev.SetRenderState(RS_FOGSTART, bits);
+        std::memcpy(&bits, &fogEnd, 4); dev.SetRenderState(RS_FOGEND, bits);
+        Light sun{};
+        sun.type = LIGHT_DIRECTIONAL;
+        sun.diffuse = {1.0f, 0.95f, 0.85f, 1};
+        sun.specular = {1, 1, 1, 1};
+        sun.direction = {0.5f, -0.6f, 0.6f};
+        dev.SetLight(0, sun);
+        dev.LightEnable(0, true);
+        Light lamp{};
+        lamp.type = LIGHT_POINT;
+        lamp.diffuse = {0.3f, 0.5f, 1.0f, 1};
+        lamp.specular = {0.3f, 0.5f, 1.0f, 1};
+        lamp.position = {2.6f, -1.6f, -1.2f};
+        lamp.range = 6;
+        lamp.attenuation0 = 0.2f;
+        lamp.attenuation1 = 0.3f;
+        dev.SetLight(1, lamp);
+        dev.LightEnable(1, true);
+        dev.SetTextureStageState(0, TSS_COLOROP, TOP_MODULATE);
+        dev.SetTextureStageState(0, TSS_COLORARG1, TA_TEXTURE);
+        dev.SetTextureStageState(0, TSS_COLORARG2, TA_DIFFUSE);
+        dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG1);
+        dev.SetTextureStageState(0, TSS_ALPHAARG1, TA_TEXTURE);
+        dev.SetTextureStageState(0, TSS_TEXCOORDINDEX, 0);
+        dev.SetTextureStageState(0, TSS_TEXTURETRANSFORMFLAGS, TTFF_DISABLE);
+        dev.SetTextureStageState(0, TSS_MAGFILTER, TFG_LINEAR);
+        dev.SetTextureStageState(0, TSS_MINFILTER, TFN_LINEAR);
+        dev.SetTextureStageState(0, TSS_ADDRESS, TADDRESS_WRAP);
+        dev.SetTextureStageState(1, TSS_COLOROP, TOP_DISABLE);
+        dev.SetTransform(View, LookAtLH({0, 0.3f, -6.2f}, {0, -0.3f, 0}, {0, 1, 0}));
+        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(kWidth) / kHeight, 0.1f, 300.0f));
+        Material plain{{1, 1, 1, 1}, {1, 1, 1, 1}, {0, 0, 0, 1}, {0, 0, 0, 0}, 0.0f};
+        Material glossy{{1, 1, 1, 1}, {1, 1, 1, 1}, {0.6f, 0.6f, 0.6f, 1}, {0, 0, 0, 0}, 20.0f};
+        dev.SetMaterial(plain);
+        dev.SetRenderState(RS_SPECULARENABLE, 0);
+        dev.SetTexture(0, floor);
+        dev.SetTransform(World, Translate(0, -2.4f, 0));
+        dev.DrawPrimitive(TriangleStrip, kFvfMesh, floorQuad, 4);
+        if (g_pbrRoom) {
+            dev.SetRenderState(RS_LIGHTING, 0);
+            dev.SetTransform(World, Translate(0, 0, 0));
+            for (int w = 0; w < 3; ++w) {
+                dev.SetTexture(0, wallTex[w]);
+                dev.DrawPrimitive(TriangleStrip, kFvfMesh, walls[w], 4);
+            }
+            dev.SetRenderState(RS_LIGHTING, 1);
+        }
+        for (int row = 0; row < 4; ++row)
+            for (int col = 0; col < 5; ++col) {
+                bool legacy = row == 0 && col < 4;
+                dev.SetMaterial(legacy ? glossy : plain);
+                dev.SetRenderState(RS_SPECULARENABLE, legacy ? 1 : 0);
+                dev.SetTexture(0, tex[row][col]);
+                dev.SetTransform(World, Translate((col - 2) * 1.1f, 1.45f - row * 1.1f, 0));
+                dev.DrawIndexedPrimitive(TriangleList, kFvfMesh, sphere.data(), uint32_t(sphere.size()), sphereIdx.data(),
+                                         uint32_t(sphereIdx.size()));
+            }
+        dev.EndFrame();
+    }
+    for (auto& row : tex)
+        for (Texture* t : row) dev.DestroyTexture(t);   // their maps go with them
+    dev.DestroyTexture(floor);
+    for (Texture* t : wallTex) dev.DestroyTexture(t);
+}
+
 float g_cameraYaw = 0.0f;  // --camera-yaw: the shadow test's camera turns this much a frame (motion blur)
 bool g_sunView = false;    // --sun-view: the shadow test's camera low, looking into the sun
 float g_movingCube = 0.0f; // --moving-cube: the shadow test's big right cube moves this far a frame along x
@@ -876,12 +1101,16 @@ bool g_hideUi = false;            // --hide-ui: the interface hidden (SetHideInt
 float g_grassStyle[5] = {1, 1, 1, 1, 1};   // --grass-style V,F,G,U,T: variety, flowers, glow, gusts, trails (SetGrassStyle)
 float g_grassBenchYaw = 0.0f;  // --grass-bench-yaw R: the bench's camera turned R radians (pi: into the sun)
 bool g_grassBenchWalker = false;  // --grass-bench-walker: a "character" walking through the grass ahead of the camera
+bool g_grassBenchCross = false;   // --grass-bench-cross: ... crossing the view from left to right over the run (with
+                                  // --grass-bench-still: the trail it leaves lies across the screenshot)
 bool g_grassBenchNight = false;   // --grass-bench-night: a dim lightmap and ambient, a faint bluish moon
 int g_grassBenchLoading = 0;      // --grass-bench-loading N: the ground's texture a plain green stand-in until frame N
 bool g_grassBenchLoadingNull = false;   // --grass-bench-loading-null: ... drawn untextured instead
 bool g_grassBenchPlatform = false;  // --grass-bench-platform: a flat slab lying on the ground ahead (no grass under it)
 bool g_grassBenchStorm = false;   // --grass-bench-storm: AO's sandstorm tint (a depth-writing ZFUNC ALWAYS sprite)
 bool g_grassBenchStill = false;   // --grass-bench-still: the camera stays where it starts (to watch the wind)
+bool g_terrainPbr = false;        // --terrain-pbr: the bench's ground texture gets a PBR material (a glossy path through
+                                  // rough grass), per-pixel lighting, no grass field: the ground's PBR (MAT_BASE) path
 int g_grassBenchFilm = 0;         // --grass-bench-film N: ~60 frames a second, a screenshot every N (film_NNN.bmp)
 float g_grassBenchPitch = -1.0f;  // --grass-bench-pitch R: the camera looking R radians down, raised to match (top-down)
 bool g_grassFieldTex = true;   // --grass-field-any: over every ground, not only where the ground texture is green
@@ -957,7 +1186,19 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
     double sum = 0.0, worst = 0.0;
     int counted = 0, worstFrame = 0;
     std::vector<double> times;
-    dev.SetGrassField(true, g_grassFieldDist, 5.0f, 0.5f, true);   // the game's default density
+    dev.SetGrassField(!g_terrainPbr, g_grassFieldDist, 5.0f, 0.5f, true);   // the game's default density
+    if (g_terrainPbr) {
+        std::vector<uint32_t> orm(64 * 64);
+        for (int y = 0; y < 64; ++y)
+            for (int x = 0; x < 64; ++x)
+                orm[y * 64 + x] = x >= 26 && x < 38 ? 0xFFFF2800u : 0xFFC0D800u;   // path: roughness 0.16; grass 0.85
+        dev.SetMaterialMaps(grassGround, dev.CreateTexture(64, 64, orm.data()), nullptr);
+        dev.SetPixelLighting(true);
+        Device::PbrSettings pbr;
+        pbr.enabled = !g_pbrOff;
+        pbr.debug = g_pbrDebug;
+        dev.SetPbr(pbr);
+    }
     for (int frame = 0; frame < frames; ++frame) {
         if (frame == frames - 1)
             dev.RequestScreenshot(shot);
@@ -1026,7 +1267,12 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
         dev.SetTextureStageState(0, TSS_TEXCOORDINDEX, 0);
         dev.SetRenderState(RS_ZFUNC, CMP_LESSEQUAL);
         if (g_grassBenchWalker) {   // a lit column a few units ahead, its vertices moving each frame (CPU-skinned)
-            const float wx = ex + 4.0f * std::cos(yaw) + 1.5f * std::sin(t * 0.02f), wz = ez + 4.0f * std::sin(yaw);
+            float wx = ex + 4.0f * std::cos(yaw) + 1.5f * std::sin(t * 0.02f), wz = ez + 4.0f * std::sin(yaw);
+            if (g_grassBenchCross) {     // from 4 units left of the view's centre to 1 right, 4 ahead
+                const float s = -4.0f + 5.0f * float(frame) / float(std::max(frames - 1, 1));   // ends right of centre
+                wx = ex + 4.0f * std::cos(yaw) + s * std::sin(yaw);
+                wz = ez + 4.0f * std::sin(yaw) - s * std::cos(yaw);
+            }
             const float wy = height(wx, wz);
             std::vector<VtxMesh> cv;
             std::vector<uint16_t> ci;
@@ -1131,6 +1377,20 @@ bool g_waterOff = false;          // --water-off: the game's way instead (no Dra
 bool g_waterNight = false;        // --water-night
 float g_waterZ = -1e6f;           // --water-z Z: the camera's z (default per scene)
 bool g_waterNoPrepass = false;    // --water-noprepass
+bool g_hudSprite = false;         // --hud-sprite: after the 3D, a screen sprite as the game's timer bars draw it (the
+                                  // pre-transformed 0x1C4 format, not out of ProcessVertices): interface, so its colour
+                                  // must come out exactly (0x30C050 at the top left), untouched by the HDR passes
+                                  // (with --grade 0.3 1.3 0.5 0 0.8 --dof 1 a scene draw would come out grey and blurred);
+                                  // and an untextured MODULATE(TEXTURE, DIFFUSE) bar below it: 0x8040C0, not black
+bool g_waterPool = false;         // --water-pool: the lake's water only a 6 x 6 pool in front (Jobe's harbour: no water
+                                  // may spread beyond it - the rest of the bowl stays dry)
+bool g_waterWall = false;         // --water-wall: a steep sheet of the water mesh standing in the lake (a fall)
+bool g_waterShelf = false;        // --water-shelf: the mesh terraced - the surface with a lower shore shelf in front
+                                  // (as Anarchy Online hangs its aprons), which used to render as a "mountain of water"
+bool g_waterWalker = false;       // --water-walker: a "character" standing in the lake with its feet under the surface,
+                                  // bobbing along: the surface ripples around it (RVK_WaterSwim)
+bool g_waterJump = false;         // --water-jump: the walker jumps out of the water and lands (RVK_WakeSplash)
+float g_waterSwim = 1.0f;         // --water-swim S: strength of those ripples (RVK_WaterSwim)
 
 template <typename D>
 void RunWaterScene(D& dev, int frames, const std::string& shot)
@@ -1213,6 +1473,8 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
     } else {
         box(8.0f, 0.5f, 28.0f, 1.2f, 9.0f, 1.2f, 0xFFB0A898);                                          // a pillar
         box(-15.0f, -0.5f, 45.0f, 5.0f, 3.0f, 4.0f, 0xFF707068);                                       // a rock
+        if (g_waterWall)
+            box(0.0f, 4.0f, 71.0f, 70.0f, 12.0f, 2.0f, 0xFF7A7468);                                    // a cliff behind
         box(25.0f, -2.0f, 70.0f, 8.0f, 6.0f, 3.0f, 0xFF606060);
         box(-6.0f, 1.2f, 15.0f, 1.0f, 1.0f, 1.0f, 0xFFC04030);                                         // a red crate
     }
@@ -1223,11 +1485,33 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
         water = {{{-3000, 0, 5}, tint}, {{3000, 0, 5}, tint}, {{3000, 0, 4000}, tint}, {{-3000, 0, 4000}, tint}};
     else
         water = {{{-90, 0, -40}, tint}, {{90, 0, -40}, tint}, {{90, 0, 130}, tint}, {{-90, 0, 130}, tint}};
-    const uint16_t waterIdx[6] = {0, 1, 2, 0, 2, 3};
+    if (g_waterPool)
+        water = {{{-3, 0, 17}, tint}, {{3, 0, 17}, tint}, {{3, 0, 23}, tint}, {{-3, 0, 23}, tint}};
+    std::vector<uint16_t> waterIdx;
+    if (g_waterShelf) {
+        // The surface with a lower shelf in front, sharing no edge with it (z 55): the mesh steps down 4 units, as
+        // Anarchy Online's shore aprons do. The lower shelf is deliberately the larger part, so the body's level must
+        // come from the top (its surface), not from where most of the area lies.
+        water = {{{-90, -4, -40}, tint}, {{90, -4, -40}, tint}, {{90, -4, 55}, tint}, {{-90, -4, 55}, tint},
+                 {{-90, 0, 55}, tint},  {{90, 0, 55}, tint},  {{90, 0, 130}, tint},  {{-90, 0, 130}, tint}};
+        waterIdx = {0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7};
+    } else {
+        waterIdx = {0, 1, 2, 0, 2, 3};
+    }
+    if (g_waterWall) {                    // upright, 8 units tall, with the rock behind it 10 units further back
+        const uint16_t base = uint16_t(water.size());
+        water.insert(water.end(), {{{-30, 0, 60}, tint}, {{30, 0, 60}, tint}, {{30, 8, 60}, tint}, {{-30, 8, 60}, tint}});
+        waterIdx.insert(waterIdx.end(), {base, uint16_t(base + 1), uint16_t(base + 2), base, uint16_t(base + 2),
+                                         uint16_t(base + 3)});
+    }
 
+    Device::PbrSettings pbr;                 // (the environment probe the water reflects: --pbr-probe)
+    pbr.probe = g_pbrProbe;
+    dev.SetPbr(pbr);
     Device::WaterParams wp;
     wp.style = g_waterStyle;
     wp.waves = g_waterWaves;
+    wp.swimRipples = g_waterSwim;
     wp.quality = uint32_t(g_waterQuality);
     dev.SetWaterParams(wp);
     if (g_waterNoPrepass)
@@ -1308,6 +1592,30 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
         dev.SetTexture(0, nullptr);
         dev.SetTextureStageState(0, TSS_COLOROP, TOP_SELECTARG2);
         dev.DrawPrimitive(TriangleList, kFvfMesh, props.data(), uint32_t(props.size()));
+        // A "character" swimming (--water-walker): a tall body in the lake, its feet under the surface, bobbing along.
+        // Flagged a character (SetDrawVisual), so the renderer knows where it is - and ripples the water around it.
+        if (g_waterWalker) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));   // (the demo renders faster than the game: the
+                                                                          //  water's simulation runs on real time)
+            std::vector<VtxMesh> cv;
+            std::vector<uint16_t> ci;
+            // --water-jump: leaps out of the water every 90 frames (a 1.5 s arc) and lands again: a splash.
+            float jumpUp = 0.0f;
+            if (g_waterJump) {
+                const float u = float(frame % 90) / 90.0f;
+                jumpUp = 11.0f * u * (1.0f - u);
+            }
+            const float wx = g_waterJump ? 5.0f : 5.0f + 6.0f * std::sin(float(frame) * 0.012f);   // ~4 m/s at 60 fps
+            AddCube(cv, ci, wx, 0.0f, 36.0f, 0.3f);
+            for (VtxMesh& m : cv) {
+                m.y = m.y * 3.0f + 0.12f * std::sin(float(frame) * 0.4f) + jumpUp;   // 1.8 tall: feet ~0.9 under the water
+                if (m.y > 0.2f)
+                    m.x += 0.05f * std::sin(frame * 0.7f);
+            }
+            dev.SetDrawVisual(uint32_t(VisualKind::Character), "swimmer");
+            dev.DrawPrimitive(TriangleList, kFvfMesh, cv.data(), uint32_t(cv.size()));
+            dev.SetDrawVisual(0, nullptr);
+        }
         // The water, last of the opaque scene (the game draws it from its sorted list after the solid world).
         dev.SetRenderState(RS_LIGHTING, 0);
         dev.SetRenderState(RS_ALPHABLENDENABLE, 1);
@@ -1326,11 +1634,38 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
             }
             dev.DrawPrimitive(TriangleList, kFvfMesh, flat.data(), uint32_t(flat.size()));
         } else {
-            dev.DrawWater(water.data(), uint32_t(water.size()), waterIdx, 6);
+            dev.DrawWater(water.data(), uint32_t(water.size()), waterIdx.data(), uint32_t(waterIdx.size()));
         }
         dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG1);
         dev.SetRenderState(RS_ZWRITEENABLE, 1);
         dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
+        if (g_hudSprite) {
+            struct VtxSprite { float x, y, z, rhw; uint32_t diffuse, specular; float u, v; };
+            const uint32_t kFvfSprite = FVF_XYZRHW | FVF_DIFFUSE | FVF_SPECULAR | (1 << 8);
+            const uint32_t c = 0xFF30C050;
+            VtxSprite bar[4] = {{20, 20, 0, 1, c, 0, 0, 0}, {220, 20, 0, 1, c, 0, 1, 0},
+                                {20, 40, 0, 1, c, 0, 0, 1}, {220, 40, 0, 1, c, 0, 1, 1}};
+            dev.SetRenderState(RS_ZENABLE, 0);
+            dev.SetRenderState(RS_LIGHTING, 0);
+            dev.SetTexture(0, nullptr);
+            dev.SetTextureStageState(0, TSS_COLOROP, TOP_SELECTARG2);
+            dev.SetTextureStageState(0, TSS_COLORARG2, TA_DIFFUSE);
+            dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG2);
+            dev.SetTextureStageState(0, TSS_ALPHAARG2, TA_DIFFUSE);
+            dev.DrawPrimitive(TriangleStrip, kFvfSprite, bar, 4);
+            // ... and one as the PF map's wash: no texture, MODULATE(TEXTURE, DIFFUSE) - native Direct3D disables a
+            // textureless stage that reads its texture, so it must come out its vertex colour (0x8040C0 at y 60).
+            const uint32_t c2 = 0xFF8040C0;
+            VtxSprite wash[4] = {{20, 50, 0, 1, c2, 0, 0, 0}, {220, 50, 0, 1, c2, 0, 1, 0},
+                                 {20, 70, 0, 1, c2, 0, 0, 1}, {220, 70, 0, 1, c2, 0, 1, 1}};
+            dev.SetTextureStageState(0, TSS_COLOROP, TOP_MODULATE);
+            dev.SetTextureStageState(0, TSS_COLORARG1, TA_TEXTURE);
+            dev.SetTextureStageState(0, TSS_COLORARG2, TA_DIFFUSE);
+            dev.DrawPrimitive(TriangleStrip, kFvfSprite, wash, 4);
+            dev.SetRenderState(RS_ZENABLE, 1);
+            dev.SetTextureStageState(0, TSS_COLOROP, TOP_MODULATE);
+            dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG1);
+        }
         dev.EndFrame();
     }
 }
@@ -1920,6 +2255,198 @@ void RunPointShadowTest(D& dev, int frames, const std::string& shot, const std::
     dev.DestroyTexture(windows);
 }
 
+// --leaf-tree A.tree[,B.tree...]: real trees (tools/extract-tree.py: each part in the game's space, its texture, how
+// it blends) standing in a row on a lit ground, drawn as the game draws them - the canopy blended with depth writes,
+// the trunk opaque - for the leaves (leaves.cpp). The camera stands back to see them whole.
+std::string g_leafTrees;           // --leaf-tree: the files, comma-separated
+Device::LeafSettings g_leafSettings{true};   // --leaf-off, --leaf-density, --leaf-size, --leaf-dist, --leaf-core, --leaf-wind, --leaf-flutter
+float g_leafCamDist = -1.0f;       // --leaf-cam-dist D: the camera this far from the row (default: from the trees' size)
+float g_leafCamHeight = -1.0f;     // --leaf-cam-height H: ... this high (default: a third of the tallest tree)
+float g_leafCamYaw = 0.0f;         // --leaf-cam-yaw R: ... turned R radians about the row's middle
+int g_leafFilm = 0;                // --leaf-film N: ~60 frames a second, a screenshot every N frames (film_NNN.bmp)
+int g_leafForest = 0;              // --leaf-forest N: an N x N grid of the trees (12 units apart), seen from eye height
+
+struct TreePart {
+    uint32_t flags = 0, alphaRef = 128;
+    Matrix world;                  // the part's own (version 2: its node in the mesh; else the identity)
+    Texture* texture = nullptr;
+    std::vector<float> vertices;   // x y z, nx ny nz, u v
+    std::vector<uint16_t> indices;
+};
+struct Tree {
+    std::vector<TreePart> parts;
+    float lo[3] = {1e9f, 1e9f, 1e9f}, hi[3] = {-1e9f, -1e9f, -1e9f};
+};
+
+template <typename D>
+bool LoadTree(D& dev, const std::string& path, Tree& tree)
+{
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) { std::printf("leaf tree: can't open %s\n", path.c_str()); return false; }
+    std::vector<uint8_t> data;
+    uint8_t buf[65536];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) data.insert(data.end(), buf, buf + n);
+    std::fclose(f);
+    size_t off = 0;
+    auto u32 = [&]() { uint32_t v = 0; if (off + 4 <= data.size()) std::memcpy(&v, &data[off], 4); off += 4; return v; };
+    if (data.size() < 12 || std::memcmp(data.data(), "RVKT", 4) != 0) { std::printf("leaf tree: %s is no tree\n", path.c_str()); return false; }
+    off = 4;
+    const uint32_t version = u32();
+    const uint32_t parts = u32();
+    for (uint32_t p = 0; p < parts; ++p) {
+        TreePart part;
+        part.flags = u32();
+        part.alphaRef = u32();
+        part.world = Identity();
+        if (version >= 2) {
+            std::memcpy(&part.world, &data[off], 64);
+            off += 64;
+        }
+        const uint32_t w = u32(), h = u32();
+        if (off + size_t(w) * h * 4 > data.size()) return false;
+        part.texture = dev.CreateTexture(w, h, reinterpret_cast<const uint32_t*>(&data[off]));
+        off += size_t(w) * h * 4;
+        const uint32_t nv = u32();
+        part.vertices.resize(size_t(nv) * 8);
+        std::memcpy(part.vertices.data(), &data[off], size_t(nv) * 32);
+        off += size_t(nv) * 32;
+        const uint32_t ni = u32();
+        part.indices.resize(ni);
+        std::memcpy(part.indices.data(), &data[off], size_t(ni) * 2);
+        off += size_t(ni) * 2 + (ni % 2 ? 2 : 0);
+        for (uint32_t v = 0; v < nv; ++v) {
+            const float* p = &part.vertices[size_t(v) * 8];
+            for (int k = 0; k < 3; ++k) {
+                const float x = p[0] * part.world.m[0][k] + p[1] * part.world.m[1][k] + p[2] * part.world.m[2][k] +
+                                part.world.m[3][k];
+                tree.lo[k] = std::min(tree.lo[k], x);
+                tree.hi[k] = std::max(tree.hi[k], x);
+            }
+        }
+        tree.parts.push_back(std::move(part));
+    }
+    std::printf("leaf tree: %s, %u parts, %.1f units tall\n", path.c_str(), parts, tree.hi[1] - tree.lo[1]);
+    return true;
+}
+
+template <typename D>
+void RunLeafScene(D& dev, int frames, const std::string& shot, const std::string& dump)
+{
+    std::vector<Tree> trees;
+    for (size_t start = 0; start < g_leafTrees.size();) {
+        size_t comma = g_leafTrees.find(',', start);
+        std::string path = g_leafTrees.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+        Tree t;
+        if (!path.empty() && LoadTree(dev, path, t)) trees.push_back(std::move(t));
+        start = comma == std::string::npos ? g_leafTrees.size() : comma + 1;
+    }
+    if (trees.empty()) return;
+    // In a row along x, each on the ground (y 0) at its own box's middle; or (--leaf-forest) a grid of them.
+    struct Placed { size_t tree; float x, z, turn; };
+    std::vector<Placed> placed;
+    float x = 0.0f, tallest = 0.0f;
+    for (size_t i = 0; i < trees.size(); ++i)
+        tallest = std::max(tallest, trees[i].hi[1] - trees[i].lo[1]);
+    if (g_leafForest > 0) {
+        for (int gz = 0; gz < g_leafForest; ++gz)
+            for (int gx = 0; gx < g_leafForest; ++gx)
+                placed.push_back({size_t(gx * 7 + gz * 3) % trees.size(), 12.0f * float(gx) + 3.0f * float(gz % 2),
+                                  12.0f * float(gz), 1.3f * float(gx + 5 * gz)});
+        x = 12.0f * float(g_leafForest - 1);
+    } else {
+        for (size_t i = 0; i < trees.size(); ++i) {
+            const float width = trees[i].hi[0] - trees[i].lo[0];
+            placed.push_back({i, x + 0.5f * width, 0.0f, 0.0f});
+            x += width * 0.9f;
+        }
+    }
+    const float mid = 0.5f * x;
+    const float dist = g_leafCamDist > 0.0f ? g_leafCamDist
+                       : g_leafForest > 0 ? 14.0f : std::max(1.1f * tallest, 0.75f * x);
+    const float camY = g_leafCamHeight >= 0.0f ? g_leafCamHeight : g_leafForest > 0 ? 2.0f : tallest / 3.0f;
+    auto groundPixels = Checker(64, 8, 0xFF4A6A30, 0xFF42602A);
+    Texture* ground = dev.CreateTexture(64, 64, groundPixels.data());
+    dev.SetLeaves(g_leafSettings);
+    for (int frame = 0; frame < frames; ++frame) {
+        if (frame == frames - 1) {
+            dev.RequestScreenshot(shot);
+            if (!dump.empty()) dev.RequestFrameDump(dump);   // the last frame: the leaves are baked by then
+        } else if (g_leafFilm > 0 && frame >= 30 && frame % g_leafFilm == 0) {
+            char name[32];
+            std::snprintf(name, sizeof(name), "film_%03d.bmp", (frame - 30) / g_leafFilm);
+            dev.RequestScreenshot(name);
+        }
+        if (g_leafFilm > 0)
+            Sleep(16);
+        dev.BeginFrame();
+        dev.SetViewport({0, 0, kWidth, kHeight, 0.0f, 1.0f});
+        dev.Clear(CLEAR_TARGET | CLEAR_ZBUFFER, 0xFF8AB0D8, 1.0f);
+        const float ex = mid + dist * std::sin(g_leafCamYaw), ez = -dist * std::cos(g_leafCamYaw);
+        const float lookY = g_leafForest > 0 ? camY + 3.0f : tallest * 0.45f;
+        const float lookZ = g_leafForest > 0 ? 30.0f : 0.0f;
+        dev.SetTransform(View, LookAtLH({ex, camY, ez}, {mid, lookY, lookZ}, {0, 1, 0}));
+        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(kWidth) / kHeight, 0.5f, 500.0f));
+        dev.SetTransform(World, Identity());
+        dev.SetRenderState(RS_ZENABLE, 1);
+        dev.SetRenderState(RS_ZWRITEENABLE, 1);
+        dev.SetRenderState(RS_ZFUNC, CMP_LESSEQUAL);
+        dev.SetRenderState(RS_CULLMODE, CULL_NONE);
+        dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
+        dev.SetRenderState(RS_ALPHATESTENABLE, 0);
+        dev.SetRenderState(RS_AMBIENT, 0xFF606060);
+        dev.SetRenderState(RS_LIGHTING, 1);
+        dev.SetRenderState(RS_DIFFUSEMATERIALSOURCE, MCS_MATERIAL);
+        Material mat{{1, 1, 1, 1}, {1, 1, 1, 1}, {0, 0, 0, 0}, {0, 0, 0, 0}, 0.0f};
+        dev.SetMaterial(mat);
+        Light sun{};
+        sun.type = LIGHT_DIRECTIONAL;
+        sun.diffuse = {0.9f, 0.85f, 0.75f, 1};
+        sun.direction = {0.45f, -0.75f, 0.5f};
+        dev.SetLight(0, sun);
+        dev.LightEnable(0, true);
+        dev.SetTextureStageState(0, TSS_COLOROP, TOP_MODULATE);
+        dev.SetTextureStageState(0, TSS_COLORARG1, TA_TEXTURE);
+        dev.SetTextureStageState(0, TSS_COLORARG2, TA_DIFFUSE);
+        dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG1);
+        dev.SetTextureStageState(0, TSS_ALPHAARG1, TA_TEXTURE);
+        dev.SetTexture(0, ground);
+        {
+            const float r = 200.0f;
+            VtxMesh q[4] = {{-r + mid, 0, -r, 0, 1, 0, 0xFFFFFFFF, 0, 0}, {r + mid, 0, -r, 0, 1, 0, 0xFFFFFFFF, 40, 0},
+                            {r + mid, 0, r, 0, 1, 0, 0xFFFFFFFF, 40, 40}, {-r + mid, 0, r, 0, 1, 0, 0xFFFFFFFF, 0, 40}};
+            dev.DrawPrimitive(TriangleFan, kFvfMesh, q, 4);
+        }
+        const uint32_t kFvfTree = FVF_XYZ | FVF_NORMAL | (1 << 8);   // 0x112, as the game's statics
+        for (const Placed& pl : placed) {
+            const Tree& tree = trees[pl.tree];
+            // (The model's origin is its foot on the ground, as the game places it; the trunk reaches a little below.)
+            Matrix w = Mul(Translate(-0.5f * (tree.lo[0] + tree.hi[0]), 0.0f, -0.5f * (tree.lo[2] + tree.hi[2])),
+                           Mul(RotateY(pl.turn), Translate(pl.x, 0.0f, pl.z)));
+            for (const TreePart& part : tree.parts) {
+                dev.SetTransform(World, Mul(part.world, w));
+                dev.SetTexture(0, part.texture);
+                dev.SetRenderState(RS_ALPHABLENDENABLE, (part.flags & 1) ? 1 : 0);
+                dev.SetRenderState(RS_SRCBLEND, BLEND_SRCALPHA);
+                dev.SetRenderState(RS_DESTBLEND, BLEND_INVSRCALPHA);
+                dev.SetRenderState(RS_ALPHATESTENABLE, (part.flags & 2) ? 1 : 0);
+                dev.SetRenderState(RS_ALPHAREF, part.alphaRef);
+                dev.SetRenderState(RS_ALPHAFUNC, CMP_GREATEREQUAL);
+                dev.DrawIndexedPrimitive(TriangleList, kFvfTree, part.vertices.data(),
+                                         uint32_t(part.vertices.size() / 8), part.indices.data(),
+                                         uint32_t(part.indices.size()));
+            }
+        }
+        dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
+        dev.SetRenderState(RS_ALPHATESTENABLE, 0);
+        dev.SetTransform(World, Identity());
+        dev.EndFrame();
+    }
+    for (Tree& t : trees)
+        for (TreePart& part : t.parts) dev.DestroyTexture(part.texture);
+    dev.DestroyTexture(ground);
+}
+
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l)
 {
     if (msg == WM_DESTROY) { PostQuitMessage(0); return 0; }
@@ -2123,8 +2650,20 @@ void RunParticleTest(D& dev, int frames, int frameMs, const std::string& shot, c
     if (offscreen) dev.DestroyTexture(offscreen);
 }
 
+// A crash prints a line and exits (3): no Wine crash dialog on the desktop.
+LONG WINAPI Crashed(EXCEPTION_POINTERS* e)
+{
+    std::printf("rvk_demo crashed: exception %08lx at %p\n", (unsigned long)e->ExceptionRecord->ExceptionCode,
+                e->ExceptionRecord->ExceptionAddress);
+    std::fflush(stdout);
+    TerminateProcess(GetCurrentProcess(), 3);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
 int main(int argc, char** argv)
 {
+    SetUnhandledExceptionFilter(&Crashed);
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     bool windowed = false, stress = false, threaded = false, pixelLighting = false, lightingDebug = false, lightOverride = false, shadows = false, shadowTest = false, pointShadowTest = false, pointShadowSun = false;
     int cacheTest = 0, frameMs = 0;
     bool particleTest = false, particlesOff = false;
@@ -2140,7 +2679,7 @@ int main(int argc, char** argv)
     float saturation = 1.0f, contrast = 1.0f, warmth = 0.0f, nightTint = 0.0f, vignette = 0.0f;
     bool lutSepia = false, taa = false;
     float sharpen = 0.4f;
-    bool normalMapTest = false;
+    bool normalMapTest = false, pbrTest = false;
     uint32_t anisotropy = 1;
     float motionBlur = 0.0f, dof = 0.0f, dofFocus = 0.0f;
     bool dofBokeh = true, dofFar = true;
@@ -2182,8 +2721,29 @@ int main(int argc, char** argv)
         else if (a == "--grass-flip") g_grassFlip = true;
         else if (a == "--grass-field") { g_grassFieldOn = true; hdr = true; }
         else if (a == "--grass-bench") { g_grassFieldOn = g_grassBench = true; hdr = true; }
+        else if (a == "--leaf-tree" && i + 1 < argc) g_leafTrees = argv[++i];
+        else if (a == "--leaf-off") g_leafSettings.on = false;
+        else if (a == "--leaf-shadow-off") g_leafSettings.shadows = false;
+        else if (a == "--leaf-fall" && i + 1 < argc) g_leafSettings.fall = float(std::atof(argv[++i]));
+        else if (a == "--leaf-density" && i + 1 < argc) g_leafSettings.density = float(std::atof(argv[++i]));
+        else if (a == "--leaf-size" && i + 1 < argc) g_leafSettings.size = float(std::atof(argv[++i]));
+        else if (a == "--leaf-dist" && i + 1 < argc) g_leafSettings.distance = float(std::atof(argv[++i]));
+        else if (a == "--leaf-core" && i + 1 < argc) g_leafSettings.core = float(std::atof(argv[++i]));
+        else if (a == "--leaf-wind" && i + 1 < argc) g_leafSettings.wind = float(std::atof(argv[++i]));
+        else if (a == "--leaf-flutter" && i + 1 < argc) g_leafSettings.flutter = float(std::atof(argv[++i]));
+        else if (a == "--leaf-cam-dist" && i + 1 < argc) g_leafCamDist = float(std::atof(argv[++i]));
+        else if (a == "--leaf-cam-height" && i + 1 < argc) g_leafCamHeight = float(std::atof(argv[++i]));
+        else if (a == "--leaf-cam-yaw" && i + 1 < argc) g_leafCamYaw = float(std::atof(argv[++i]));
+        else if (a == "--leaf-film" && i + 1 < argc) g_leafFilm = std::atoi(argv[++i]);
+        else if (a == "--leaf-forest" && i + 1 < argc) g_leafForest = std::atoi(argv[++i]);
         else if (a == "--water-lake") { g_waterScene = 1; hdr = true; }
         else if (a == "--water-coast") { g_waterScene = 2; hdr = true; }
+        else if (a == "--water-wall") g_waterWall = true;
+        else if (a == "--water-shelf") g_waterShelf = true;
+        else if (a == "--water-pool") g_waterPool = true;
+        else if (a == "--water-walker") g_waterWalker = true;
+        else if (a == "--water-jump") { g_waterWalker = true; g_waterJump = true; }
+        else if (a == "--water-swim" && i + 1 < argc) g_waterSwim = float(std::atof(argv[++i]));
         else if (a == "--water-shadows") shadows = true;   // (the coast's camera then goes wrong from frame 2: not the water's)
         else if (a == "--water-style" && i + 1 < argc) g_waterStyle = float(std::atof(argv[++i]));
         else if (a == "--water-yaw" && i + 1 < argc) g_waterYaw = float(std::atof(argv[++i]));
@@ -2197,13 +2757,16 @@ int main(int argc, char** argv)
         else if (a == "--water-noshadow") shadows = false;
         else if (a == "--water-nohdr") hdr = false;
         else if (a == "--water-noprepass") g_waterNoPrepass = true;
+        else if (a == "--hud-sprite") g_hudSprite = true;
         else if (a == "--grass-field-any") g_grassFieldTex = false;
         else if (a == "--grass-field-tan") g_grassFieldTan = true;
         else if (a == "--grass-field-dist" && i + 1 < argc) g_grassFieldDist = float(std::atof(argv[++i]));
         else if (a == "--grass-bench-yaw" && i + 1 < argc) g_grassBenchYaw = float(std::atof(argv[++i]));
         else if (a == "--grass-bench-walker") g_grassBenchWalker = true;
+        else if (a == "--grass-bench-cross") { g_grassBenchCross = true; g_grassBenchWalker = true; }
         else if (a == "--grass-bench-night") g_grassBenchNight = true;
         else if (a == "--grass-bench-still") g_grassBenchStill = true;
+        else if (a == "--terrain-pbr") { g_terrainPbr = g_grassBench = g_grassBenchStill = true; hdr = true; }
         else if (a == "--grass-bench-storm") g_grassBenchStorm = true;
         else if (a == "--grass-bench-platform") g_grassBenchPlatform = true;
         else if (a == "--grass-bench-loading" && i + 1 < argc) g_grassBenchLoading = std::atoi(argv[++i]);
@@ -2240,6 +2803,14 @@ int main(int argc, char** argv)
         else if (a == "--aniso" && i + 1 < argc) anisotropy = uint32_t(std::atoi(argv[++i]));
         else if (a == "--bump" && i + 1 < argc) bump = float(std::atof(argv[++i]));
         else if (a == "--normal-map-test") normalMapTest = true;
+        else if (a == "--pbr-test") pbrTest = true;
+        else if (a == "--pbr-maps" && i + 1 < argc) { g_pbrMaps = argv[++i]; pbrTest = true; }
+        else if (a == "--pbr-off") g_pbrOff = true;
+        else if (a == "--pbr-probe" && i + 1 < argc) g_pbrProbe = float(std::atof(argv[++i]));
+        else if (a == "--pbr-room") g_pbrRoom = true;
+        else if (a == "--pick" && i + 2 < argc) { g_pick[0] = float(std::atof(argv[++i])); g_pick[1] = float(std::atof(argv[++i])); }
+        else if (a == "--pbr-debug-late") g_pbrDebugLate = true;
+        else if (a == "--pbr-debug" && i + 1 < argc) g_pbrDebug = uint32_t(std::atoi(argv[++i]));
         else if (a == "--ao" && i + 1 < argc) { ao = float(std::atof(argv[++i])); hdr = true; }
         else if (a == "--ao-radius" && i + 1 < argc) aoRadius = float(std::atof(argv[++i]));
         else if (a == "--gi" && i + 1 < argc) { gi = float(std::atof(argv[++i])); hdr = true; }
@@ -2359,6 +2930,11 @@ int main(int argc, char** argv)
     dev.SetMotionBlurMode(motionMode);
     dev.SetDof(dof > 0.0f, dofBokeh, true, dof, 16.0f, dofFocus, 0.2f, dofFar, 3.0f);
     dev.SetPointShadowFadeIn(fadeIn);    // frames here are milliseconds apart: no fade-in unless asked
+    if (pbrTest) {
+        RunPbrTest(dev, frames, shot);
+        std::printf("rendered; screenshot %s\n", shot.c_str());
+        return 0;
+    }
     if (normalMapTest) {
         RunNormalMapTest(dev, frames, shot, bump > 0.0f ? bump : 1.0f);
         std::printf("rendered; screenshot %s\n", shot.c_str());
@@ -2387,7 +2963,7 @@ int main(int argc, char** argv)
         std::printf("rendered; screenshot %s\n", shot.c_str());
         return 0;
     }
-    if (!dump.empty() && !shadowTest) dev.RequestFrameDump(dump);
+    if (!dump.empty() && !shadowTest && g_leafTrees.empty()) dev.RequestFrameDump(dump);
     std::printf("GPU: %s (Vulkan %u.%u), driver %s\n", dev.Info().gpu.c_str(), VK_API_VERSION_MAJOR(dev.Info().apiVersion),
                 VK_API_VERSION_MINOR(dev.Info().apiVersion), dev.Info().driver.c_str());
 
@@ -2418,6 +2994,8 @@ int main(int argc, char** argv)
         if (!dump.empty() && !shadowTest) tdev.RequestFrameDump(dump);
         if (shadowTest) RunShadowTest(tdev, frames, shot, cacheTest, frameMs, dump);
         else RunDemo(tdev, windowed, stress, frames, shot);
+    } else if (!g_leafTrees.empty()) {
+        RunLeafScene(dev, frames, shot, dump);
     } else if (g_grassBench) {
         RunGrassBench(dev, frames, shot);
     } else if (g_waterScene) {

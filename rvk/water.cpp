@@ -7,8 +7,9 @@
 // The game's water triangles are huge (it subdivides only edges over 10000 units), so they can't carry waves. We draw
 // a polar grid around the camera instead (water.vert: rings growing geometrically, as dense as their distance needs;
 // one mesh, no cracks), lifted onto the water by a water map - the game's flat triangles rasterised top-down into an
-// image (R: the surface's height, G: water here) - and moved by Gerstner waves. Steep triangles (falls) are drawn as
-// they are (mesh mode).
+// image (R: the surface's height, G: water here) - and moved by Gerstner waves. Each connected body is baked flat at
+// its own level (the game hangs shore aprons and skirts below the surface, which the coarse far grid would turn into
+// terraces - "mountains of water"). Steep triangles (falls) are drawn as they are (mesh mode).
 //
 // Drawn where the game draws its water, in the scene's rendering: what is under and behind the water must be known,
 // so the scene's colour and depth are copied first (once a frame) and the water drawn opaque over them (water.frag:
@@ -37,12 +38,22 @@ const uint32_t kWaterVertSpirv[] = {
 const uint32_t kWaterFragSpirv[] = {
 #include "water.frag.inc"
 };
+const uint32_t kWaterSimSpirv[] = {
+#include "water_sim.comp.inc"
+};
+
+// The disturbance field (water_sim.comp): kSimN x kSimN cells (their size set by the quality), and the most characters
+// it is handed (the nearest to the camera).
+constexpr uint32_t kSimN = 256;
+constexpr uint32_t kSimBodies = 32;
 
 // The per-draw block (water_common.glsl WaterFrame, std140).
 struct WaterFrame {
     d3d::Matrix viewProj, prevViewProj, view;
     float proj[4], camera[4], viewport[4], time[4], wind[4], map[4], mapInfo[4], grid[4];
     float sunColour[4], sunDir[4], ambient[4], tint[4], look[4], look2[4], fogColour[4], fogParams[4], sky[4];
+    float env[4];
+    float ripple[4];                             // x: the disturbance field is bound, y: strength, z: 1 / size, w: cell
 };
 
 constexpr uint32_t kDetailSize = 256;
@@ -212,11 +223,11 @@ bool Device::CreateWaterResources(std::string* error)
 {
     DestroyWaterResources();
     // One pushed set: 0 the block, 2 the mesh's vertices, 4 the frame lights, 5 the sun's shadows, 7 the water map, 8
-    // the scene's depth, 9 the scene, 10 the detail texture, 11 the game's texture.
-    const uint32_t numbers[9] = {0, 2, 4, 5, 7, 8, 9, 10, 11};
-    VkDescriptorSetLayoutBinding b[9] = {};
+    // the scene's depth, 9 the scene, 10 the detail texture, 11 the game's texture, 12 the environment probe's atlas, 13 the disturbance field.
+    const uint32_t numbers[11] = {0, 2, 4, 5, 7, 8, 9, 10, 11, 12, 13};
+    VkDescriptorSetLayoutBinding b[11] = {};
     const VkShaderStageFlags both = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    for (int i = 0; i < 9; ++i) {
+    for (int i = 0; i < 11; ++i) {
         b[i].binding = numbers[i];
         b[i].descriptorCount = 1;
         b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -227,7 +238,7 @@ bool Device::CreateWaterResources(std::string* error)
     b[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     VkDescriptorSetLayoutCreateInfo sl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     sl.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-    sl.bindingCount = 9;
+    sl.bindingCount = 11;
     sl.pBindings = b;
     if (!Check(vkCreateDescriptorSetLayout(m_device, &sl, nullptr, &m_waterSetLayout), "vkCreateDescriptorSetLayout",
                error))
@@ -276,7 +287,7 @@ bool Device::CreateWaterResources(std::string* error)
         cb.attachmentCount = 5;
         cb.pAttachments = att;
         VkFormat colorFormats[5] = {GetFormatInfo(Format::RGBA16F).vk, GetFormatInfo(Format::RGBA16F).vk,
-                                    GetFormatInfo(Format::RGBA8).vk, GetFormatInfo(Format::RG16F).vk,
+                                    GetFormatInfo(Format::RGBA8).vk, GetFormatInfo(Format::RGBA16F).vk,
                                     GetFormatInfo(Format::A8R8G8B8).vk};
         VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
         rendering.colorAttachmentCount = 5;
@@ -327,6 +338,9 @@ bool Device::CreateWaterResources(std::string* error)
         uint32_t s = std::max(kDetailSize >> l, 1u);
         UpdateTexture(m_waterDetail, l, 0, 0, s, s, levels[l].data(), s * 4);
     }
+    std::string simError;
+    if (!CreateWaterSim(&simError))              // (the water works without it, only the characters' ripples are lost)
+        Log("water disturbance field unavailable: %s\n", simError.c_str());
     return true;
 }
 
@@ -348,6 +362,15 @@ void Device::DestroyWaterResources()
     for (WaterGrid& g : m_waterGrids)
         if (g.buffer) vmaDestroyBuffer(m_allocator, g.buffer, g.allocation);
     m_waterGrids.clear();
+    for (int i = 0; i < 2; ++i) {
+        if (m_waterSimView[i]) { vkDestroyImageView(m_device, m_waterSimView[i], nullptr); m_waterSimView[i] = VK_NULL_HANDLE; }
+        if (m_waterSim[i]) { vmaDestroyImage(m_allocator, m_waterSim[i], m_waterSimAllocation[i]); m_waterSim[i] = VK_NULL_HANDLE; }
+    }
+    if (m_waterSimPipeline) { vkDestroyPipeline(m_device, m_waterSimPipeline, nullptr); m_waterSimPipeline = VK_NULL_HANDLE; }
+    if (m_waterSimLayout) { vkDestroyPipelineLayout(m_device, m_waterSimLayout, nullptr); m_waterSimLayout = VK_NULL_HANDLE; }
+    if (m_waterSimSetLayout) { vkDestroyDescriptorSetLayout(m_device, m_waterSimSetLayout, nullptr); m_waterSimSetLayout = VK_NULL_HANDLE; }
+    m_waterSimLive = false;
+    m_waterSimClear = true;
     if (m_waterRepeatSampler) { vkDestroySampler(m_device, m_waterRepeatSampler, nullptr); m_waterRepeatSampler = VK_NULL_HANDLE; }
     if (m_waterPipeline) { vkDestroyPipeline(m_device, m_waterPipeline, nullptr); m_waterPipeline = VK_NULL_HANDLE; }
     if (m_waterLayout) { vkDestroyPipelineLayout(m_device, m_waterLayout, nullptr); m_waterLayout = VK_NULL_HANDLE; }
@@ -409,6 +432,7 @@ Device::WaterMap* Device::WaterMapFor(const WaterVertex* v, uint32_t count, cons
     struct Tri { uint32_t a, b, c; };
     std::vector<Tri> flat;
     float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
+    float flatLoY = 1e30f, flatHiY = -1e30f;         // the flat triangles' height span (a step = mountains)
     double heightSum = 0.0;
     for (uint32_t t = 0; t + 2 < icount; t += 3) {
         uint32_t i0 = idx[t], i1 = idx[t + 1], i2 = idx[t + 2];
@@ -428,11 +452,14 @@ Device::WaterMap* Device::WaterMapFor(const WaterVertex* v, uint32_t count, cons
             continue;
         }
         flat.push_back({i0, i1, i2});
-        for (const float* p : {p0, p1, p2})
+        for (const float* p : {p0, p1, p2}) {
+            flatLoY = std::min(flatLoY, p[1]);
+            flatHiY = std::max(flatHiY, p[1]);
             for (int k = 0; k < 3; ++k) {
                 lo[k] = std::min(lo[k], p[k]);
                 hi[k] = std::max(hi[k], p[k]);
             }
+        }
         heightSum += double(p0[1] + p1[1] + p2[1]) / 3.0;
     }
     if (flat.empty())
@@ -469,6 +496,7 @@ Device::WaterMap* Device::WaterMapFor(const WaterVertex* v, uint32_t count, cons
     m.flatTriangles = uint32_t(flat.size());
     m.colour = v[flat.front().a].colour;
     std::vector<uint16_t> pixels(size_t(w) * h * 4, 0);
+    std::vector<float> heights(size_t(w) * h, 0.0f);  // wet texels' surface height, y - m.base (written below)
     const uint16_t one = ToHalf(1.0f);
     for (const Tri& t : flat) {
         const float* a = v[t.a].pos;
@@ -476,10 +504,12 @@ Device::WaterMap* Device::WaterMapFor(const WaterVertex* v, uint32_t count, cons
         const float* c = v[t.c].pos;
         float minX = std::min({a[0], b[0], c[0]}), maxX = std::max({a[0], b[0], c[0]});
         float minZ = std::min({a[2], b[2], c[2]}), maxZ = std::max({a[2], b[2], c[2]});
-        int x0 = std::max(int(std::floor((minX - m.origin[0]) / texel)) - 1, 0);
-        int x1 = std::min(int(std::ceil((maxX - m.origin[0]) / texel)) + 1, int(w) - 1);
-        int z0 = std::max(int(std::floor((minZ - m.origin[1]) / texel)) - 1, 0);
-        int z1 = std::min(int(std::ceil((maxZ - m.origin[1]) / texel)) + 1, int(h) - 1);
+        // (Never the outermost texels: they stay dry, so what the clamped sampler reads beyond the map is no water - a
+        // small pool's slack once reached them and flooded everything around it at its height.)
+        int x0 = std::max(int(std::floor((minX - m.origin[0]) / texel)) - 1, 1);
+        int x1 = std::min(int(std::ceil((maxX - m.origin[0]) / texel)) + 1, int(w) - 2);
+        int z0 = std::max(int(std::floor((minZ - m.origin[1]) / texel)) - 1, 1);
+        int z1 = std::min(int(std::ceil((maxZ - m.origin[1]) / texel)) + 1, int(h) - 2);
         float det = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
         if (std::fabs(det) < 1e-12f)
             continue;
@@ -495,19 +525,105 @@ Device::WaterMap* Device::WaterMapFor(const WaterVertex* v, uint32_t count, cons
                 if (l0 < -slack || l1 < -slack || l2 < -slack)
                     continue;
                 float y = l0 * a[1] + l1 * b[1] + l2 * c[1];
-                uint16_t* px4 = &pixels[(size_t(z) * w + x) * 4];
-                px4[0] = ToHalf(y - m.base);
-                px4[1] = one;
+                size_t idx = size_t(z) * w + x;
+                heights[idx] = y - m.base;
+                pixels[idx * 4 + 0] = 0;             // the height is written once the levels are known (below)
+                pixels[idx * 4 + 1] = one;           // water here
             }
     }
+    // A water body's mesh hangs shore aprons and skirts below its surface, holds thin high tails (a waterfall's lip),
+    // and one mesh may hold several bodies; far from the camera the polar grid is coarse enough to build those steps
+    // into "mountains of water". Split the wet texels into connected bodies (a flood fill) and give each one flat its
+    // own surface height, so each body reads as one sheet at its level.
+    std::vector<int32_t> body(size_t(w) * h, -1);        // a wet texel's body (-1 = dry)
+    std::vector<float> bodyLevel;                        // each body's level, relative to m.base (the mean height)
+    std::vector<int32_t> stack;
+    for (uint32_t z = 0; z < h; ++z)
+        for (uint32_t x = 0; x < w; ++x) {
+            const size_t start = size_t(z) * w + x;
+            if (!pixels[start * 4 + 1] || body[start] >= 0)
+                continue;
+            const int id = int(bodyLevel.size());
+            stack.assign(1, int32_t(start));
+            body[start] = id;
+            std::vector<float> hs;
+            while (!stack.empty()) {
+                const int32_t cur = stack.back();
+                stack.pop_back();
+                hs.push_back(heights[size_t(cur)]);
+                const uint32_t cz = uint32_t(cur) / w, cx = uint32_t(cur) % w;
+                const int32_t n[4] = {cx ? cur - 1 : -1, cx + 1 < w ? cur + 1 : -1,
+                                      cz ? cur - int32_t(w) : -1, cz + 1 < h ? cur + int32_t(w) : -1};
+                for (int32_t k : n)
+                    if (k >= 0 && pixels[size_t(k) * 4 + 1] && body[size_t(k)] < 0) {
+                        body[size_t(k)] = id;
+                        stack.push_back(k);
+                    }
+            }
+            // The level: the body's flat surface - the highest height a substantial part of its area lies at (a
+            // plateau). This ignores both a thin high tail (a waterfall's lip, which pulls a top percentile up) and a
+            // spread-out low apron (which pulls a most-common height down). Each body is then flat at its own level.
+            float mn = 1e30f, mx = -1e30f;
+            for (float h : hs) { mn = std::min(mn, h); mx = std::max(mx, h); }
+            const float binW = 0.5f;                 // world units: the level's resolution
+            const int nb = std::min(8192, std::max(1, int((mx - mn) / binW) + 1));
+            std::vector<uint64_t> area(size_t(nb), 0);
+            for (float h : hs)
+                ++area[size_t(std::min(nb - 1, std::max(0, int((h - mn) / binW))))];
+            uint64_t maxArea = 0;
+            for (uint64_t c : area)
+                maxArea = std::max(maxArea, c);
+            int levelBin = 0;
+            for (int b = nb - 1; b >= 0; --b)
+                if (area[size_t(b)] * 10 >= maxArea) {   // at least a tenth of the fullest: a plateau, not a tail
+                    levelBin = b;
+                    break;
+                }
+            int loBin = levelBin;                    // the plateau's whole run of bins (the surface, not just its top)
+            while (loBin > 0 && area[size_t(loBin - 1)] * 10 >= maxArea)
+                --loBin;
+            float level = mn + (float(levelBin) + 0.5f) * binW;
+            {
+                double sum = 0.0;
+                uint64_t count = 0;
+                for (float h : hs) {
+                    const int b = std::min(nb - 1, std::max(0, int((h - mn) / binW)));
+                    if (b >= loBin && b <= levelBin) { sum += double(h); ++count; }
+                }
+                if (count)
+                    level = float(sum / double(count));
+            }
+            bodyLevel.push_back(level);
+        }
+    // The shader adds the map's base to the stored height: put the lowest level in the base and store each texel at
+    // its body's level (constant across the body), so every body reads as one flat sheet at its own height.
+    float minLevel = 0.0f;
+    if (!bodyLevel.empty())
+        minLevel = *std::min_element(bodyLevel.begin(), bodyLevel.end());
+    for (size_t i = 0; i < heights.size(); ++i) {
+        if (!pixels[i * 4 + 1])
+            continue;
+        pixels[i * 4 + 0] = ToHalf(bodyLevel[size_t(body[i])] - minLevel);
+    }
+    m.base += minLevel;
     m.texture = CreateImage(w, h, Format::RGBA16F, 1, false);
     if (!m.texture)
         return nullptr;
     UpdateTexture(m.texture, 0, 0, 0, w, h, pixels.data(), w * 8);
     m_waterMaps.push_back(m);
-    WaterLog("water map %016llx: %u flat + %u steep triangles, %.0f x %.0f units at y %.1f, %u x %u texels of %.2f",
+    // (The vertex alphas, flat and steep: the game fades its water's shore edges out by them.)
+    uint32_t flatLo = 255, flatHi = 0, steepLo = 255, steepHi = 0;
+    for (const Tri& t : flat)
+        for (uint32_t i : {t.a, t.b, t.c}) { uint32_t a = v[i].colour >> 24; flatLo = std::min(flatLo, a); flatHi = std::max(flatHi, a); }
+    for (uint32_t i : steep) { uint32_t a = v[i].colour >> 24; steepLo = std::min(steepLo, a); steepHi = std::max(steepHi, a); }
+    WaterLog("water map %016llx: %u flat + %u steep triangles, %.0f x %.0f units, %zu bodies at y %.2f..%.2f, "
+             "%u x %u texels of %.2f; vertex alpha flat %u..%u, steep %u..%u; flat triangle heights %.2f..%.2f",
              (unsigned long long)key, m.flatTriangles, uint32_t(steep.size() / 3), double(ex), double(ez),
-             double(m.base), w, h, double(texel));
+             bodyLevel.size(), double(m.base),
+             bodyLevel.empty() ? double(m.base)
+                               : double(m.base + (*std::max_element(bodyLevel.begin(), bodyLevel.end()) - minLevel)),
+             w, h, double(texel), flatLo, flatHi, steep.empty() ? 0u : steepLo, steepHi,
+             double(flatLoY), double(flatHiY));
     return &m_waterMaps.back();
 }
 
@@ -524,9 +640,276 @@ void Device::WaterLog(const char* fmt, ...)
     Log("%s", buf);
 }
 
+// The characters of the last completed frame, merged into bodies (a character is a few parts, each its own box) with
+// their velocity, for the water's disturbance field (StepWaterSim). Once a frame, before the scene draws.
+void Device::CollectWaterBodies()
+{
+    if (!m_waterParams.enable) {
+        m_waterBodies.clear();
+        return;
+    }
+    double now = SwayClock();
+    float dt = float(now - m_waterBodiesTime);
+    m_waterBodiesTime = now;
+    if (!(dt > 0.0f) || dt > 0.25f)
+        dt = 1.0f / 60.0f;
+    m_waterDt = dt;
+    const float vdt = std::max(dt, 1.0f / 240.0f);   // (a very short frame must not turn a box's jitter into speed)
+
+    // Merge the boxes that are one character (its parts, a head, a helmet), as the grass push does.
+    constexpr float kMerge = 0.9f;
+    struct Acc { float sx = 0, sz = 0, minY = 1e30f, maxY = -1e30f; int parts = 0; };
+    std::vector<Acc> acc;
+    for (const TessCharacter& c : m_tessCharsPrev) {   // (x, z, minY, maxY): where characters were drawn last frame
+        Acc* into = nullptr;
+        for (Acc& a : acc) {
+            float dx = a.sx / a.parts - c.x, dz = a.sz / a.parts - c.z;
+            if (dx * dx + dz * dz < kMerge * kMerge && c.minY < a.maxY + 0.5f && c.maxY > a.minY - 0.5f) {
+                into = &a;
+                break;
+            }
+        }
+        if (!into) {
+            acc.push_back({c.x, c.z, c.minY, c.maxY, 1});
+            continue;
+        }
+        into->sx += c.x; into->sz += c.z; ++into->parts;
+        into->minY = std::min(into->minY, c.minY);
+        into->maxY = std::max(into->maxY, c.maxY);
+    }
+    if (acc.size() > 256)
+        acc.resize(256);                             // (only the nearest few reach the water; a crowd needs no more)
+    std::vector<WaterBody> cur;
+    cur.reserve(acc.size());
+    for (const Acc& a : acc) {
+        WaterBody b;
+        b.x = a.sx / a.parts; b.z = a.sz / a.parts;
+        b.minY = a.minY;
+        b.centreY = 0.5f * (a.minY + a.maxY);
+        b.prevMinY = b.minY;
+        // The nearest body of the last frame is the same character: how it moved says how it stirs the water.
+        float best = 9.0f;
+        const WaterBody* m = nullptr;
+        for (const WaterBody& p : m_waterBodies) {
+            float dx = b.x - p.x, dz = b.z - p.z, d = dx * dx + dz * dz;
+            if (d < best) { best = d; m = &p; }
+        }
+        if (m) {
+            const float k = 1.0f - std::exp(-vdt * 20.0f);   // smoothed (over ~50 ms), so a jittery box doesn't flicker it
+            b.vx = m->vx + ((b.x - m->x) / vdt - m->vx) * k;
+            b.vz = m->vz + ((b.z - m->z) / vdt - m->vz) * k;
+            b.phase = m->phase;
+            const float kf = 1.0f - std::exp(-vdt * 40.0f);
+            b.fall = m->fall + (-(b.centreY - m->centreY) / vdt - m->fall) * kf;
+            b.prevMinY = m->minY;
+        } else {
+            m_waterPhaseSeed = m_waterPhaseSeed * 1664525u + 1013904223u;   // a new body: a new, steady offset
+            b.phase = float((m_waterPhaseSeed >> 8) & 0xFFFFu) / 65536.0f * 6.2831853f;
+        }
+        b.speed = std::sqrt(b.vx * b.vx + b.vz * b.vz);
+        cur.push_back(b);
+    }
+    m_waterBodies = std::move(cur);
+}
+
+// The disturbance field of the water: a damped wave equation on a grid round the camera, stirred by the characters in
+// the water (water_sim.comp), stepped once a frame between the scene's render passes. The water then reads it for its
+// normals and foam.
+bool Device::CreateWaterSim(std::string* error)
+{
+    VkDescriptorSetLayoutBinding b[4] = {};
+    b[0] = {0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    b[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    b[2] = {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    b[3] = {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    VkDescriptorSetLayoutCreateInfo sl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    sl.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+    sl.bindingCount = 4;
+    sl.pBindings = b;
+    if (!Check(vkCreateDescriptorSetLayout(m_device, &sl, nullptr, &m_waterSimSetLayout), "water sim set layout", error))
+        return false;
+    VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0, 64};
+    VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    pl.setLayoutCount = 1;
+    pl.pSetLayouts = &m_waterSimSetLayout;
+    pl.pushConstantRangeCount = 1;
+    pl.pPushConstantRanges = &push;
+    if (!Check(vkCreatePipelineLayout(m_device, &pl, nullptr, &m_waterSimLayout), "water sim layout", error))
+        return false;
+    VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    mi.codeSize = sizeof(kWaterSimSpirv);
+    mi.pCode = kWaterSimSpirv;
+    VkShaderModule module;
+    if (!Check(vkCreateShaderModule(m_device, &mi, nullptr, &module), "water sim module", error))
+        return false;
+    VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    ci.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, module, "main", nullptr};
+    ci.layout = m_waterSimLayout;
+    bool ok = Check(vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &ci, nullptr, &m_waterSimPipeline),
+                    "water sim pipeline", error);
+    vkDestroyShaderModule(m_device, module, nullptr);
+    if (!ok)
+        return false;
+    for (int i = 0; i < 2; ++i) {
+        VkImageCreateInfo ic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        ic.imageType = VK_IMAGE_TYPE_2D;
+        ic.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        ic.extent = {kSimN, kSimN, 1};
+        ic.mipLevels = 1;
+        ic.arrayLayers = 1;
+        ic.samples = VK_SAMPLE_COUNT_1_BIT;
+        ic.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ic.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        VmaAllocationCreateInfo ac{};
+        ac.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        if (!Check(vmaCreateImage(m_allocator, &ic, &ac, &m_waterSim[i], &m_waterSimAllocation[i], nullptr),
+                   "water sim image", error))
+            return false;
+        VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        vi.image = m_waterSim[i];
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vi.format = ic.format;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        if (!Check(vkCreateImageView(m_device, &vi, nullptr, &m_waterSimView[i]), "water sim view", error))
+            return false;
+    }
+    m_waterSimClear = true;
+    return true;
+}
+
+void Device::StepWaterSim(VkCommandBuffer cmd, const WaterMap* map)
+{
+    m_waterSimLive = false;
+    const WaterParams& P = m_waterParams;
+    if (!m_waterSimPipeline || !m_waterSim[0] || !map || !(P.swimRipples > 0.0f))
+        return;
+    const auto& vm = m_view.m;
+    float eye[3];
+    for (int i = 0; i < 3; ++i)
+        eye[i] = -(vm[3][0] * vm[i][0] + vm[3][1] * vm[i][1] + vm[3][2] * vm[i][2]);
+    const double now = m_waterBodiesTime;
+    const float cell = P.quality == 1 ? 0.35f : P.quality >= 3 ? 0.2f : 0.25f;
+    // Start afresh when the field can't be continued: another cell size, the camera far from where it was (a jump), or
+    // the water unseen for a while (the field would be stale).
+    const float jump = std::hypot(eye[0] - m_waterSimCam[0], eye[2] - m_waterSimCam[1]);
+    if (cell != m_waterSimCell || jump > 2.5f || now - m_waterSimLastTime > 1.0)
+        m_waterSimClear = true;
+    m_waterSimCell = cell;
+    m_waterSimCam[0] = eye[0];
+    m_waterSimCam[1] = eye[2];
+    m_waterSimLastTime = now;
+    m_waterSimTime += m_waterDt;
+
+    auto memory = [&](VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess, VkPipelineStageFlags2 dstStage,
+                      VkAccessFlags2 dstAccess) {
+        VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        mb.srcStageMask = srcStage;
+        mb.srcAccessMask = srcAccess;
+        mb.dstStageMask = dstStage;
+        mb.dstAccessMask = dstAccess;
+        VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dep.memoryBarrierCount = 1;
+        dep.pMemoryBarriers = &mb;
+        vkCmdPipelineBarrier2(cmd, &dep);
+    };
+    const VkPipelineStageFlags2 reads = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+    if (m_waterSimClear) {
+        // (The contents are thrown away: from the undefined layout into the general one, which the field stays in.)
+        VkImageMemoryBarrier2 ib[2] = {};
+        for (int i = 0; i < 2; ++i) {
+            ib[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            ib[i].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | reads;
+            ib[i].dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            ib[i].dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            ib[i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            ib[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            ib[i].image = m_waterSim[i];
+            ib[i].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        }
+        VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dep.imageMemoryBarrierCount = 2;
+        dep.pImageMemoryBarriers = ib;
+        vkCmdPipelineBarrier2(cmd, &dep);
+        VkClearColorValue zero{};
+        VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        for (int i = 0; i < 2; ++i)
+            vkCmdClearColorImage(cmd, m_waterSim[i], VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
+        memory(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+               VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        m_waterSimClear = false;
+    } else {
+        // Last frame's step (and the water's reads of it) before this one.
+        memory(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | reads,
+               VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+               VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+    }
+
+    // The characters, nearest to the camera first.
+    struct Bodies { float pos[kSimBodies][4]; float dir[kSimBodies][4]; float extra[kSimBodies][4]; } bodies{};
+    std::vector<uint32_t> order(m_waterBodies.size());
+    for (uint32_t i = 0; i < uint32_t(order.size()); ++i)
+        order[i] = i;
+    const uint32_t n = uint32_t(std::min<size_t>(order.size(), kSimBodies));
+    std::partial_sort(order.begin(), order.begin() + n, order.end(), [&](uint32_t a, uint32_t b) {
+        const WaterBody& x = m_waterBodies[a], & y = m_waterBodies[b];
+        float dx = x.x - eye[0], dz = x.z - eye[2], ex = y.x - eye[0], ez = y.z - eye[2];
+        return dx * dx + dz * dz < ex * ex + ez * ez;
+    });
+    for (uint32_t i = 0; i < n; ++i) {
+        const WaterBody& w = m_waterBodies[order[i]];
+        bodies.pos[i][0] = w.x; bodies.pos[i][1] = w.z; bodies.pos[i][2] = w.minY; bodies.pos[i][3] = w.speed;
+        const float inv = w.speed > 0.05f ? 1.0f / w.speed : 0.0f;
+        bodies.dir[i][0] = w.vx * inv; bodies.dir[i][1] = w.vz * inv; bodies.dir[i][2] = w.phase;
+        bodies.extra[i][0] = w.fall; bodies.extra[i][1] = w.prevMinY;
+    }
+    EnsureRingSpace(sizeof(Bodies) + 512);
+    void* cpu = nullptr;
+    const VkDeviceSize offset = Allocate(sizeof(Bodies), 256, &cpu);
+    std::memcpy(cpu, &bodies, sizeof(Bodies));
+
+    Frame& f = m_frames[m_frameIndex];
+    const uint32_t cur = m_waterSimCur, next = cur ^ 1u;
+    VkDescriptorImageInfo prevInfo{VK_NULL_HANDLE, m_waterSimView[cur], VK_IMAGE_LAYOUT_GENERAL};
+    VkDescriptorImageInfo nextInfo{VK_NULL_HANDLE, m_waterSimView[next], VK_IMAGE_LAYOUT_GENERAL};
+    VkDescriptorImageInfo mapInfo{m_linearSampler, map->texture->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorBufferInfo bodiesInfo{f.ring, offset, sizeof(Bodies)};
+    VkWriteDescriptorSet writes[4] = {};
+    for (int i = 0; i < 4; ++i) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstBinding = uint32_t(i);
+        writes[i].descriptorCount = 1;
+    }
+    writes[0].descriptorType = writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[0].pImageInfo = &prevInfo;
+    writes[1].pImageInfo = &nextInfo;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[2].pImageInfo = &mapInfo;
+    writes[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[3].pBufferInfo = &bodiesInfo;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_waterSimPipeline);
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_waterSimLayout, 0, 4, writes);
+    // (The step stays within what the wave equation is stable for: the waves must cross less than ~0.6 of a cell.)
+    const float dt = std::min(std::clamp(m_waterDt, 0.002f, 0.05f), 0.6f * cell / std::max(P.swimSpeed, 0.1f));
+    const float strength = P.swimRipples;
+    const float pc[16] = {
+        eye[0], eye[2], cell, dt,
+        map->origin[0], map->origin[1], 1.0f / map->size[0], 1.0f / map->size[1],
+        map->base, float(n), float(std::fmod(m_waterSimTime, 3600.0)), 0.6f / std::max(P.swimLife, 0.05f),
+        P.swimSpeed * P.swimSpeed, 5.0f * strength, 0.25f * strength * P.swimStir, P.swimSplash,
+    };
+    vkCmdPushConstants(cmd, m_waterSimLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
+    vkCmdDispatch(cmd, kSimN / 8, kSimN / 8, 1);
+    memory(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | reads,
+           VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    m_waterSimCur = next;
+    m_waterSimLive = true;
+}
+
 // The scene's colour and depth as they are now, into the water's copies (once a frame: a second water body sees the
 // first one's background, which is what it would see through it anyway).
-bool Device::CopySceneForWater(VkCommandBuffer cmd)
+bool Device::CopySceneForWater(VkCommandBuffer cmd, const WaterMap* map)
 {
     if (m_waterCopyFrame == m_frameNumber)
         return true;
@@ -596,6 +979,7 @@ bool Device::CopySceneForWater(VkCommandBuffer cmd)
                  VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                  VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
     m_waterDepthCopyLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    StepWaterSim(cmd, map);                      // (the render pass is closed: a compute pass fits here)
     BeginRenderingOn(m_target);
     m_waterCopyFrame = m_frameNumber;
     return true;
@@ -619,7 +1003,7 @@ void Device::DrawWater(const WaterVertex* vertices, uint32_t vertexCount, const 
     VkCommandBuffer cmd = f.main;
     FlushGroup();                                // the scene's batched draws go first (and its profile class ends)
     ProfileSceneClass(8);
-    if (!CopySceneForWater(cmd))
+    if (!CopySceneForWater(cmd, map))
         return;
 
     // The block.
@@ -678,14 +1062,25 @@ void Device::DrawWater(const WaterVertex* vertices, uint32_t vertexCount, const 
     wf.fogParams[1] = AsFloatBits(m_rs[d3d::RS_FOGEND]);
     wf.fogParams[2] = AsFloatBits(m_rs[d3d::RS_FOGDENSITY]);
     wf.fogParams[3] = float(m_rs[d3d::RS_FOGTABLEMODE] ? m_rs[d3d::RS_FOGTABLEMODE] : m_rs[d3d::RS_FOGVERTEXMODE]);
+    // The environment probe (hdr.cpp RenderEnvProbe): what the reflections that miss the screen show, where it has
+    // seen (else the sky).
+    const bool env = m_envReady && m_envAtlas && m_pbr.enabled && m_pbr.probe > 0.0f;
+    wf.env[0] = env ? 1.0f : 0.0f;
+    wf.env[1] = m_pbr.probe;
     // The game's water colour; a colourless one (white vertices) gets a water blue.
     uint32_t colour = map ? map->colour : vertices[0].colour;
     ArgbTo4(colour, wf.tint);
     if (wf.tint[0] > 0.9f && wf.tint[1] > 0.9f && wf.tint[2] > 0.9f) {
         wf.tint[0] = 0.05f; wf.tint[1] = 0.2f; wf.tint[2] = 0.35f;
     }
+    // The disturbance field the characters stir (StepWaterSim ran when the scene was copied): its normals and foam
+    // (water.frag).
+    wf.ripple[0] = m_waterSimLive ? 1.0f : 0.0f;
+    wf.ripple[1] = P.swimGain;
+    wf.ripple[2] = 1.0f / (m_waterSimCell * float(kSimN));
+    wf.ripple[3] = m_waterSimCell;
 
-    EnsureRingSpace(2 * 512 + sizeof(FrameLights) + VkDeviceSize(vertexCount) * 16 + steep.size() * 4 + 1024);
+    EnsureRingSpace(2 * (sizeof(WaterFrame) + 256) + sizeof(FrameLights) + VkDeviceSize(vertexCount) * 16 + steep.size() * 4 + 1024);
     if (m_frameLightsDirty || m_frameLightsGeneration != m_ringGeneration)
         WriteFrameLights();
     // The mesh's vertices (mesh mode; bound in both modes - the grid doesn't read them).
@@ -747,9 +1142,13 @@ void Device::DrawWater(const WaterVertex* vertices, uint32_t vertexCount, const 
         VkDescriptorImageInfo sceneInfo{m_linearSampler, m_waterSceneCopy->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkDescriptorImageInfo detailInfo{m_waterRepeatSampler, m_waterDetail->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkDescriptorImageInfo gameInfo{m_waterRepeatSampler, gameTex->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        VkWriteDescriptorSet writes[9] = {};
-        const uint32_t bindings[9] = {0, 2, 4, 5, 7, 8, 9, 10, 11};
-        for (int i = 0; i < 9; ++i) {
+        VkDescriptorImageInfo envInfo{m_linearSampler, (env ? m_envAtlas : m_waterDetail)->m_view,
+                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkDescriptorImageInfo simInfo{m_waterRepeatSampler, m_waterSimLive ? m_waterSimView[m_waterSimCur] : m_waterDetail->m_view,
+                                      m_waterSimLive ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet writes[11] = {};
+        const uint32_t bindings[11] = {0, 2, 4, 5, 7, 8, 9, 10, 11, 12, 13};
+        for (int i = 0; i < 11; ++i) {
             writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].descriptorCount = 1;
             writes[i].dstBinding = bindings[i];
@@ -767,7 +1166,9 @@ void Device::DrawWater(const WaterVertex* vertices, uint32_t vertexCount, const 
         writes[6].pImageInfo = &sceneInfo;
         writes[7].pImageInfo = &detailInfo;
         writes[8].pImageInfo = &gameInfo;
-        vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_waterLayout, 0, 9, writes);
+        writes[9].pImageInfo = &envInfo;
+        writes[10].pImageInfo = &simInfo;
+        vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_waterLayout, 0, 11, writes);
         if (meshMode) {
             void* idxCpu = nullptr;
             const VkDeviceSize idxOffset = Allocate(VkDeviceSize(steep.size()) * 4, 16, &idxCpu);

@@ -45,6 +45,12 @@ void SceneLights(const rnative::scene::SceneLight* lights, size_t count);   // r
 extern const GUID IID_RvkSurface;
 class RSurface;
 void AttachMaterialMaps(RSurface* top);           // after the surface's rvk texture is (re)created
+void PollMaterialMaps();                          // each present: uploads maps decoded in the background
+void ForgetMaterialMaps(RSurface* top);           // the surface is going: it no longer waits for maps
+// What an rvk texture is, for texture picking: "RDB texture T:ID 'name', WxH; maps: _n.png ..." (reference: "T:ID").
+std::string DescribeTexture(const rvk::Texture* texture, std::string* reference = nullptr);
+// What a picked visual was made from: "RDB mesh 1010001:3545" (reference: "T:ID"), see rvk_materials.cpp.
+std::string DescribeMesh(uint32_t visual, uint32_t owner, uint32_t kind, std::string* reference = nullptr);
 
 // One lock around every call into the rvk backend: the game may use DirectDraw from more than one thread
 // (D3D serialises internally too). Recursive, since methods call each other. Logs each new thread once.
@@ -267,6 +273,12 @@ public:
         bool drawn = false;
     };
     std::unique_ptr<Water> water;
+    // The vertex ranges ProcessVertices wrote this frame (`processedFrame`; a discarding Lock forgets them). Only a
+    // draw from one of them is the 3D scene's (water, floating text) in the pre-transformed 0x1C4 format; the game's
+    // screen sprites (RenderSprite_t: the timer bars) write the same format themselves and are interface.
+    std::vector<std::pair<DWORD, DWORD>> processed;   // [first, end)
+    uint64_t processedFrame = ~0ull;
+    bool Processed(DWORD start, DWORD count) const;
 
 protected:
     void* Cast(REFIID iid) override { return iid == IID_IDirect3DVertexBuffer7 ? this : nullptr; }

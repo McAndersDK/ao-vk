@@ -120,7 +120,9 @@ Spell effects with GPU particles, and depth of field.
   ground and big objects often missed the lights around you). Up to 64 lights a frame.
 - Separate intensity sliders for lamps and for the lights characters carry (your own included).
 - Generated surface relief: normal maps derived from each texture's brightness, the ground included.
-- Side-loaded normal maps for individual game textures (`randy-vk\materials\`, see `docs/materials.md`).
+- Side-loaded material maps for individual game textures (`randy-vk\materials\`, see `docs/materials.md`): normal
+  maps, PBR materials (roughness / metallic / occlusion: GGX highlights, metals, reflections) and replacement
+  textures.
 - Sunlight shining through leaves and grass.
 - Anisotropic filtering.
 
@@ -158,11 +160,18 @@ Spell effects with GPU particles, and depth of field.
 - Big plant quads are split near characters so they bend smoothly instead of tilting as one piece.
 - Distant foliage is shaded more cheaply (a level of detail), for speed in grassy areas.
 - No grass grows under objects lying on the ground (platforms, floors, road pieces).
+- Leaves on trees, shrubs and palms (Experimental section, off by default): sprigs of leaves flutter on the branches,
+  catch the sun, cast shadows, and fall in gusts.
 
-**Water**
+**Water** (Experimental section, off by default; needs HDR)
 - The game's flat water is replaced by a real surface: waves (a gentle ripple on ponds, a swell on the open sea),
   small ripples, refraction of what is under it, water that gets deeper in colour the deeper it is, caustics on the
   bottom, reflections of the scene and the sky with a sun glint, foam along shores, and the game's fog.
+- Characters in the water disturb it for real: the surface is simulated (a wave equation on a grid round the camera).
+  A swimmer pushes the water ahead of it and leaves a trough behind, so it drags a bow wave and a V-shaped wake, and
+  the waves cross each other and bounce off the shore. Someone treading water stirs it gently, anyone on the bank
+  not at all, and jumping in makes a big splash with rings spreading out from it. Wake strength, visibility,
+  duration, speed, treading water and splash each have a slider.
 - One slider from "the game's water made richer" (its own colour and texture) to realistic water; halfway by
   default. Needs HDR.
 
@@ -308,7 +317,8 @@ All settings live in `randy-vk.ini` (section `[Renderer]`; the native code's swi
 saved whenever they change. With AOReloaded they
 appear in the game's options window (F10) under **Renderer**: the presets first, then every feature as an on/off
 checkbox, its
-sliders and choices further down, grouped by feature. Changes apply immediately. Edits to the `[Renderer]` section of
+sliders and choices further down, grouped by feature. New, unfinished features sit in their own **Experimental**
+block just under the feature switches, off by default. Changes apply immediately. Edits to the `[Renderer]` section of
 `randy-vk.ini` made while the game runs apply too, within half a second (the options window shows them once
 reopened).
 
@@ -336,10 +346,13 @@ Some useful ones:
 | `RVK_GrassTrail` | 1 | grass trodden by characters stays down a few seconds behind them (needs `RVK_PushOn`) |
 | `RVK_GrassShadow` | 1 | grass blades cast the sun's shadow near the camera, onto the ground and each other (needs `RVK_SunShadow`) |
 | `RVK_GrassEven` | 1 | an even grass colour: one green (1) rather than the colours of the ground under each blade (0) |
-| `RVK_WaterOn` | 1 | the new water (off = the game's own; needs HDR) |
+| `RVK_WaterOn` | 0 | the new water (off = the game's own; needs HDR). Experimental: off by default |
 | `RVK_WaterStyle` | 0.5 | 0 = the game's water made richer, 1 = realistic |
 | `RVK_WaterQual` | 2 | 1 low, 2 medium, 3 high: surface detail and reflection quality |
 | `RVK_WaterWaves` / `RVK_WaterRipple` | 0.3 / 1 | wave height, small ripples |
+| `RVK_WaterSwim` | 2 | how hard characters in the water disturb it: NPCs swimming, and you (0 = off) |
+| `RVK_WakeGain` / `Life` / `Speed` / `Stir` | 2 / 0.3 / 3.6 / 1 | how visible the wake is, how long it lasts, how fast its waves travel (m/s), and the stir of someone treading water |
+| `RVK_WakeSplash` | 1 | the big ripple of a character jumping into the water (0 = none) |
 | `RVK_WaterRefl` / `RVK_WaterRefr` / `RVK_WaterClear` | 1 / 1 / 1 | reflections, refraction, how far one sees into it |
 | `RVK_WaterFoam` / `RVK_WaterCaust` / `RVK_WaterTex` | 0 / 1 / 0.5 | shore and crest foam, caustics, the game's water texture on it |
 
@@ -396,7 +409,7 @@ patched over the original's entry once the client build is recognised), keeping 
 other DLLs, which derive from Randy's classes, keep working.
 
 - `docs/architecture.md`: the overall design; `docs/frame.md`: how the game draws a frame
-- `docs/rvk.md`: the renderer; `docs/materials.md`: normal maps; `docs/d3d7-vocabulary.md`: what the game uses
+- `docs/rvk.md`: the renderer; `docs/materials.md`: material maps (normal, PBR, albedo); `docs/d3d7-vocabulary.md`: what the game uses
 - `docs/native.md`: replacing Randy; `docs/skinning.md`, `docs/animation.md`: the character code
 - `docs/ui-dll.md`: the interface plugin API (`include/aovk_plugin.h`) - a DLL in `ao-vk-plugins\` next to
   `randy31.dll` that draws the game's interface through ao-vk. ao-vk runs without one (the game's own interface).

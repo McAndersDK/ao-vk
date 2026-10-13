@@ -15,6 +15,8 @@ layout(set = 0, binding = 5) uniform sampler2DArrayShadow shadowMap;   // the su
 layout(set = 0, binding = 9) uniform sampler2D sceneCopy;              // the HDR scene before the water
 layout(set = 0, binding = 10) uniform sampler2D detail;                // RG: ripple slope, B: noise, A: cells
 layout(set = 0, binding = 11) uniform sampler2D gameTexture;           // the game's water texture
+layout(set = 0, binding = 12) uniform sampler2D envAtlas;              // the environment probe (env_common.glsl)
+#include "env_common.glsl"
 
 layout(location = 0) in vec3 vPos;
 layout(location = 1) in vec3 vNormal;
@@ -23,6 +25,7 @@ layout(location = 3) in vec4 vPrevClip;
 layout(location = 4) in vec3 vRest;
 layout(location = 5) in float vFold;
 layout(location = 6) in float vSpacing;
+layout(location = 7) in float vAlpha;       // mesh mode: the game's vertex alpha (its shore fade)
 
 layout(location = 0) out vec4 outScene;
 layout(location = 1) out vec4 outGlow;
@@ -57,6 +60,25 @@ vec2 Ripples(vec2 xz, float t)
     vec2 b = texture(detail, xz * 0.037 - wp * (t * 0.011) + vec2(0.37, 0.71)).rg * 2.0 - 1.0;
     vec2 c = texture(detail, xz * 0.29 + (wd + wp) * (t * 0.035) + vec2(0.13, 0.53)).rg * 2.0 - 1.0;
     return a * 0.55 + b * 0.75 + c * 0.3;
+}
+
+// The disturbance the characters stir (rvk StepWaterSim, water_sim.comp): a height field round the camera, tiled in
+// world space. Returns the surface slope (dh/dx, dh/dz) for the normal; xy of `state`: its height, rate.
+const float kSimN = 256.0;
+layout(set = 0, binding = 13) uniform sampler2D waterSim;
+
+vec2 Disturbance(vec2 xz, out vec3 state)
+{
+    vec2 uv = xz * W.ripple.z;
+    float e = 1.0 / kSimN;
+    float hl = texture(waterSim, uv - vec2(e, 0.0)).x, hr = texture(waterSim, uv + vec2(e, 0.0)).x;
+    float hd = texture(waterSim, uv - vec2(0.0, e)).x, hu = texture(waterSim, uv + vec2(0.0, e)).x;
+    state = texture(waterSim, uv).xyz;
+    // Faded out towards the field's edge (its outermost band is wiped as the camera moves).
+    float away = max(abs(xz.x - W.camera.x), abs(xz.y - W.camera.z));
+    float fade = 1.0 - smoothstep(0.28, 0.4, away * W.ripple.z);
+    state *= fade;
+    return vec2(hr - hl, hu - hd) / (2.0 * W.ripple.w) * fade;
 }
 
 // Caustics on the bottom at a world point: the bright web where two drifting layers of cells meet.
@@ -159,8 +181,11 @@ void main()
         outScene = vec4(sd < gl_FragCoord.z ? 1.0 : 0.0, fract(vRest.x * 0.1), fract(vRest.z * 0.1), 1.0);
         return;
     }
-    if (!mesh && W.mapInfo.z > 0.5 && texture(waterMap, MapUv(vRest.xz)).g < 0.5)
-        discard;
+    if (!mesh && W.mapInfo.z > 0.5) {
+        vec2 uv = MapUv(vRest.xz);                // beyond the map: no water (the sampler would repeat its edge)
+        if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))) || texture(waterMap, uv).g < 0.5)
+            discard;
+    }
     float style = W.look.x;
     float t = W.time.x;
     vec3 eye = W.camera.xyz;
@@ -173,6 +198,10 @@ void main()
     if (dot(N, V) < 0.0 && mesh) N = -N;
     float rippleFade = 1.0 - smoothstep(25.0, 220.0, dist);
     vec2 slope = mesh ? vec2(0.0) : Ripples(vPos.xz, t) * (W.look2.z * 0.22 * rippleFade);
+    // Characters in the water disturb the surface around them (the simulated field: wakes, bow waves, their rings).
+    vec3 disturb = vec3(0.0);
+    if (!mesh && W.ripple.x > 0.5)
+        slope += Disturbance(vPos.xz, disturb) * (3.0 * W.ripple.y * rippleFade);
     N = normalize(N + vec3(-slope.x, 0.0, -slope.y));
     bool under = !mesh && eye.y < vRest.y;
     vec3 Ns = under ? -N : N;
@@ -200,13 +229,20 @@ void main()
     float zR = dR >= 1.0 ? 1e5 : ViewZ(dR);
     if (zR < zWater) { uvR = uv; zR = zScene; dR = dScene; }
     float path = dist * max(zR / zWater - 1.0, 0.0);             // world length of the ray under the water
+    // A steep triangle (a fall, or the side of a pool where the game's water steps down) is a sheet, not a body of
+    // water: what is behind it is not under it. As thick as the game's alpha is meant for (two units: as opaque as the
+    // game drew it), or the gap behind it if less; refraction then none.
+    if (mesh) {
+        path = min(path, 2.0);
+        uvR = uv;
+    }
     vec3 bottom = eye - V * (dist * zR / zWater);                 // what the ray reaches
     float depthBelow = dR >= 1.0 ? 1e4 : max(vRest.y - bottom.y, 0.0);
     vec3 behind = texture(sceneCopy, uvR).rgb;
     vec3 behindRaw = texture(sceneCopy, uv).rgb;
 
     // Caustics on the bottom: sunlit, fading with depth and gone where the bottom is in shadow.
-    if (dR < 1.0 && W.look2.y > 0.0 && !under) {
+    if (dR < 1.0 && W.look2.y > 0.0 && !under && !mesh) {
         float c = Caustics(bottom.xz, t) * smoothstep(0.0, 0.4, depthBelow) * exp(-depthBelow * 0.35);
         float sunOn = clamp(dot(sun, kLuma) * 2.0, 0.0, 1.0) * SunShadow(bottom + vec3(0.0, 0.05, 0.0));
         behind *= 1.0 + c * sunOn * W.look2.y * 1.1;
@@ -246,6 +282,11 @@ void main()
     } else {
         vec4 ssr = Reflect(vPos + Ns * 0.05, Rd, noise);
         vec3 sky = Sky(Rd);
+        // What the camera has seen that way (the environment probe), sharp-ish: the ripples blur it anyway.
+        if (W.env.x > 0.5) {
+            vec4 p = mix(textureLod(envAtlas, EnvAtlasUv(Rd, 0), 0.0), textureLod(envAtlas, EnvAtlasUv(Rd, 1), 0.0), 0.4);
+            sky = mix(sky, p.rgb, clamp(p.a, 0.0, 1.0) * W.env.y);
+        }
         // The sky's reflection is shadowed where the sun is (a crude stand-in for the terrain around blocking it).
         reflected = mix(sky, ssr.rgb, ssr.w);
     }
@@ -281,6 +322,10 @@ void main()
     // Where the surface meets the shore: fade over to what is behind, so the water has no hard line along the land.
     float edge = dR >= 1.0 ? 1.0 : smoothstep(0.0, 0.12, path);
     colour = mix(behindRaw, colour, edge);
+    // A steep sheet (mesh mode) fades out as the game's vertex alpha does: the sides of a body of water, where its
+    // surface steps down to the shore, are see-through at their far edge (drawn opaque, they stood as blue walls).
+    if (mesh)
+        colour = mix(behindRaw, colour, clamp(vAlpha / max(W.tint.a, 0.05), 0.0, 1.0));
 
     // The game's fog, by the view distance.
     float fog = FogFactor(dist);
@@ -292,6 +337,7 @@ void main()
     int debugView = int(W.sky.w);
     if (debugView == 1) outScene = vec4(zWater / 100.0, min(zR, 1e3) / 100.0, path / 10.0, 1.0);
     else if (debugView == 2) outScene = vec4(N * 0.5 + 0.5, 1.0);
+    else if (debugView == 5) outScene = vec4(max(disturb.x, 0.0) * 6.0, max(-disturb.x, 0.0) * 6.0, 0.0, 1.0);
     else if (debugView == 3) outScene = vec4(texture(waterMap, MapUv(vRest.xz)).g, texture(waterMap, MapUv(vRest.xz)).r + 0.5, 0.0, 1.0);
     outGlow = vec4(0.0);
     // Local lights' share 0, reflectivity 0 (the water reflects by itself; the screen-space pass would add it twice),

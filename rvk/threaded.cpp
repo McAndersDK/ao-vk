@@ -1,6 +1,7 @@
 #include "threaded.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <chrono>
 #include <iterator>
 
@@ -73,8 +74,10 @@ uint8_t* ThreadedDevice::Reserve(uint32_t bytes)
 {
     uint32_t total = Align16(sizeof(Header) + bytes);
     if (total >= kQueueBytes / 2) {
+        // Callers split what can be split (UpdateTexture); the caller would write past this record, so stop here
+        // with a message instead of corrupting the ring.
         Log("record of %u bytes is too large for the queue", bytes);
-        total = kQueueBytes / 2 - 16;                  // the caller's data is truncated; better than a hang
+        std::abort();
     }
     uint32_t w = m_localWrite;                         // after the unpublished records too
     // The worker's read position as last seen: free space only grows as it reads, so an old copy is safe, and the
@@ -553,6 +556,7 @@ void ThreadedDevice::WritePending(uint8_t* out)
     head.hasVisual = m_hasPendingVisual ? 1u : 0u;
     head.visualKind = m_pendingVisualKind;
     head.visualOwner = m_pendingVisualOwner;
+    head.visual = m_pendingVisual;
     head.visualName = m_pendingVisualName;
     std::memcpy(out, &head, sizeof(head));
     out += sizeof(head);
@@ -581,7 +585,7 @@ void ThreadedDevice::ApplyPending(const uint8_t* in)
             m_device.SetLight(op.index, op.light);
     }
     if (head.hasVisual)
-        m_device.SetDrawVisual(head.visualKind, head.visualName, head.visualOwner);
+        m_device.SetDrawVisual(head.visualKind, head.visualName, head.visualOwner, head.visual);
     if (head.hasWorld)
         m_device.SetTransform(d3d::World, head.world);
     if (head.hasMaterial)
@@ -773,9 +777,39 @@ void ThreadedDevice::SetNormalMaps(bool enable, float strength)
     Enqueue([this, enable, strength](const uint8_t*) { m_device.SetNormalMaps(enable, strength); });
 }
 
+void ThreadedDevice::SetDrawProcessed(bool processed)
+{
+    Enqueue([this, processed](const uint8_t*) { m_device.SetDrawProcessed(processed); });
+}
+
 void ThreadedDevice::SetNormalMap(Texture* texture, Texture* normal)
 {
     Enqueue([this, texture, normal](const uint8_t*) { m_device.SetNormalMap(texture, normal); });
+}
+
+void ThreadedDevice::SetMaterialMaps(Texture* texture, Texture* orm, Texture* albedo)
+{
+    Enqueue([this, texture, orm, albedo](const uint8_t*) { m_device.SetMaterialMaps(texture, orm, albedo); });
+}
+
+void ThreadedDevice::SetEmissiveMap(Texture* texture, Texture* emissive)
+{
+    Enqueue([this, texture, emissive](const uint8_t*) { m_device.SetEmissiveMap(texture, emissive); });
+}
+
+void ThreadedDevice::RequestPick(float x, float y)
+{
+    Enqueue([this, x, y](const uint8_t*) { m_device.RequestPick(x, y); });
+}
+
+void ThreadedDevice::SetPickHighlight(Texture* t)
+{
+    Enqueue([this, t](const uint8_t*) { m_device.SetPickHighlight(t); });
+}
+
+void ThreadedDevice::SetPbr(const Device::PbrSettings& s)
+{
+    Enqueue([this, s](const uint8_t*) { m_device.SetPbr(s); });
 }
 
 void ThreadedDevice::SetAo(float strength, float radius)
@@ -945,6 +979,11 @@ void ThreadedDevice::SetGrassBrightness(float brightness)
     Enqueue([this, brightness](const uint8_t*) { m_device.SetGrassBrightness(brightness); });
 }
 
+void ThreadedDevice::SetGrassTrailLook(float seconds, float shade)
+{
+    Enqueue([this, seconds, shade](const uint8_t*) { m_device.SetGrassTrailLook(seconds, shade); });
+}
+
 void ThreadedDevice::SetGrassStyle(float variety, float flowers, float glow, float gusts, bool trails)
 {
     Enqueue([this, variety, flowers, glow, gusts, trails](const uint8_t*) {
@@ -960,6 +999,11 @@ void ThreadedDevice::SetGrassShadows(bool on)
 void ThreadedDevice::SetGrassEven(float even)
 {
     Enqueue([this, even](const uint8_t*) { m_device.SetGrassEven(even); });
+}
+
+void ThreadedDevice::SetLeaves(const Device::LeafSettings& s)
+{
+    Enqueue([this, s](const uint8_t*) { m_device.SetLeaves(s); });
 }
 
 void ThreadedDevice::SetShadowResolution(uint32_t sun, uint32_t point)
@@ -1192,7 +1236,7 @@ void ThreadedDevice::DrawIndexedPrimitiveSharedRetained(uint32_t primitive, uint
     });
 }
 
-void ThreadedDevice::SetDrawVisual(uint32_t kind, const char* className, uint32_t owner)
+void ThreadedDevice::SetDrawVisual(uint32_t kind, const char* className, uint32_t owner, uint32_t visual)
 {
     m_curVisualName = className;
     m_curVisualKind = kind;
@@ -1201,9 +1245,12 @@ void ThreadedDevice::SetDrawVisual(uint32_t kind, const char* className, uint32_
         m_pendingVisualKind = kind;
         m_pendingVisualName = className;
         m_pendingVisualOwner = owner;
+        m_pendingVisual = visual;
         return;
     }
-    Enqueue([this, kind, className, owner](const uint8_t*) { m_device.SetDrawVisual(kind, className, owner); });
+    Enqueue([this, kind, className, owner, visual](const uint8_t*) {
+        m_device.SetDrawVisual(kind, className, owner, visual);
+    });
 }
 
 void ThreadedDevice::SetSceneLights(const Device::SceneLight* lights, uint32_t count)
@@ -1323,6 +1370,18 @@ void ThreadedDevice::UpdateTexture(Texture* t, uint32_t level, uint32_t x, uint3
         return;
     // Copy tightly packed rows into the record (the caller may reuse its buffer right away).
     uint32_t rowBytes = FormatRowBytes(t->GetFormat(), width), rows = FormatRows(t->GetFormat(), height);
+    // An update bigger than a record may be (a 2048 x 4096 side-loaded map: 32 MB) goes in strips of rows. Only those:
+    // a whole level-0 upload in one record keeps its opaque / thumbnail bookkeeping (Device::UpdateTexture).
+    constexpr uint32_t kMaxRecordBytes = kQueueBytes / 2 - (1u << 20);
+    if (uint64_t(rowBytes) * rows > kMaxRecordBytes && rows > 1) {
+        const uint32_t blockRows = FormatRows(t->GetFormat(), 4) == 1 ? 4 : 1;   // pixel rows per row of blocks
+        const uint32_t per = std::max(1u, kMaxRecordBytes / rowBytes);
+        for (uint32_t r0 = 0; r0 < rows; r0 += per) {
+            const uint32_t py = r0 * blockRows, ph = std::min(height - py, std::min(per, rows - r0) * blockRows);
+            UpdateTexture(t, level, x, y + py, width, ph, static_cast<const uint8_t*>(data) + size_t(r0) * pitch, pitch);
+        }
+        return;
+    }
     auto run = [this, t, level, x, y, width, height, rowBytes](const uint8_t* p) {
         m_device.UpdateTexture(t, level, x, y, width, height, p, rowBytes);
     };

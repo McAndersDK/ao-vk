@@ -80,9 +80,18 @@ private:
     std::vector<uint8_t> m_thumb;
     uint32_t m_thumbW = 0, m_thumbH = 0;
     bool m_thumbValid = false;
+    // Not fully opaque: the mean alpha (0..255) on a grid of up to 64 x 64 cells over level 0, for the leaves
+    // (leaves.cpp: where a canopy card is leaf and where it is hole). Empty until a full level-0 upload.
+    std::vector<uint8_t> m_alphaMask;
+    uint32_t m_alphaW = 0, m_alphaH = 0;
+    uint32_t m_alphaVersion = 0;       // counts the uploads that changed the mask (a canopy's leaves are rebaked)
+    VkDeviceSize m_bytes = 0;          // its image's memory (the GPU memory report)
     bool m_lightmap = false;           // captured as a terrain lightmap (a re-upload recaptures the grass's light)
     bool m_groundBase = false;         // captured as a terrain base texture (a re-upload recaptures the grass's ground)
     Texture* m_normalMap = nullptr;    // tangent-space normal map drawn with this texture (owned; SetNormalMap)
+    Texture* m_ormMap = nullptr;       // PBR material: R occlusion, G roughness, B metallic (owned; SetMaterialMaps)
+    Texture* m_albedoMap = nullptr;    // drawn instead of this texture's own pixels (owned; SetMaterialMaps)
+    Texture* m_emissiveMap = nullptr;  // light the surface gives off, added to it (owned; SetEmissiveMap)
     uint32_t m_bindless = ~0u;         // its slot in the bindless image array (M1)
     // Layout as of the end of the commands recorded so far (main command buffer for render targets;
     // plain textures only change layout in the upload command buffer, which runs first).
@@ -203,6 +212,50 @@ public:
     // image), used instead of the generated normals when it is drawn in stage 0. The device owns `normal` and
     // frees it with the texture; null removes it.
     void SetNormalMap(Texture* texture, Texture* normal);
+    // PBR materials: a texture's occlusion / roughness / metallic map (glTF packing: R occlusion, G roughness,
+    // B metallic), lit with a GGX specular and metal-tinted reflections instead of the game's Blinn-Phong when it is
+    // drawn like a normal map would be (per-pixel lit, stage 0, plain coordinates; or the ground's base texture).
+    // `albedo` is drawn instead of the texture's own pixels wherever the texture is used (a higher resolution
+    // replacement; its alpha is used too). The device owns both and frees them with the texture; null removes one.
+    void SetMaterialMaps(Texture* texture, Texture* orm, Texture* albedo);
+    // `emissive`: the light a texture's surface gives off (its colour, any resolution), added after the lighting and
+    // as bright as PbrSettings::emissive - into the bloom with HDR. Owned by the device as above; null removes it.
+    void SetEmissiveMap(Texture* texture, Texture* emissive);
+    // Picking (the proxy's Ctrl+Shift+I textures, Ctrl+Shift+M meshes): the next frame's 3D scene draws are tested on
+    // the CPU against the point (x, y: 0..1 across the target, y down) - GPU-skinned characters with their skinned
+    // vertices - and the nearest one's stage 0 texture, visual and owning character (SetDrawVisual) are kept; LastPick
+    // gives them once that frame has ended (serial: one more each result; thread-safe). SetPickHighlight: draws with
+    // that texture flash yellow (null: none).
+    void RequestPick(float x, float y) { m_pickX = x; m_pickY = y; m_pickArmed = true; }
+    struct PickResult { Texture* texture = nullptr; uint32_t serial = 0, visual = 0, owner = 0, kind = 0, vertices = 0,
+                        indices = 0; };
+    PickResult LastPick() const
+    {
+        PickResult r;
+        r.serial = m_pickSerial.load(std::memory_order_acquire);
+        r.texture = m_pickPublished.load(std::memory_order_relaxed);
+        r.visual = m_pickPublishedVisual.load(std::memory_order_relaxed);
+        r.owner = m_pickPublishedOwner.load(std::memory_order_relaxed);
+        r.kind = m_pickPublishedKind.load(std::memory_order_relaxed);
+        r.vertices = m_pickPublishedVertices.load(std::memory_order_relaxed);
+        r.indices = m_pickPublishedIndices.load(std::memory_order_relaxed);
+        return r;
+    }
+    void SetPickHighlight(Texture* t) { if (m_pickHighlight != t) { m_pickHighlight = t; m_constantsDirty = true; } }
+    // PBR lighting: on/off, direct specular strength, ambient (environment) specular strength, how much smooth
+    // surfaces feed the screen-space reflections, the occlusion map's strength, debug view (0 off, 1 albedo,
+    // 2 roughness, 3 metallic, 4 occlusion, 5 normal, 6 specular only, 7 which surfaces have maps, 8 emission);
+    // whether albedo maps replace their textures; emissive maps' brightness (0 = off).
+    struct PbrSettings {
+        bool enabled = true, albedoMaps = true;
+        float specular = 1.0f, ambient = 1.0f, reflections = 1.0f, occlusion = 1.0f, emissive = 2.0f;
+        float probe = 1.0f;                      // how much the environment probe replaces the analytic sky (HDR)
+        uint32_t debug = 0;
+    };
+    void SetPbr(const PbrSettings& s);
+    // The draws that follow are of vertices the proxy's ProcessVertices wrote (the scene's: water, floating text)
+    // or not (pre-transformed draws of the game's own: interface). See IsWater.
+    void SetDrawProcessed(bool processed) { m_drawProcessed = processed; }
     void SetNormalMaps(bool enable, float strength) { if (m_normalMaps != enable || m_normalStrength != strength) { m_normalMaps = enable; m_normalStrength = strength; m_constantsDirty = true; } }
     void SetBump(float strength) { strength = strength < 0.0f ? 0.0f : strength; if (m_bump != strength) { m_bump = strength; m_constantsDirty = true; } }
     float Bump() const { return m_bump; }
@@ -273,6 +326,35 @@ public:
         m_grassGlow = glow;
         m_grassGusts = gusts;
         m_grassTrails = trails;
+    }
+    // RVK_TrailTime / RVK_TrailShade: how long trodden grass stays down (seconds; it springs back over the
+    // last third or so) and how strongly it shows as lawn stripes (lighter lying away from the camera, darker towards).
+    void SetGrassTrailLook(float seconds, float shade)
+    {
+        m_trailSeconds = seconds < 1.0f ? 1.0f : seconds;
+        m_trailShade = shade < 0.0f ? 0.0f : shade;
+    }
+    // Leaves on trees, shrubs and palms (leaves.cpp; RVK_Leaf*): sprigs cut from the canopy's own texture, each its
+    // own card, swaying with the branches and fluttering; the canopy itself thinned to an inner core. Baked per
+    // canopy mesh (density, size: a change rebakes); the rest applies per frame.
+    struct LeafSettings {
+        bool on = false;
+        float density = 1.0f;          // sprigs over a card's leafy area (1 = covered about twice)
+        float size = 1.0f;             // a sprig's share of the leaf texture (1 = an eighth of its width)
+        float distance = 60.0f;        // full leaves up to half of it, thinning out to none at it
+        float core = 0.6f;             // the canopy's own cards cut back to an inner core (0 = left as they are)
+        float wind = 1.0f;             // trunk and branches swaying
+        float flutter = 1.0f;          // each sprig fluttering
+        bool trees = true, shrubs = true, palms = true;
+        bool shadows = true;           // the leaves cast the sun's shadow (dappled light under the trees)
+        float fall = 1.0f;             // leaves coming off and drifting down (more in gusts), lying a while (0 = none)
+    };
+    void SetLeaves(const LeafSettings& s)
+    {
+        if (s.density != m_leaf.density || s.size != m_leaf.size)
+            m_leafDirty = true;
+        m_leaf = s;
+        m_frameLightsDirty = true;
     }
     // RVK_GrassShadow: the blades cast the sun's shadow (into its nearest cascade: onto the ground and each other).
     void SetGrassShadows(bool on) { m_grassShadows = on; }
@@ -405,6 +487,12 @@ public:
         float foam = 1.0f;
         float caustics = 1.0f;
         float gameTexture = 0.5f;                // the game's water texture on the surface (enhanced AO look)
+        float swimRipples = 2.0f;                // how hard characters in the water disturb it (RVK_WaterSwim)
+        float swimStir = 1.0f;                   // a character standing still stirs it (RVK_WakeStir)
+        float swimLife = 0.3f;                   // how long the disturbance lasts, relative (RVK_WakeLife)
+        float swimSpeed = 3.6f;                  // the waves' speed, m/s (RVK_WakeSpeed)
+        float swimGain = 2.0f;                   // how strongly it shows in the surface (RVK_WakeGain)
+        float swimSplash = 1.0f;                 // the splash of a character jumping in (RVK_WakeSplash)
         uint32_t quality = 2;                    // 1 low, 2 medium, 3 high: grid density, reflection steps
     };
     void SetWaterParams(const WaterParams& params) { m_waterParams = params; UpdateWaterReady(); }
@@ -415,7 +503,7 @@ public:
     void SetTexture(uint32_t stage, Texture* texture);
     // The game's visual issuing the next draws (rnative::scene): its kind (VisualKind) and class name - for exact
     // decisions where the draw alone needs heuristics. 0 / "": not known.
-    void SetDrawVisual(uint32_t kind, const char* className, uint32_t owner = 0);
+    void SetDrawVisual(uint32_t kind, const char* className, uint32_t owner = 0, uint32_t visual = 0);
     // The game's lights of this frame (rnative::scene), each with its carrier's owner id (SetDrawVisual's) or 0: who
     // carries which light, exactly (FindCarriers).
     struct SceneLight { d3d::Light light; uint32_t owner; };
@@ -641,12 +729,30 @@ private:
     Texture* m_flatNormal = nullptr;             // binding 9 when the draw has no normal map
     VkSampler m_normalSampler = VK_NULL_HANDLE;
     Texture* m_constantsNormalMap = nullptr;
+    PbrSettings m_pbr;
     uint32_t m_anisotropy = 1;
     float m_maxAnisotropy = 1.0f;               // GPU limit (0 without the feature)
     // The ground's base pass textures this frame, by chunk (TerrainChunkKey): its lighting pass, drawn later with the
     // lightmap, takes its relief from them. And the sampler they're read with (repeat, mipmapped).
     std::unordered_map<uint64_t, Texture*> m_terrainBases;
     Texture* m_drawBumpBase = nullptr;           // the current draw's (Draw)
+    Texture* m_drawOrm = nullptr;                // the current draw's PBR material map (Draw)
+    bool m_drawOrmBase = false;                  // ... from the ground's base texture
+    Texture* m_drawEmissive = nullptr;           // the draw's emissive map (stage 0's), or null
+    // Texture picking (RequestPick): armed by the proxy, active for one frame, published at its end.
+    float m_pickX = 0.0f, m_pickY = 0.0f;
+    bool m_pickArmed = false, m_pickActive = false;
+    Texture* m_pickBest = nullptr;
+    float m_pickDepth = 2.0f;
+    std::atomic<Texture*> m_pickPublished{nullptr};
+    uint32_t m_pickBestVisual = 0, m_pickBestOwner = 0, m_pickBestKind = 0, m_pickBestVertices = 0, m_pickBestIndices = 0;
+    std::atomic<uint32_t> m_pickPublishedVisual{0}, m_pickPublishedOwner{0}, m_pickPublishedKind{0},
+        m_pickPublishedVertices{0}, m_pickPublishedIndices{0};   // the draw's counts (the workbench matches meshes by them)
+    const void* m_pickSkinned = nullptr;         // a GPU-skinned draw's CPU-skinned vertices, for the pick (DrawSkinned)
+    std::atomic<uint32_t> m_pickSerial{0};
+    Texture* m_pickHighlight = nullptr;
+    void PickDraw(uint32_t primitive, const detail::FvfLayout& layout, const void* vertices, uint32_t vertexCount,
+                  const uint16_t* indices, uint32_t indexCount);
     Texture* m_constantsBumpBase = nullptr;
     bool m_drawTerrainBase = false;              // the current draw is the ground's unlit base pass (Draw)
     bool m_drawTerrainLight = false;             // ... or its multiplying lightmap pass
@@ -726,6 +832,7 @@ private:
         bool animated;                           // its vertices changed since last frame (a character's body)
         uint32_t owner;                          // the character it belongs to (SetDrawVisual), 0: unknown
         uint32_t kind;                           // VisualKind of the visual that drew it (m_drawVisualKind)
+        uint64_t leafKey;                        // a canopy with leaves: its leaf set (m_leafSets), 0 = none
     };
     // One caster as the shadow passes draw it: from this frame's ring or from the caster cache (own buffer).
     struct ShadowItem {
@@ -744,6 +851,7 @@ private:
         bool animated;                           // ShadowCaster animated
         uint32_t owner;                          // ShadowCaster owner
         uint32_t kind;                           // ShadowCaster kind (VisualKind)
+        uint64_t leafKey = 0;                    // ShadowCaster leafKey
         // Made at its first draw this frame and shared by every cascade and cube face it is drawn into (the pass's
         // light matrix is a push constant): its record (kNoShadowRecord: the arena was full) and its group key.
         uint32_t record = ~0u;
@@ -836,6 +944,7 @@ private:
         double lastSwaySample;
         float plantSway[4];                      // a plant's wind sway (as ShadowCaster sway)
         uint32_t kind;                           // ShadowCaster kind (VisualKind)
+        uint64_t leafKey;                        // ShadowCaster leafKey
     };
     static constexpr double kSwayStep = 0.05;
     static constexpr size_t kSwaySamples = 80;
@@ -1061,12 +1170,14 @@ private:
         uint64_t indexHash;
         uint64_t firstFrame, lastFrame;
         bool diffuseAlphaOne = true, specularAlphaOne = true;   // every vertex colour's alpha byte is 255 (pre-pass)
+        mutable int8_t flatShape = -1;           // SwayParams: 1 = one plane (a sign, a card), 0 = not, -1 = not looked at
     };
     std::unordered_map<uint64_t, MeshInfo> m_meshInfo;
     const MeshInfo* m_drawMesh = nullptr;        // the current draw's (null: external geometry, pre-transformed)
     const skin::Job* m_drawSkin = nullptr;       // the current draw is this skinned character piece (DrawSkinned)
     uint32_t m_drawVisualKind = 0;               // SetDrawVisual (VisualKind)
     uint32_t m_drawOwner = 0;                    // ... the character it belongs to (0: none / unknown)
+    uint32_t m_drawVisual = 0;                   // ... the visual object itself (the game's; for picking)
     std::vector<SceneLight> m_sceneLights;       // SetSceneLights, of frame m_sceneLightsFrame
     uint64_t m_sceneLightsFrame = 0;
     const char* m_drawVisualName = "";
@@ -1169,7 +1280,8 @@ private:
     bool m_drawMeshStatic = false;               // ... seen in an earlier frame with the same vertices
     void DrawMeshInfo(uint32_t fvf, uint32_t stride, const void* vertices, uint32_t vertexCount, const uint16_t* indices,
                       uint32_t indexCount);
-    bool SwayParams(uint32_t fvf, uint32_t stride, const void* vertices, uint32_t vertexCount, float out[4]);
+    bool SwayParams(uint32_t primitive, uint32_t fvf, uint32_t stride, const void* vertices, uint32_t vertexCount,
+                    const uint16_t* indices, uint32_t indexCount, float out[4]);
     // Plants' big triangles split for smooth bending (draw.cpp SubdividePlant), by mesh cache key and split.
     struct PlantMesh { std::vector<uint8_t> vertices; std::vector<uint16_t> indices; uint64_t lastFrame = 0; };
     std::unordered_map<uint64_t, PlantMesh> m_plantMeshes;
@@ -1196,6 +1308,7 @@ private:
     float m_grassGlow = 1.0f;                    // RVK_GrassGlow: backlit tips, the sheen, rounded shading
     float m_grassGusts = 1.0f;                   // RVK_GrassGusts: gusts sweeping the field
     bool m_grassTrails = true;                   // RVK_GrassTrail: pushed grass stays down behind a character
+    float m_trailSeconds = 12.0f, m_trailShade = 1.0f;   // SetGrassTrailLook
     float m_grassEven = 1.0f;
     bool m_grassShadows = true;                  // RVK_GrassShadow: the blades cast the sun's shadow                    // RVK_GrassEven: the blades' colour from one green, not the texel
     // The ground under one tile and its baked blades. A cell is written by the finest terrain triangle seen there
@@ -1236,7 +1349,7 @@ private:
     GrassTile* GrassTileAt(int32_t tx, int32_t tz) const;
     // The terrain chunks seen (by contents, pass and texture): their ground box and when they were last captured, so
     // an unchanged chunk over tiles that already have it is skipped whole.
-    struct GrassChunk { float box[4] = {}; bool boxed = false; uint64_t processed = 0, lastSeen = 0; };
+    struct GrassChunk { float box[4] = {}; bool boxed = false; uint64_t processed = 0, lastSeen = 0, firstSeen = 0; };
     std::unordered_map<uint64_t, GrassChunk> m_grassChunks;
     std::vector<GrassTile*> m_grassChunkGrid;    // CaptureTerrain's scratch: the tiles under a chunk
     uint64_t m_grassTileEpoch = 0;               // the latest tile made or light reset (the chunks' clock)
@@ -1254,8 +1367,11 @@ private:
     // Trails: pushed grass lying down behind the characters (RVK_GrassTrail) - a world-anchored grid around the camera,
     // wrapping (cell gx lives at gx mod kTrailN): per cell how far its grass is pushed over and which way, stamped
     // where a character stands and recovering over a few seconds. Uploaded with the frame (grass.vert Trail).
-    static constexpr int kTrailN = 128;          // cells along a side (a power of two)
-    static constexpr float kTrailCell = 0.25f;   // world units a cell
+    // The window follows the camera and drops what leaves it: it covers the grass's whole range (the longest
+    // RVK_GrassDist), so trodden grass comes back up by time, not by how far the camera went (at 128 x 0.25 it reached
+    // only 16 units around the camera).
+    static constexpr int kTrailN = 256;          // cells along a side (a power of two)
+    static constexpr float kTrailCell = 0.4f;    // world units a cell
     std::vector<float> m_trail;                  // kTrailN^2 x (direction x, z scaled by the amount)
     int32_t m_trailOrigin[2] = {0, 0};           // the window's first cell (world cell coordinates)
     bool m_trailValid = false;                   // the window holds something
@@ -1318,13 +1434,49 @@ private:
     uint64_t m_waterCopyFrame = ~0ull;
     uint64_t m_waterDraws = 0, m_waterTriangles = 0;
     uint32_t m_waterLogCount = 0;
+    // The characters of the last completed frame, merged (one body per character) and how each moves. They push the
+    // water's disturbance field (StepWaterSim, water_sim.comp), a wave equation on a grid round the camera: a body
+    // moving raises the water ahead of it and leaves a trough behind, so wakes, bow waves and their interference come
+    // out of the simulation. Collected per frame (CollectWaterBodies), the nearest few handed to the simulation. The
+    // simulation tests "in the water" itself (the feet below the surface there), so no water map is needed here.
+    struct WaterBody {
+        float x = 0, z = 0, minY = 0;   // world position, the box's lowest y
+        float vx = 0, vz = 0;           // its velocity (smoothed over frames)
+        float speed = 0;                // |v|
+        float centreY = 0;              // the box's mid height, and how fast it falls (m/s, smoothed): a jump in
+        float fall = 0;
+        float prevMinY = 0;             // the feet's height last frame: a splash is the feet crossing the surface
+        float phase = 0;                // its idle stirring's offset - kept while it is tracked
+    };
+    std::vector<WaterBody> m_waterBodies;
+    double m_waterBodiesTime = 0.0;
+    float m_waterDt = 1.0f / 60.0f;
+    uint32_t m_waterPhaseSeed = 2463534242u;
+    void CollectWaterBodies();
+    // The disturbance field: two states (ping-pong), RGBA16F, kept in the general layout; a compute pass steps it once
+    // a frame, when the water first draws.
+    VkDescriptorSetLayout m_waterSimSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout m_waterSimLayout = VK_NULL_HANDLE;
+    VkPipeline m_waterSimPipeline = VK_NULL_HANDLE;
+    VkImage m_waterSim[2] = {};
+    VkImageView m_waterSimView[2] = {};
+    VmaAllocation_T* m_waterSimAllocation[2] = {};
+    uint32_t m_waterSimCur = 0;                  // the state the water reads
+    bool m_waterSimClear = true;                 // wipe it before the next step
+    bool m_waterSimLive = false;                 // the field is current (the water reads it)
+    float m_waterSimCell = 0.25f;
+    double m_waterSimLastTime = -1e9;
+    float m_waterSimCam[2] = {0, 0};
+    double m_waterSimTime = 0.0;
+    bool CreateWaterSim(std::string* error);
+    void StepWaterSim(VkCommandBuffer cmd, const WaterMap* map);
     bool CreateWaterResources(std::string* error);
     void DestroyWaterResources();
     void UpdateWaterReady();
     const WaterGrid* WaterGridFor(uint32_t segments);
     WaterMap* WaterMapFor(const WaterVertex* v, uint32_t count, const uint16_t* idx, uint32_t icount,
                           std::vector<uint32_t>& steep);
-    bool CopySceneForWater(VkCommandBuffer cmd);
+    bool CopySceneForWater(VkCommandBuffer cmd, const WaterMap* map);
     void WaterLog(const char* fmt, ...);
     bool CreateGrassResources(std::string* error);
     void DestroyGrassResources();
@@ -1349,6 +1501,75 @@ private:
     VkBuffer m_grassIndex = VK_NULL_HANDLE;
     VmaAllocation_T* m_grassIndexAllocation = nullptr;
     uint32_t m_grassIndexBlades = 0;
+    // Leaves (leaves.cpp). A canopy - a lit, static, cut-out mesh with a leaf texture - gets a leaf set: its sprigs
+    // baked once (model space) into one pool, drawn after the canopy's own draw with its record's state.
+    enum class Canopy : uint8_t { None, Shrub, Tree, Palm };
+    struct LeafSet {
+        Canopy kind = Canopy::None;
+        uint64_t alloc = 0;                      // its range in m_leafPool (VmaVirtualAllocation), 0 = none
+        uint32_t first = 0, count = 0;           // in leaves
+        uint32_t texVersion = 0;                 // the texture's m_alphaVersion it was baked from
+        uint32_t settingsVersion = 0;            // m_leafVersion it was baked with
+        uint64_t lastFrame = 0;
+        float centre[3] = {}, radius = 0.0f;     // the crown (model space)
+        bool baked = false;
+    };
+    std::unordered_map<uint64_t, LeafSet> m_leafSets;   // by mesh key and texture
+    LeafSettings m_leaf;
+    bool m_leafDirty = false;                    // density / size changed: every set is baked again
+    uint32_t m_leafVersion = 1;
+    VkBuffer m_leafPool = VK_NULL_HANDLE;
+    VmaAllocation_T* m_leafPoolAllocation = nullptr;
+    VmaVirtualBlock_T* m_leafPoolBlock = nullptr;
+    uint32_t m_leafPoolLeaves = 0;
+    struct LeafTrash { uint64_t alloc; VkBuffer buffer; VmaAllocation_T* allocation; uint64_t frame; };
+    std::vector<LeafTrash> m_leafTrash;
+    VkPipeline m_leafPipelines[2] = {};          // 8-bit target, HDR scene (leaf.vert + ffp.frag)
+    uint32_t m_leafBakes = 0, m_leafBakedLeaves = 0;   // counters (logged with the foliage line)
+    double m_leafBakeMs = 0.0;
+    uint64_t m_leafDraws = 0, m_leafDrawn = 0;   // leaf draws and leaves drawn (the log's 600 frames)
+    uint64_t m_canopyCount[4] = {};              // canopy draws by kind (the log's 600 frames)
+    LeafSet* m_drawLeaves = nullptr;             // the current draw's leaf set, ready to draw (CanopyParams)
+    uint64_t m_drawLeafKey = 0;                  // ... its key in m_leafSets
+    VkPipeline m_leafShadowPipeline = VK_NULL_HANDLE;   // leaf_shadow.vert + shadow.frag
+    uint64_t m_leafShadowLeaves = 0;             // leaves drawn into the sun's cascades (the log's 600 frames)
+    void DrawLeafShadows(VkCommandBuffer cmd);   // the current cascade's canopies' leaves (shadow.cpp RenderShadowMap)
+    uint32_t m_drawLeafCount = 0;                // ... how many of its leaves at this distance (with the falling slots
+                                                 // in its record: DrawTransform leafSet)
+    uint32_t m_drawLeafFall = 0;                 // ... its falling-leaf slots (ffp.vert FallingLeaf)
+    float m_drawLeafGround = 0.0f;               // ... the ground under it (world y: where its fallen leaves lie)
+    // The ground under a tree (LeafGround): each part of a mesh has its own origin - a canopy's is up in its crown -
+    // so it comes from the captured terrain (the ground grass), else from the trunk: a solid static mesh drawn next to
+    // the canopy, standing under it. Recent solid draws' world boxes, and per tree (canopy mesh + position) what was
+    // found; a trunk drawn after its canopy is matched to it then, for the next frames.
+    struct SolidBox { float lo[3], hi[3]; uint32_t draw; };
+    SolidBox m_recentSolid[16] = {};
+    uint32_t m_recentSolidNext = 0;
+    struct RecentCanopy { uint64_t instance; float x, z, bottom; uint32_t draw; };
+    RecentCanopy m_recentCanopy{};
+    std::unordered_map<uint64_t, float> m_leafGround;   // tree instance -> ground y
+    void NoteSolidDraw(uint32_t fvf);            // Draw: a solid static draw (a trunk?)
+    float LeafGround(const LeafSet& set);
+    Canopy CanopyKind(uint32_t primitive, uint32_t fvf, uint32_t stride, const void* vertices, uint32_t vertexCount,
+                      const uint16_t* indices, uint32_t indexCount);
+    void CanopyParams(uint32_t primitive, uint32_t fvf, const detail::FvfLayout& layout, const void* vertices,
+                      uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount);
+    bool BakeLeaves(LeafSet& set, uint32_t primitive, const detail::FvfLayout& layout, const void* vertices,
+                    uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount);
+    bool GrowLeafPool(uint32_t minLeaves);
+    void CrownOf(LeafSet& set) const;
+    void FreeLeaves(LeafSet& set);
+    void UpdateLeaves();                         // once a frame: trash, unused sets, settings
+    void DrawLeaves(VkCommandBuffer cmd, uint32_t recordIndex, uint32_t primitive, uint32_t fvf, uint32_t stride,
+                    VkDeviceSize frameLightsOffset, VkBuffer prevBuffer, VkDeviceSize prevOffset,
+                    VkDeviceSize prevBytes, VkBuffer smoothBuffer, VkDeviceSize smoothOffset, VkDeviceSize smoothBytes);
+    uint32_t m_leafBakesThisFrame = 0;
+    // GPU memory (diag.cpp GpuMemoryReport: in frame dumps and the 600-frame log).
+    bool m_memoryBudget = false;                 // VK_EXT_memory_budget: the driver's usage and budget per heap
+    VkDeviceSize m_textureBytes[2] = {};         // live textures' images: the game's, render targets
+    uint32_t m_textureCount[2] = {};
+    std::string GpuMemoryReport() const;
+    void DestroyLeafResources();
     float m_pointLightScale = 1.0f, m_charLightScale = 1.0f;   // SetPointLightIntensity
     float LightScale(const d3d::Light& l) const;
     bool FoliageFar() const;                  // pieces per 0.3 world units (0 = plants drawn as the game gives them)
@@ -1398,8 +1619,11 @@ private:
     bool m_glowCleared = false;                  // this frame
     uint32_t m_glowDraws = 0;                    // this frame's draws feeding the glow (frame dumps)
     bool GlowDraw(uint32_t fvf) const;
-    static bool IsInterfaceDraw(uint32_t fvf);
-    static bool IsWater(uint32_t fvf);           // VisualLiquid_t: pre-transformed, with specular (FVF 0x1C4)
+    bool IsInterfaceDraw(uint32_t fvf) const;
+    // The scene's pre-transformed draws (FVF 0x1C4, out of ProcessVertices: the game's water, floating text) - not
+    // the game's screen sprites in the same format (the timer bars): the proxy says which (SetDrawProcessed).
+    bool IsWater(uint32_t fvf) const;
+    bool m_drawProcessed = false;
     bool WaterWritesDepth(uint32_t fvf) const;   // ... and depth-tested (floating text isn't): forced depth writes
     VkDescriptorSetLayout m_bloomSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_bloomLayout = VK_NULL_HANDLE;
@@ -1418,6 +1642,17 @@ private:
     Texture* m_giTex[2] = {};                    // half resolution: indirect light + view depth (ping-pong)
     VkPipeline m_giPipeline = VK_NULL_HANDLE, m_giBlurPipeline = VK_NULL_HANDLE;
     bool RenderGi(VkCommandBuffer cmd);
+    // The environment probe (PBR materials' reflections of their surroundings): what the camera has seen around it
+    // by direction (octahedral, 128 x 128, ping-pong; a: how sure), and its prefiltered atlas (env_common.glsl) that
+    // the scene shaders sample through FL.pbr2.w. Updated after each scene, used by the next.
+    Texture* m_envProbe[2] = {};
+    Texture* m_envAtlas = nullptr;
+    uint32_t m_envCurrent = 0;                   // the m_envProbe holding the latest
+    bool m_envReady = false;                     // the atlas has been written (and is readable)
+    float m_envEye[3] = {};                      // the camera at the last update
+    bool m_envEyeValid = false;
+    VkPipeline m_envAccumPipeline = VK_NULL_HANDLE, m_envFilterPipeline = VK_NULL_HANDLE;
+    bool RenderEnvProbe(VkCommandBuffer cmd);
     // Volumetric light: sun shafts through the shadow cascades and lamp glow (hdr.cpp, volume.frag).
     float m_volume = 1.0f, m_volumeHaze = 1.0f, m_volumeShafts = 1.0f;
     Texture* m_volumeTex[2] = {};                // half resolution: scattered light + view depth (ping-pong)
@@ -1831,6 +2066,7 @@ private:
     static constexpr VkDeviceSize kRingMaxSize = 256ull << 20;  // ... at most (a 32-bit process: address space)
     VkDeviceSize m_ringWanted = kRingSize;       // after a mid-frame flush: the next frames' ring size
     VkDeviceSize m_ringPeak = 0;                 // the most a frame used (logged with the flushes)
+    uint32_t m_ringQuietWindows = 0;             // 600-frame windows in a row that used under a quarter of the ring
     uint32_t m_ringFlushesLogged = 0;
     // The draw arenas' reserve targets (entries), grown between frames when one overflows.
     static constexpr uint32_t kDrawConstCapacity = 2048, kDrawRecordCapacity = 16384;
@@ -1873,8 +2109,8 @@ private:
     uint32_t FixedSamplerSlot(uint32_t which, VkSampler s);
     uint64_t m_stageSamplerKey[2] = {~0ull, ~0ull};
     uint32_t m_stageSamplerSlot[2] = {};
-    VkSampler m_fixedSampler[2] = {};
-    uint32_t m_fixedSamplerSlot[2] = {};
+    VkSampler m_fixedSampler[3] = {};
+    uint32_t m_fixedSamplerSlot[3] = {};
     bool m_bindlessBound = false;                // set 1 bound in this frame's command buffer
     std::array<VkPipeline, 3> m_pipelines{};   // per topology class: points, lines, triangles
     VkBuffer m_nullBuffer = VK_NULL_HANDLE;    // zeros, bound at stride 0 for attributes a format lacks

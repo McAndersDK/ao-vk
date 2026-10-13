@@ -211,6 +211,8 @@ void WatchModule(const char* name)
     ++g_watchedExtraCount;
 }
 
+void DescribeAddress(uintptr_t address, char* out, size_t size) { Where(address, out, size); }
+
 void InstallCrashLog()
 {
     static bool done;

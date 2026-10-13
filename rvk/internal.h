@@ -46,7 +46,15 @@ struct DrawTransform {
     float tess[4];                 // Phong tessellation (characters): level (0 = off), shape, base vertex of binding 10
     uint32_t texIdx[4];            // bindless (M1): image slots for stage 0, stage 1, bump base, normal map
     uint32_t sampIdx[4];           // bindless (M1): sampler slots for stage 0, stage 1, bump, normal
+    uint32_t mat[4];               // PBR material: occlusion/roughness/metallic image slot, the maps' sampler slot,
+                                   // kMat* bits, emissive image slot
+    float leaf[4];                 // a canopy with leaves (leaves.cpp): its crown's centre (model space), radius (0 = none)
+    uint32_t leafSet[4];           // ... its leaves in the pool: first, drawn now | falling-leaf slots << 16, all; the
+                                   // ground under it (world y, float bits: where its fallen leaves lie)
 };
+enum : uint32_t { kMatPbr = 1, kMatBase = 2, kMatAlbedo = 4, kMatEmissive = 8, kMatPicked = 16 };   // DrawTransform
+                                                 // mat[2]: has an ORM map; it is the ground base's; stage 0 draws an
+                                                 // albedo map; has an emissive map; its texture was picked
 // GPU-driven M2: one record a draw (binding 12). `constIndex` selects the shared DrawConstants it draws with; the
 // record is picked by a push constant until M3 replaces that with gl_DrawID.
 struct DrawRecord {
@@ -64,9 +72,11 @@ struct ShadowRecord {
     float alpha[4];
     float sway[4];       // plants: model y of the base, 1 / model height, tip sway, on
     float windModel[4];  // the wind in model space
-    float origin[4];     // world x, z of the object; wind time
+    float origin[4];     // world x, z of the object; wind time; RVK_LeafCore (a canopy with leaves)
+    float leaf[4];       // a canopy with leaves (leaves.cpp): its crown's centre (model space), radius (0 = none)
+    float leafWind[4];   // ... the wind's direction (world x, z), branch sway amount, gusts
 };
-static_assert(sizeof(ShadowRecord) == 128, "shadow record");
+static_assert(sizeof(ShadowRecord) == 160, "shadow record");
 
 enum : uint32_t { F_LIGHTING = 1, F_COLORVERTEX = 2, F_SPECULAR = 4, F_NORMALIZE = 8, F_FOG = 16, F_RANGEFOG = 32,
                   F_LOCALVIEWER = 64, F_TEX0 = 128, F_TEX1 = 256, F_ALPHATEST = 512,
@@ -93,11 +103,16 @@ struct FrameLights {               // binding 4: per-frame data (constants.glsl 
     float shadowParams[4];         // enabled, strength, cascade count, point light shadow strength
     float sunDir[4];               // w: light headroom (F_OVERBRIGHT)
     float sunColor[4];             // the shadow-casting sun's colour (0 = none)
+    float pbr[4];                  // PBR materials: direct specular, ambient specular, reflections, occlusion map strength
+    float pbr2[4];                 // x: debug view (0 = off), y: 1 = PBR on, z: emissive maps' brightness, w: the
+                                   // environment probe (bits: draw.cpp FillFrameLights)
     d3d::Matrix prevView, prevProj; // motion vectors: the world camera last frame (applied like view and proj, so a
                                    // still camera's motion is exactly zero)
     float pushers[kPushers][4];    // what plants bend away from (characters' feet and trails): world x, y, z, seconds
                                    // since a character was there
     float pusherBorn[kPushers];    // seconds since each point was made (a character walking on makes new ones)
+    float leaves[4];               // leaves (leaves.cpp): branch sway, sprig flutter, gusts, canopy core cut
+    float leafView[4];             // ... their distance (none beyond; thinning out from half of it), on, falling leaves
     GpuLight lights[kFrameLights];
 };
 
@@ -128,6 +143,9 @@ d3d::Matrix MulMatrix(const d3d::Matrix& a, const d3d::Matrix& b);   // D3D orde
 bool InvertMatrix(const d3d::Matrix& m, d3d::Matrix* out);
 VkPrimitiveTopology TopologyOf(uint32_t d3dPrimitive);
 uint32_t TopologyClassOf(uint32_t d3dPrimitive);   // 0 points, 1 lines, 2 triangles
+// Whether a mesh is one plane (a sign, a poster: draw.cpp), positions first in its vertices.
+bool OnePlane(uint32_t primitive, uint32_t stride, const void* vertices, uint32_t vertexCount, const uint16_t* indices,
+              uint32_t indexCount);
 // Clip-space test of a world-space box's corners against a view-projection: +1 all inside, -1 all outside one
 // plane, 0 otherwise. depth: also test the near and far planes.
 int BoxInClip(const float mn[3], const float mx[3], const d3d::Matrix& vp, bool depth);

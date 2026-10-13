@@ -40,6 +40,9 @@ namespace {
 const uint32_t kVertSpirv[] = {
 #include "ffp.vert.inc"
 };
+const uint32_t kLeafVertSpirv[] = {             // ffp.vert built with RVK_LEAF: a canopy's leaves (leaves.cpp)
+#include "leaf.vert.inc"
+};
 const uint32_t kTescSpirv[] = {                 // characters' Phong tessellation
 #include "ffp.tesc.inc"
 };
@@ -199,6 +202,7 @@ Device::~Device()
     DestroyParticleResources();
     DestroySkinResources();
     DestroyGrassResources();
+    DestroyLeafResources();
     DestroyWaterResources();
     DestroyStaticGeometry();
     if (m_pipelineLayout) vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
@@ -328,6 +332,10 @@ bool Device::CreateLogicalDevice(std::string* error)
                                            VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME,
                                            VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME,
                                            VK_EXT_ROBUSTNESS_2_EXTENSION_NAME};   // nullDescriptor: empty bindless slots
+    // The driver's own usage and budget per memory heap (the GPU memory report, diag.cpp GpuMemoryReport).
+    m_memoryBudget = has(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+    if (m_memoryBudget)
+        extensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
     // Swapchain support even without a window yet: SetWindow() can attach one later.
     m_swapchainSupported = has(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     if (m_swapchainSupported)
@@ -452,6 +460,8 @@ bool Device::CreateLogicalDevice(std::string* error)
     ai.device = m_device;
     ai.instance = m_instance;
     ai.pVulkanFunctions = &fns;
+    if (m_memoryBudget)
+        ai.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
     return Check(vmaCreateAllocator(&ai, &m_allocator), "vmaCreateAllocator", error);
 }
 
@@ -461,7 +471,7 @@ bool Device::CreateMainTargets(std::string* error)
     m_scene = CreateImage(m_width, m_height, Format::RGBA16F, 1, true);
     m_glow = CreateImage(m_width, m_height, Format::RGBA16F, 1, true);
     m_localFraction = CreateImage(m_width, m_height, Format::RGBA8, 1, true);
-    m_motionVectors = CreateImage(m_width, m_height, Format::RG16F, 1, true);
+    m_motionVectors = CreateImage(m_width, m_height, Format::RGBA16F, 1, true);   // zw: PBR shading normal (ssr.frag)
     m_albedo = CreateImage(m_width, m_height, Format::A8R8G8B8, 1, true);
     if (!m_ldrMain || !m_scene || !m_glow || !m_localFraction || !m_motionVectors || !m_albedo) {
         if (error) *error = "main colour target";
@@ -769,7 +779,7 @@ bool Device::CreatePipelines(std::string* error)
     // 8-bit targets: one colour attachment. HDR scene: the float scene, the glow (additive effects, for the bloom) and
     // the local-light fraction (for the ambient occlusion), the motion vectors and the surface colour (indirect light).
     VkFormat colorFormats[5] = {kColorFormat, GetFormatInfo(Format::RGBA16F).vk, GetFormatInfo(Format::RGBA8).vk,
-                                GetFormatInfo(Format::RG16F).vk, GetFormatInfo(Format::A8R8G8B8).vk};
+                                GetFormatInfo(Format::RGBA16F).vk, GetFormatInfo(Format::A8R8G8B8).vk};
     VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
     rendering.colorAttachmentCount = 1;
     rendering.pColorAttachmentFormats = colorFormats;
@@ -848,11 +858,48 @@ bool Device::CreatePipelines(std::string* error)
     }
     if (tesc) vkDestroyShaderModule(m_device, tesc, nullptr);
     if (tese) vkDestroyShaderModule(m_device, tese, nullptr);
+    // A canopy's leaves (leaves.cpp): triangles through leaf.vert, cut out (both targets). Not fatal.
+    VkShaderModule leafVert = VK_NULL_HANDLE;
+    if (ok && module(kLeafVertSpirv, sizeof(kLeafVertSpirv), &leafVert)) {
+        VkPipelineShaderStageCreateInfo lstages[2] = {stages[0], stages[1]};
+        lstages[0].module = leafVert;
+        for (int set = 0; set < 2; ++set) {
+            colorFormats[0] = set ? GetFormatInfo(Format::RGBA16F).vk : kColorFormat;
+            rendering.colorAttachmentCount = cb.attachmentCount = set ? 5 : 1;
+            lstages[1].module = set ? fragGlow : frag;
+            VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+            ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+            ci.pNext = &rendering;
+            ci.stageCount = 2;
+            ci.pStages = lstages;
+            ci.pInputAssemblyState = &ia;
+            ci.pViewportState = &vp;
+            ci.pRasterizationState = &rs;
+            ci.pMultisampleState = &ms;
+            ci.pDepthStencilState = &dss;
+            ci.pColorBlendState = &cb;
+            ci.pDynamicState = &ds;
+            ci.layout = m_pipelineLayout;
+            std::string leafError;
+            if (!Check(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &ci, nullptr, &m_leafPipelines[set]),
+                       "leaf pipeline", &leafError))
+                m_leafPipelines[set] = VK_NULL_HANDLE;
+        }
+        if (!m_leafPipelines[0] || !m_leafPipelines[1])
+            for (VkPipeline& p : m_leafPipelines) {
+                if (p) vkDestroyPipeline(m_device, p, nullptr);
+                p = VK_NULL_HANDLE;
+            }
+        vkDestroyShaderModule(m_device, leafVert, nullptr);
+    }
     if (ok)
         CreatePrepassPipeline(vert);             // not fatal: without it the scene draws as before
     vkDestroyShaderModule(m_device, vert, nullptr);
     vkDestroyShaderModule(m_device, fragGlow, nullptr);
     vkDestroyShaderModule(m_device, frag, nullptr);
+    vkDestroyShaderModule(m_device, fragGlowNoCut, nullptr);
+    vkDestroyShaderModule(m_device, fragNoCut, nullptr);
     if (!ok || !CreateShadowResources(error) || !CreatePointShadowResources(error) || !CreateHdrResources(error) ||
         !CreateParticleResources(error) || !CreateSkinResources(error))
         return false;
@@ -1281,6 +1328,11 @@ void Device::SetRenderTarget(Texture* target)
 
 void Device::BeginFrame()
 {
+    m_pickActive = m_pickArmed;                  // texture picking (RequestPick): this frame's draws
+    m_pickArmed = false;
+    m_pickBest = nullptr;
+    m_pickBestVisual = m_pickBestOwner = m_pickBestKind = m_pickBestVertices = m_pickBestIndices = 0;
+    m_pickDepth = 2.0f;
     m_batchRuns = m_batchMerged = m_batchMaxRun = 0;
     m_batchKey = 0;
     m_batchRun = 0;
@@ -1306,12 +1358,13 @@ void Device::BeginFrame()
     CollectGarbage();
     ApplyShadowResolution();
     if (!uploadsPending) {
-        if (f.ringSize < m_ringWanted) {         // the slot is idle (waited for): a bigger ring
+        if (f.ringSize != m_ringWanted) {        // the slot is idle (waited for): a bigger (or again smaller) ring
             std::string error;
             VkDeviceSize old = f.ringSize;
             if (CreateRing(f, m_ringWanted, &error))
-                Log("ring buffer: %llu -> %llu MB (frames overflowed it)", (unsigned long long)(old >> 20),
-                    (unsigned long long)(m_ringWanted >> 20));
+                Log("ring buffer: %llu -> %llu MB (%s)", (unsigned long long)(old >> 20),
+                    (unsigned long long)(m_ringWanted >> 20),
+                    m_ringWanted > old ? "frames overflowed it" : "frames have used little of it for a while");
             else if (!CreateRing(f, old, &error))
                 Log("ring buffer: %s", error.c_str());
             else
@@ -1323,6 +1376,21 @@ void Device::BeginFrame()
     if (m_frameNumber % 600 == 599) {            // how full frames get (logged with the profiler's numbers)
         Log("ring buffer: peak %.1f of %llu MB a frame, %u mid-frame flushes (last 600 frames)",
             double(m_ringPeak) / 1048576.0, (unsigned long long)(f.ringSize >> 20), m_midFrameFlushes);
+        // The rings are mapped into the game's (32-bit) address space, two of them: grown for a burst (a zone's
+        // uploads), they give it back once frames have used under a quarter of them for three windows (~30 s), so
+        // a long session doesn't keep 512 MB of it - the game, short of address space, falls back to its smallest
+        // ground textures.
+        m_ringQuietWindows = m_ringPeak < f.ringSize / 4 && m_midFrameFlushes == 0 ? m_ringQuietWindows + 1 : 0;
+        if (m_ringQuietWindows >= 3 && m_ringWanted > kRingSize) {
+            m_ringWanted = std::max(kRingSize, m_ringWanted / 2);
+            m_ringQuietWindows = 0;
+        }
+        MEMORYSTATUSEX mem{};
+        mem.dwLength = sizeof(mem);
+        if (GlobalMemoryStatusEx(&mem))
+            Log("address space: %llu of %llu MB free (the game's process)", (unsigned long long)(mem.ullAvailVirtual >> 20),
+                (unsigned long long)(mem.ullTotalVirtual >> 20));
+        Log("%s", GpuMemoryReport().c_str());
         Log("opaque static fast path: %llu draws (last 600 frames)", (unsigned long long)m_opaqueDraws);
         Log("foliage: %llu draws, %llu of them far (LOD) (last 600 frames)", (unsigned long long)m_foliageDraws,
             (unsigned long long)m_foliageLodDraws);
@@ -1333,17 +1401,31 @@ void Device::BeginFrame()
         if (m_grassOn)
             Log("ground grass: %llu frames drawn, %.0f blades a frame; tiles %llu, %llu built (%.2f ms each, %.0f%% of "
                 "their blades lit by the ground's lightmap), capture %.3f ms a frame; terrain ambient %.2f %.2f %.2f; "
-                "pushers now %llu max %u; candidates left out: %llu clumps, %llu no grass ground, %llu steep, %llu "
+                "pushers now %llu max %u; trail cells %u; candidates left out: %llu clumps, %llu no grass ground, %llu steep, %llu "
                 "edge; %llu tiles waiting to build; %.0f blades a frame cast the sun's shadow (last 600 frames)",
                 (unsigned long long)m_grassDraws, double(m_grassBlades) / std::max<uint64_t>(m_grassDraws, 1),
                 (unsigned long long)m_grassTiles.size(), (unsigned long long)m_grassBuilds,
                 m_grassBuildMs / double(std::max<uint64_t>(m_grassBuilds, 1)),
                 100.0 * double(m_grassLitBlades) / double(std::max<uint64_t>(m_grassBuiltBlades, 1)),
                 m_grassCaptureMs / 600.0, m_terrainAmbient[0], m_terrainAmbient[1], m_terrainAmbient[2],
-                (unsigned long long)m_framePushers.size(), m_pusherSeenMax, (unsigned long long)m_grassLeftOut[0],
+                (unsigned long long)m_framePushers.size(), m_pusherSeenMax, m_trailActive, (unsigned long long)m_grassLeftOut[0],
                 (unsigned long long)m_grassLeftOut[1], (unsigned long long)m_grassLeftOut[2],
                 (unsigned long long)m_grassLeftOut[3], (unsigned long long)GrassTilesWaiting(),
                 double(m_grassShadowBlades) / 600.0);
+        if (m_leaf.on)
+            Log("leaves: canopy draws a frame %.1f shrubs, %.1f trees, %.1f palms; %.1f leaf draws a frame, %.0f leaves a "
+                "frame; %zu sets, %u baked (%.2f ms each, %.0f leaves each); %.0f leaves a frame cast the sun's shadow "
+                "(last 600 frames)",
+                double(m_canopyCount[1]) / 600.0, double(m_canopyCount[2]) / 600.0, double(m_canopyCount[3]) / 600.0,
+                double(m_leafDraws) / 600.0, double(m_leafDrawn) / 600.0, m_leafSets.size(), m_leafBakes,
+                m_leafBakeMs / double(std::max<uint32_t>(m_leafBakes, 1)),
+                double(m_leafBakedLeaves) / double(std::max<uint32_t>(m_leafBakes, 1)),
+                double(m_leafShadowLeaves) / 600.0);
+        for (uint64_t& n : m_canopyCount)
+            n = 0;
+        m_leafDraws = m_leafDrawn = m_leafShadowLeaves = 0;
+        m_leafBakes = m_leafBakedLeaves = 0;
+        m_leafBakeMs = 0.0;
         m_grassShadowBlades = 0;
         m_grassLitBlades = m_grassBuiltBlades = 0;
         for (uint64_t& n : m_grassLeftOut)
@@ -1373,8 +1455,10 @@ void Device::BeginFrame()
     ProfileBeginFrame(f.main);
     ProfileCpuAddMs("wait for the GPU (frame slot)", waitMs);
     UpdatePushTrail();
+    UpdateLeaves();
     m_tessCharsPrev.swap(m_tessChars);           // characters drawn last frame (their rigid parts: TessellateDraw)
     m_tessChars.clear();
+    CollectWaterBodies();                        // the water's ripples follow the characters of the last frame
     m_windTimePrev = m_windTime;
     m_frameClock = SwayClock();
     m_windTime = std::fmod(m_frameClock, 3600.0);
@@ -1422,6 +1506,16 @@ void Device::BeginFrame()
 
 void Device::EndFrame()
 {
+    if (m_pickActive) {                          // texture picking: the nearest draw's texture, for LastPick
+        m_pickActive = false;
+        m_pickPublished.store(m_pickBest, std::memory_order_relaxed);
+        m_pickPublishedVisual.store(m_pickBestVisual, std::memory_order_relaxed);
+        m_pickPublishedOwner.store(m_pickBestOwner, std::memory_order_relaxed);
+        m_pickPublishedKind.store(m_pickBestKind, std::memory_order_relaxed);
+        m_pickPublishedVertices.store(m_pickBestVertices, std::memory_order_relaxed);
+        m_pickPublishedIndices.store(m_pickBestIndices, std::memory_order_relaxed);
+        m_pickSerial.fetch_add(1, std::memory_order_release);
+    }
     if (m_rendering && !m_particleOrphansDone) {
         m_particleOrphanTrigger = "end of the frame";   // no interface draw after the 3D
         DrawOrphanParticles();

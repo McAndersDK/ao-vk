@@ -1,0 +1,94 @@
+#version 450
+// The water's disturbance (rvk/water.cpp StepWaterSim): a height field of the surface round the camera, stepped as a
+// damped wave equation (h: the height above the calm surface, v: how fast it rises). Characters in the water push
+// it: a body moving raises the water ahead of it and leaves a trough behind (a dipole along its motion), one standing
+// still stirs it gently. A body faster than the waves outruns them, so a swimmer leaves a V-shaped wake with no wake
+// being drawn at all; waves cross each other, and bounce off the shore (where the water map says there is no water).
+//
+// The grid is toroidal and world-aligned: texel (i, j) holds the cells whose world index is i, j modulo N, so as the camera
+// moves the data stays where it is and only the edge, a band the water.frag fades out, is wiped for the cells that
+// come in. State: R h, G v.
+layout(local_size_x = 8, local_size_y = 8) in;
+
+const int N = 256;
+const int kMaxBodies = 32;
+
+layout(set = 0, binding = 0, rgba16f) uniform readonly image2D prevState;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D nextState;
+layout(set = 0, binding = 2) uniform sampler2D waterMap;       // R: height above the base, G: water (0 / 1)
+layout(set = 0, binding = 3) uniform Bodies {
+    vec4 pos[kMaxBodies];   // x, z: where; y: its feet's height; w: its speed (m/s)
+    vec4 dir[kMaxBodies];   // xy: its direction of motion (unit); z: its phase (idle stirring)
+    vec4 extra[kMaxBodies]; // x: how fast it falls (m/s); y: its feet's height last frame
+} B;
+
+layout(push_constant) uniform Params {
+    vec4 a;                 // xy: the camera's world x, z; z: the cell's size; w: the step (s)
+    vec4 b;                 // xy: the water map's origin; zw: 1 / its size
+    vec4 c;                 // x: the map's base height; y: how many bodies; z: time (s); w: damping (1 / s)
+    vec4 d;                 // x: wave speed squared (m^2/s^2); y: the push; z: the idle stir; w: the splash
+} P;
+
+void main()
+{
+    ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+    float cell = P.a.z;
+    float dt = P.a.w;
+    ivec2 cam = ivec2(floor(P.a.xy / cell));
+    ivec2 lo = cam - N / 2;
+    ivec2 w = lo + (((id - lo) % N) + N) % N;          // this texel's cell, in the window round the camera
+    vec2 p = (vec2(w) + 0.5) * cell;
+
+    vec2 away = abs(p - P.a.xy);
+    vec2 uv = (p - P.b.xy) * P.b.zw;
+    bool wet = all(greaterThan(uv, vec2(0.0))) && all(lessThan(uv, vec2(1.0))) && texture(waterMap, uv).g > 0.5;
+    if (max(away.x, away.y) > 0.46 * cell * float(N) || !wet) {
+        imageStore(nextState, id, vec4(0.0));           // the window's edge (data from far away), or the shore: a wall
+        return;
+    }
+    float surface = P.c.x + texture(waterMap, uv).r;
+
+    vec3 s = imageLoad(prevState, id).xyz;
+    float hl = imageLoad(prevState, (id + ivec2(N - 1, 0)) & (N - 1)).x;
+    float hr = imageLoad(prevState, (id + ivec2(1, 0)) & (N - 1)).x;
+    float hd = imageLoad(prevState, (id + ivec2(0, N - 1)) & (N - 1)).x;
+    float hu = imageLoad(prevState, (id + ivec2(0, 1)) & (N - 1)).x;
+    float lap = hl + hr + hd + hu - 4.0 * s.x;
+
+    float h = s.x, v = s.y;
+    v += P.d.x * dt / (cell * cell) * lap;
+
+    // The characters. In the water where their feet are below the surface (fading in just above it, so a body bobbing
+    // across the line doesn't blink); the faster one moves the harder it pushes.
+    int count = int(P.c.y);
+    for (int i = 0; i < count; ++i) {
+        vec4 bp = B.pos[i];
+        vec2 d = p - bp.xy;
+        const float sigma = 0.5;
+        float r2 = dot(d, d);
+        // A splash: the feet cross the surface going down fast (a jump in). The water is pressed into a hollow with a
+        // crown round it, which then falls back and sends rings out (the wave equation does the rest).
+        float fall = B.extra[i].x;
+        if (P.d.w > 0.0 && fall > 2.5 && B.extra[i].y >= surface && bp.z < surface && r2 < 6.0) {
+            float size = P.d.w * clamp((fall - 1.5) / 4.0, 0.2, 1.0);
+            float rr = sqrt(r2);
+            h += size * 0.3 * (-exp(-r2 / (2.0 * 0.45 * 0.45)) + 0.55 * exp(-pow((rr - 0.95) / 0.4, 2.0)));
+        }
+        if (r2 > 9.0 * sigma * sigma)
+            continue;
+        float g = exp(-r2 / (2.0 * sigma * sigma));
+        float depth = surface - bp.z;
+        float inWater = clamp((depth + 0.3) * 1.5, 0.0, 1.0) * clamp(depth * 0.8 + 0.25, 0.0, 1.0);
+        float move = clamp((bp.w - 0.3) / 3.5, 0.0, 1.5);   // 0 at rest .. 1 at a swimmer's pace
+        // Ahead: up; behind: down (the gradient of the push along the motion).
+        float dip = dot(d, B.dir[i].xy) / sigma;
+        float push = P.d.y * move * dip * g;
+        float stir = P.d.z * (1.0 - min(move, 1.0)) * sin(P.c.z * 5.5 + B.dir[i].z) * g;
+        v += (push + stir) * inWater * dt;
+    }
+
+    v *= exp(-P.c.w * dt);
+    h += v * dt + 0.015 * lap;                          // (a little diffusion: the grid's own ripples die out)
+    h = clamp(h, -0.4, 0.4);
+    imageStore(nextState, id, vec4(h, v, 0.0, 0.0));
+}
