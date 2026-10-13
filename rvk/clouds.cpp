@@ -1338,12 +1338,17 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     // far distance is hazy, as the game's sky).
     lf.horizon[0] = std::clamp(0.55f + 0.45f * m_cloudFogged, 0.0f, 1.0f);
     lf.horizon[1] = std::clamp(m_cloudParams.shade, 0.25f, 4.0f);
-    std::memcpy(lf.tint, m_cloudTint, 12);
+    // The game's colour for its clouds, mostly whitened: its brightness kept, a little of its hue (the zones' teal
+    // skies made them very blue - user: whiter).
+    {
+        const float l = 0.3f * m_cloudTint[0] + 0.59f * m_cloudTint[1] + 0.11f * m_cloudTint[2];
+        for (int k = 0; k < 3; ++k) lf.tint[k] = l + (m_cloudTint[k] - l) * 0.3f;
+    }
     const float storm = std::clamp(m_rain, 0.0f, 1.0f);
     lf.tint[3] = m_cloudParams.brightness * (1.0f - 0.4f * storm);
-    // The sky's light: its hue (the haze's, half), about unit brightness - the tint carries how light.
+    // The sky's light: its hue (the haze's, a quarter: whiter clouds), about unit brightness - the tint carries how light.
     const float luma = std::max(0.3f * m_cloudHaze[0] + 0.59f * m_cloudHaze[1] + 0.11f * m_cloudHaze[2], 1e-3f);
-    for (int k = 0; k < 3; ++k) lf.ambient[k] = 0.5f + 0.5f * m_cloudHaze[k] / luma;
+    for (int k = 0; k < 3; ++k) lf.ambient[k] = 0.75f + 0.25f * m_cloudHaze[k] / luma;
     lf.ambient[3] = storm;
     for (int k = 0; k < 3; ++k) lf.haze[k] = m_cloudHaze[k];
     if (m_frameNumber % 600 == 2)

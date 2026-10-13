@@ -40,6 +40,24 @@ const float kPi = 3.14159265;
 
 float Remap(float v, float lo, float hi, float a, float b) { return a + (v - lo) * (b - a) / max(hi - lo, 1e-5); }
 
+// The sunlight reaching the clouds: reddened low in the sky (its long way through the air - orange, then pink near
+// the horizon), gone a little after it sets (the clouds stay lit a while: they're high).
+vec3 SunLight(vec3 sunL)
+{
+    float low = 1.0 - smoothstep(0.0, 0.35, sunL.y);
+    low *= low;                                  // (golden first; pink only in its last few degrees)
+    vec3 tint = mix(vec3(1.0), mix(vec3(1.0, 0.8, 0.58), vec3(1.0, 0.6, 0.5), smoothstep(0.75, 1.0, low)), low);
+    return FL.sunColor.rgb * tint * smoothstep(-0.12, 0.1, sunL.y);
+}
+
+// The glow under the clouds round sunset: their undersides lit pink by the light low in the sky (most with the sun
+// at the horizon and a little after). Scaled as the sky's light (about 1).
+vec3 Afterglow(vec3 sunL)
+{
+    float g = smoothstep(-0.14, -0.02, sunL.y) * (1.0 - smoothstep(0.02, 0.12, sunL.y));
+    return vec3(1.0, 0.5, 0.55) * g;
+}
+
 // The air between the eye and a cloud dist away (premultiplied light, alpha): its colour goes towards the game's
 // distance colour (the more the farther, and low in the sky the more the game fogs its clouds), and far off it thins
 // out into the game's own sky - whose horizon is its fog band - as the stock sky's clouds do (no crisp clouds down to
@@ -171,7 +189,7 @@ vec4 Deck(vec3 eye, vec3 dir, float jitter)
     float dt = (t1 - t0) / float(kSteps);
     float sigma = L.shape.w * 0.9, transmit = 1.0;
     vec3 sunL = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
-    vec3 sun = FL.sunColor.rgb * smoothstep(-0.08, 0.12, sunL.y) * 0.35;
+    vec3 sun = SunLight(sunL) * 0.35 + Afterglow(sunL) * 0.45;   // (its underside: the afterglow on it)
     vec3 light = vec3(0.0);
     for (int i = 0; i < kSteps && transmit > 0.02; ++i) {
         vec3 p = eye + dir * (t0 + (float(i) + jitter) * dt);
@@ -279,9 +297,9 @@ void main()
     // Steps growing with the distance (short near the eye: the near clouds' detail; long far off), at most L.view.z.
     int steps = int(L.view.z);
     vec3 sunL = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
-    float sunUp = smoothstep(-0.08, 0.12, sunL.y);
     float cosT = dot(dir, sunL);
-    vec3 sunColour = FL.sunColor.rgb * sunUp;
+    vec3 sunColour = SunLight(sunL);
+    vec3 glow = Afterglow(sunL);
     float sigma = L.shape.w;
     float transmit = 1.0;
     vec3 light = vec3(0.0);
@@ -330,6 +348,7 @@ void main()
         // (Dimmed by the cloud towards the sun only over a short way - from far off, the cloud's shadows lie through
         // it as long streaks all one way.)
         vec3 sky = mix(skyLow * mix(1.0, 0.75, L.ambient.w), skyTop, smoothstep(0.0, 0.8, h)) * mix(0.4, 1.0, exp(-od * 0.3));
+        sky += glow * (1.0 - smoothstep(0.0, 0.7, h)) * 0.9;   // (round sunset: the pink undersides)
         // (The game's colour - its puffs as it shows them, fog and all - wholly in the sky's light, half in the sun's:
         // a storm takes the game's colour, sunlit tops stay bright.)
         vec3 S = (sunColour * sun * powder * 1.5 * mix(L.tint.rgb, vec3(dot(L.tint.rgb, vec3(0.3, 0.59, 0.11))), 0.5) +
