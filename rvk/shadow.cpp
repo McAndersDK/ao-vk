@@ -488,8 +488,19 @@ void Device::RecordShadowCaster(uint32_t primitive, uint32_t fvf, uint32_t strid
     c.kind = m_drawVisualKind;
     c.leafKey = m_drawLeaves ? m_drawLeafKey : 0;
     m_casters.push_back(c);
-    if (m_statelVerified == 0 && VisualKind(c.kind) == VisualKind::Static)
-        CheckStatelDraw(m_world, vertexCount, indexCount);   // (statels.cpp: is our placement the game's?)
+    if (VisualKind(c.kind) == VisualKind::Static) {
+        if (m_statelVerified == 0)
+            CheckStatelDraw(m_world, vertexCount, indexCount);   // (statels.cpp: is our placement the game's?)
+        // A piece of a placed object, which casts from the playfield's list wherever it is: not remembered (one
+        // remembered under another's key is what made the wall's shadow come and go - sun42).
+        if (StatelPieceCasting(m_world, vertexCount, indexCount)) {
+            ++m_statelCoveredThisFrame;
+            auto stale = m_casterCache.find(key);
+            if (stale != m_casterCache.end())
+                ForgetCachedCaster(stale);
+            return;
+        }
+    }
     auto cached = m_casterCache.find(key);
     if (cached != m_casterCache.end()) {
         CachedCaster& e = cached->second;

@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <functional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 struct VmaAllocator_T;
@@ -1131,6 +1132,10 @@ private:
     void DestroyStatels();
     void AddStatelShadowItems();
     void CheckStatelDraw(const d3d::Matrix& world, uint32_t vertexCount, uint32_t indexCount);
+    // A drawn piece that is one of ours (same counts, same spot: m_statelLookup) while ours cast.
+    bool StatelPieceCasting(const d3d::Matrix& world, uint32_t vertexCount, uint32_t indexCount) const;
+    std::unordered_set<uint64_t> m_statelLookup;
+    uint32_t m_statelCoveredThisFrame = 0, m_statelCoveredLast = 0;
     std::unordered_map<uint64_t, CasterStreak> m_casterStreaks;
     std::vector<std::pair<uint64_t, std::pair<VkBuffer, VmaAllocation_T*>>> m_deadBuffers;
     d3d::Matrix m_frameViewProj{};               // the frame's camera, at its first shadow caster

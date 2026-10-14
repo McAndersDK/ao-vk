@@ -130,7 +130,12 @@ void Device::EndFrameDump()
     {
         // Every sun shadow item near the eye (within 120 units): this frame's or remembered, shadow-only or drawn, its
         // key, where, its box, and the cascades it went into (bits: 1 nearest .. 8 widest) - which casters a shadow had.
-        std::fprintf(m_dumpFile, "# sun shadow items within 120 of the eye (T this frame, M remembered; cascades bits):\n");
+        std::fprintf(m_dumpFile, "# placed objects (statels.cpp): playfield %u, %zu pieces, %u cast this frame, %u drawn ones not "
+                                 "remembered; mode %u, placement %s (%u drawn pieces as ours, %u otherwise)\n",
+                     m_statelPlayfield, m_statelItems.size(), m_statelItemsThisFrame, m_statelCoveredLast, m_statelMode,
+                     m_statelVerified > 0 ? "confirmed" : m_statelVerified < 0 ? "refused" : "unconfirmed", m_statelMatched,
+                     m_statelMismatched);
+        std::fprintf(m_dumpFile, "# sun shadow items within 120 of the eye (T this frame, M remembered, P placed; cascades bits):\n");
         for (const ShadowItem& it : m_shadowItems) {
             float d2 = 0.0f;
             for (int j = 0; j < 3; ++j) {
@@ -140,7 +145,7 @@ void Device::EndFrameDump()
             if (d2 > 120.0f * 120.0f)
                 continue;
             std::fprintf(m_dumpFile, "%c %016llx: at (%.2f %.2f %.2f) box (%.1f %.1f %.1f)..(%.1f %.1f %.1f) v %u i %u%s cascades %x\n",
-                         it.cached ? 'M' : 'T', (unsigned long long)it.cacheKey, double(it.world.m[3][0]),
+                         !it.cached ? 'T' : (it.cacheKey >> 48) == 0x5354 ? 'P' : 'M', (unsigned long long)it.cacheKey, double(it.world.m[3][0]),
                          double(it.world.m[3][1]), double(it.world.m[3][2]), double(it.boundsMin[0]), double(it.boundsMin[1]),
                          double(it.boundsMin[2]), double(it.boundsMax[0]), double(it.boundsMax[1]), double(it.boundsMax[2]),
                          it.vertexCount, it.indexCount, it.texture ? " cut-out" : "", it.cascades);

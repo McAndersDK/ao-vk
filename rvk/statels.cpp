@@ -55,6 +55,18 @@ static_assert(sizeof(PackMesh) == 36, "statel pack mesh");
 static_assert(sizeof(PackPiece) == 112, "statel pack piece");
 static_assert(sizeof(PackStatel) == 32, "statel pack statel");
 
+// A piece's identity for m_statelLookup: its counts and where it stands, to an eighth of a unit (the game's matrix
+// and ours agree to a thousandth: offline against the game's frame dumps, 2026-10-14).
+uint64_t PieceKey(uint32_t vertexCount, uint32_t indexCount, const float* at)
+{
+    uint64_t h = 0xCBF29CE484222325ull;
+    auto mix = [&](uint64_t v) { h = (h ^ v) * 0x100000001B3ull; };
+    mix(vertexCount);
+    mix(indexCount);
+    for (int k = 0; k < 3; ++k) mix(uint64_t(int64_t(std::lround(double(at[k]) * 8.0))));
+    return h;
+}
+
 // Hamilton product a * b of (x, y, z, w) quaternions.
 void QuatMul(const double* a, const double* b, double* out)
 {
@@ -109,6 +121,7 @@ void Device::DestroyStatels()
         if (t) DestroyTexture(t);
     m_statelMasks.clear();
     m_statelPieces.clear();
+    m_statelLookup.clear();
     m_statelItems.clear();
     m_statelPlaced.clear();
     m_statelCellStart.clear();
@@ -300,6 +313,11 @@ bool Device::LoadStatels(const char* path, uint32_t playfield)
             for (uint32_t x = x0; x <= x1; ++x) m_statelCellItems[fill[size_t(z) * m_statelGridW + x]++] = i;
     }
     m_statelStamp.assign(m_statelItems.size(), 0);
+    m_statelLookup.reserve(m_statelItems.size());
+    for (const StatelItem& it : m_statelItems) {
+        const StatelPiece& p = m_statelPieces[it.piece];
+        m_statelLookup.insert(PieceKey(p.vertexCount, p.indexCount, it.world.m[3]));
+    }
     m_statelPlayfield = playfield;
     if (m_statelVerified == 0)
         m_statelMatched = m_statelMismatched = 0;
@@ -369,10 +387,19 @@ void Device::CheckStatelDraw(const d3d::Matrix& world, uint32_t vertexCount, uin
     }
 }
 
+bool Device::StatelPieceCasting(const d3d::Matrix& world, uint32_t vertexCount, uint32_t indexCount) const
+{
+    if (m_statelLookup.empty() || m_statelMode == 0 || (m_statelMode == 1 && m_statelVerified <= 0))
+        return false;
+    return m_statelLookup.count(PieceKey(vertexCount, indexCount, world.m[3])) != 0;
+}
+
 // CollectShadowItems: the pieces within the shadows' reach of the eye.
 void Device::AddStatelShadowItems()
 {
     m_statelItemsThisFrame = 0;
+    m_statelCoveredLast = m_statelCoveredThisFrame;   // (the frame's drawn pieces of ours: for the frame dump)
+    m_statelCoveredThisFrame = 0;
     if (m_statelItems.empty() || m_statelMode == 0 || (m_statelMode == 1 && m_statelVerified <= 0))
         return;
     UpdateFrameEye();
