@@ -543,8 +543,10 @@ void Device::RecordShadowCaster(uint32_t primitive, uint32_t fvf, uint32_t strid
         return;
     // Remembered only what stands still in the world: not what moved while seen (a character's gear - idle, its
     // pieces shifted, each new key remembered at an old place and forgotten again: small shadows blinking ~0.4 s,
-    // user 2026-10-13), nor a character's own.
-    if (streak.moved || c.owner != 0) {
+    // user 2026-10-13), nor a character's own. Except what sways: the game tilts its trees' matrices round a pivot
+    // off their origin, so a swaying crown moves - refused, the trees' shadows went missing out of view (2026-10-14).
+    const bool canSway = c.texture != nullptr || c.sway[3] > 0.5f || c.leafKey != 0;
+    if ((streak.moved && !canSway) || c.owner != 0) {
         ++m_cacheRefusedMoving;
         return;
     }
