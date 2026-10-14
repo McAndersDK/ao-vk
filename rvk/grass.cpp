@@ -285,7 +285,7 @@ void Device::CaptureTerrain(uint32_t primitive, const FvfLayout& layout, const v
     // A chunk already captured is skipped whole unless a tile under it is newer than that capture (made since, or its
     // light reset): drawing the same triangles again would add nothing - a cell only ever takes a finer one. Chunks are
     // known by their contents (the ground's level of detail changes them), the pass and the texture.
-    const uint64_t chunkKey = TerrainChunkKey(vertices, vertexCount, uint32_t(layout.stride), indexCount) ^
+    const uint64_t chunkKey = TerrainChunkKey(vertices, vertexCount, uint32_t(layout.stride), indices, indexCount) ^
                               (lightPass ? 0x9E3779B97F4A7C15ull : 0) ^
                               uint64_t(reinterpret_cast<uintptr_t>(tex)) * 0x100000001B3ull;
     GrassChunk& chunk = m_grassChunks[chunkKey];
@@ -544,14 +544,27 @@ void Device::CaptureCover(uint32_t primitive, const FvfLayout& layout, const voi
         m_grassCoverFrame = m_frameNumber;
         m_grassCoverMs = 0.0;
     }
-    // The object's record: with its entry in the per-object cache (objects.cpp), else by its mesh and matrix here.
-    GrassChunk* record = m_drawObject ? &m_drawObject->cover : nullptr;
-    if (!record) {
+    // The object's record: with its entry in the per-object cache (objects.cpp), else by its mesh and matrix here - as
+    // on its first frame, before its mesh counts as static and it has an entry: the entry then takes that record over.
+    auto mapKey = [&] {
         uint64_t key = uint64_t(reinterpret_cast<uintptr_t>(m_drawMesh)) * 0x9E3779B97F4A7C15ull;
         const uint32_t* wb = reinterpret_cast<const uint32_t*>(&m_world);
         for (int i = 0; i < 16; ++i)
             key = (key ^ wb[i]) * 0x100000001B3ull;
-        record = &m_grassCovers[key];
+        return key;
+    };
+    GrassChunk* record;
+    if (m_drawObject) {
+        record = &m_drawObject->cover;
+        if (record->lastSeen == 0 && !m_grassCovers.empty()) {
+            auto it = m_grassCovers.find(mapKey());
+            if (it != m_grassCovers.end()) {
+                *record = it->second;
+                m_grassCovers.erase(it);
+            }
+        }
+    } else {
+        record = &m_grassCovers[mapKey()];
     }
     GrassChunk& seen = *record;
     if (seen.lastSeen + 1 < m_frameNumber)

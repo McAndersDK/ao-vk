@@ -498,6 +498,7 @@ void Device::DrawOrphanParticles()
             m_textures = st.textures;
             m_view = st.view;
             m_proj = st.proj;
+            ++m_cameraGen;
             m_texMatrix[0] = st.texMatrix[0];
             m_texMatrix[1] = st.texMatrix[1];
             m_viewport = st.viewport;

@@ -467,7 +467,12 @@ void Device::RecordShadowCaster(uint32_t primitive, uint32_t fvf, uint32_t strid
         return std::memcmp(&m_casterViews[v].view, &m_view, sizeof(m_view)) == 0 &&
                std::memcmp(&m_casterViews[v].proj, &m_proj, sizeof(m_proj)) == 0;
     };
-    if (view >= m_casterViews.size() || !matchesView(view)) {
+    // (The camera unchanged since the last caster this frame: its view, without comparing the matrices.)
+    const bool sameCamera = m_casterViewGen == m_cameraGen && m_casterViewFrame == m_frameNumber;
+    m_casterViewGen = m_cameraGen;
+    m_casterViewFrame = m_frameNumber;
+    if (sameCamera && view < m_casterViews.size()) {
+    } else if (view >= m_casterViews.size() || !matchesView(view)) {
         view = 0;
         while (view < m_casterViews.size() && !matchesView(view))
             ++view;
@@ -907,7 +912,11 @@ void Device::UpdateCasterCache()
 // Whether the current draw uses the world camera's projection (3D interface previews use their own).
 bool Device::WorldCamera() const
 {
-    return std::memcmp(&m_proj, &m_shadowWorldProj, sizeof(m_proj)) == 0;
+    if (m_worldCameraGen != m_cameraGen) {       // (asked several times a draw: once per camera)
+        m_worldCameraSame = std::memcmp(&m_proj, &m_shadowWorldProj, sizeof(m_proj)) == 0;
+        m_worldCameraGen = m_cameraGen;
+    }
+    return m_worldCameraSame;
 }
 
 bool Device::ShadowReceiver(uint32_t fvf) const
@@ -1435,6 +1444,7 @@ void Device::RenderShadowMap(VkCommandBuffer cmd)
         }
         m_frameViewProj = MulMatrix(m_casterViews[world].view, m_casterViews[world].proj);
         m_shadowWorldProj = m_casterViews[world].proj;
+        m_worldCameraGen = 0;                    // (WorldCamera: asked again)
         std::memcpy(m_frameEye, eye, sizeof(eye));             // also what caster cache eviction measures from
     }
     if (!m_frameViewProjValid || m_casters.empty()) {

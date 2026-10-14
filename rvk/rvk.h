@@ -836,7 +836,8 @@ private:
     float m_foliageMinH = 0.0f, m_foliageMaxH = 0.0f;
     uint32_t m_drawFoliage = 0;                  // the current constants' foliage class: 0 none, 1 near, 2 far (LOD)
     VkSampler m_bumpSampler = VK_NULL_HANDLE;
-    static uint64_t TerrainChunkKey(const void* vertices, uint32_t vertexCount, uint32_t stride, uint32_t indexCount);
+    uint64_t TerrainChunkKey(const void* vertices, uint32_t vertexCount, uint32_t stride, const uint16_t* indices,
+                             uint32_t indexCount) const;
     uint32_t m_dumpVertexCount = 0;
     bool m_drawOverbright2x = false;              // the current draw is blended at 2x (F_OVERBRIGHT2X)
     bool Overbright2x(uint32_t fvf) const;
@@ -962,6 +963,7 @@ private:
     struct CasterView { d3d::Matrix view, proj; uint32_t count; };
     std::vector<CasterView> m_casterViews;
     uint32_t m_casterViewLast = 0;               // the view most casters matched (RecordShadowCaster's fast path)
+    uint64_t m_casterViewGen = 0, m_casterViewFrame = 0;   // ... as of this camera generation, this frame
     d3d::Matrix m_shadowWorldProj{};             // the world camera's projection: only its draws take shadows
     bool WorldCamera() const;
     bool m_drawIsLabel = false;                  // the current draw is a name label (IsLabel)
@@ -1602,8 +1604,11 @@ private:
         uint64_t cachedEpoch = 0;
         uint64_t statelGen = 0;                  // StatelPieceKinds as of this m_statelLookupGen (0: not looked up)
         uint8_t statelKinds = 0;
+        float boxCentre[3], boxExtent[3];        // DrawWorldBox's box
+        float lightMin[3], lightMax[3];          // FrameLightMask's (its own sums: the same bits)
     };
     std::vector<ObjectEntry> m_objects;          // open addressing (linear probing), a power of two long
+    std::vector<uint64_t> m_objectKeys;          // their keys alone (probed: an entry is a few cache lines)
     size_t m_objectCount = 0;
     ObjectEntry* m_drawObject = nullptr;         // the current draw's, when it is a static mesh
     bool m_objectCache = true;                   // RANDYVK_OBJECT_CACHE=0: off (A/B)
@@ -1613,6 +1618,7 @@ private:
     uint64_t m_statelLookupGen = 1;              // m_statelLookup changed (ObjectEntry::statelKinds)
     ObjectEntry* FindObject();
     void PruneObjects();
+    void RehashObjects(size_t size, uint64_t keep);
     bool DrawStatelCasting(uint32_t vertexCount, uint32_t indexCount);   // StatelPieceCasting for the current draw
     std::vector<GrassTile*> m_grassChunkGrid;    // CaptureTerrain's scratch: the tiles under a chunk
     uint64_t m_grassTileEpoch = 0;               // the latest tile made or light reset (the chunks' clock)
@@ -2190,6 +2196,13 @@ private:
     static constexpr uint32_t kMotionMaxVertices = 8192;
     MotionFrame m_motionPrev, m_motionCur;
     bool MotionVectorDraw(uint32_t fvf) const;   // this draw writes motion vectors
+    // The camera (view, projection) changes: a generation, so per-draw checks against a camera compare a number.
+    uint64_t m_cameraGen = 1;
+    mutable uint64_t m_aoCameraGen = 0;          // AoCamera's answer as of this generation (0: none)
+    mutable bool m_aoCameraSame = false;
+    bool AoCamera() const;                       // the current camera is the scene's first (m_aoView / m_aoProj)
+    mutable uint64_t m_worldCameraGen = 0;       // WorldCamera's answer as of this generation (0: none)
+    mutable bool m_worldCameraSame = false;
     uint64_t MotionKey(uint32_t primitive, uint32_t fvf, uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount) const;
     Texture* m_tonemapped = nullptr;             // with motion blur: the tone mapped scene, blurred into m_ldrMain
     VkPipeline m_motionPipeline = VK_NULL_HANDLE;

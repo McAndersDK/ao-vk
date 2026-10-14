@@ -153,6 +153,7 @@ void Device::SetTransform(uint32_t type, const d3d::Matrix& m)
     if (std::memcmp(target, &m, sizeof(m)) != 0) {
         *target = m;
         m_constantsDirty = true;
+        if (type == d3d::View || type == d3d::Projection) ++m_cameraGen;
     }
 }
 
@@ -408,19 +409,32 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
     BuildLightGrid();
 }
 
-// Identity of a ground chunk within a frame: its sizes and a sample of its vertices (base and lighting passes draw
-// the same vertices).
-uint64_t Device::TerrainChunkKey(const void* vertices, uint32_t vertexCount, uint32_t stride, uint32_t indexCount)
+// Identity of a ground chunk within a frame: its sizes, its vertices - a static snapshot's serial and place, else a
+// sample of them - and a sample of its indices (base and lighting passes draw the same). The game draws its ground as
+// small index lists into big static vertex buffers: by sizes and vertices alone, the chunks of one buffer with the
+// same index count were one chunk (one base texture; the grass captured under the first of them only).
+uint64_t Device::TerrainChunkKey(const void* vertices, uint32_t vertexCount, uint32_t stride, const uint16_t* indices,
+                                 uint32_t indexCount) const
 {
     uint64_t h = 1469598103934665603ull ^ (uint64_t(vertexCount) << 32) ^ indexCount;
-    const uint8_t* v = static_cast<const uint8_t*>(vertices);
-    uint32_t step = vertexCount > 32 ? vertexCount / 32 : 1;
-    for (uint32_t i = 0; i < vertexCount; i += step) {   // the position as three words, not twelve bytes
-        uint32_t w[3];
-        std::memcpy(w, v + size_t(i) * stride, sizeof(w));
-        h = (h ^ w[0]) * 1099511628211ull;
-        h = (h ^ w[1]) * 1099511628211ull;
-        h = (h ^ w[2]) * 1099511628211ull;
+    if (m_drawStaticBuffer) {
+        h = (h ^ m_drawStaticSerial) * 1099511628211ull;
+        h = (h ^ m_drawStaticOffset) * 1099511628211ull;
+    } else {
+        const uint8_t* v = static_cast<const uint8_t*>(vertices);
+        uint32_t step = vertexCount > 32 ? vertexCount / 32 : 1;
+        for (uint32_t i = 0; i < vertexCount; i += step) {   // the position as three words, not twelve bytes
+            uint32_t w[3];
+            std::memcpy(w, v + size_t(i) * stride, sizeof(w));
+            h = (h ^ w[0]) * 1099511628211ull;
+            h = (h ^ w[1]) * 1099511628211ull;
+            h = (h ^ w[2]) * 1099511628211ull;
+        }
+    }
+    if (indices) {
+        uint32_t step = indexCount > 16 ? indexCount / 16 : 1;
+        for (uint32_t i = 0; i < indexCount; i += step)
+            h = (h ^ (indices[i] | uint64_t(i) << 16)) * 1099511628211ull;
     }
     return h;
 }
@@ -433,7 +447,17 @@ bool Device::MotionVectorDraw(uint32_t fvf) const
     return ((m_motionMode == 1 && m_motionBlur > 0.0f) || TaaActive()) && m_prevViewProjValid && m_target == m_scene &&
            m_aoProjValid &&
            (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZRHW && m_rs[d3d::RS_ZENABLE] && m_rs[d3d::RS_ZWRITEENABLE] &&
-           std::memcmp(&m_proj, &m_aoProj, sizeof(m_proj)) == 0 && std::memcmp(&m_view, &m_aoView, sizeof(m_view)) == 0;
+           AoCamera();
+}
+
+bool Device::AoCamera() const
+{
+    if (m_aoCameraGen != m_cameraGen) {
+        m_aoCameraSame = std::memcmp(&m_proj, &m_aoProj, sizeof(m_proj)) == 0 &&
+                         std::memcmp(&m_view, &m_aoView, sizeof(m_view)) == 0;
+        m_aoCameraGen = m_cameraGen;
+    }
+    return m_aoCameraSame;
 }
 
 // A mesh's identity across frames, independent of where it is and of its (CPU-skinned) vertices: format, sizes,
@@ -814,6 +838,11 @@ bool Device::FoliageFar() const
 // through the matrix's magnitudes).
 void Device::DrawWorldBox(float c[3], float e[3]) const
 {
+    if (m_drawObject) {                          // (kept with the object: objects.cpp)
+        std::memcpy(c, m_drawObject->boxCentre, 12);
+        std::memcpy(e, m_drawObject->boxExtent, 12);
+        return;
+    }
     const auto& w = m_world.m;
     float mc[3], me[3];
     for (int i = 0; i < 3; ++i) {
@@ -1164,10 +1193,13 @@ void Device::FrameLightMask(uint32_t fvf, uint32_t stride, const void* vertices,
             for (int j = 0; j < 3; ++j) { mn[j] = std::min(mn[j], p[j]); mx[j] = std::max(mx[j], p[j]); }
         }
     }
-    // The model box through the world matrix (centre and half extents).
+    // The model box through the world matrix (centre and half extents); kept with the object (objects.cpp).
     float wmn[3], wmx[3];
     const auto& m = m_world.m;
-    for (int j = 0; j < 3; ++j) {
+    if (m_drawObject) {
+        std::memcpy(wmn, m_drawObject->lightMin, sizeof(wmn));
+        std::memcpy(wmx, m_drawObject->lightMax, sizeof(wmx));
+    } else for (int j = 0; j < 3; ++j) {
         float c = m[3][j], e = 0.0f;
         for (int i = 0; i < 3; ++i) {
             c += 0.5f * (mn[i] + mx[i]) * m[i][j];
@@ -2111,6 +2143,10 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     if (!m_inFrame || !vertexCount)
         return;
     m_drawObject = nullptr;                      // (found below for a static mesh; none for a shadow-only draw)
+    struct ObjectScope {                         // ... and none once the draw is done (DrawWorldBox, FrameLightMask
+        Device* d;                               // read it: outside a draw they must work from the matrix)
+        ~ObjectScope() { d->m_drawObject = nullptr; }
+    } objectScope{this};
     if (m_shadowOnlyDraw) {                      // (a culled static mesh, for its shadow alone: nothing else)
         DrawShadowOnly(primitive, fvf, vertices, vertexCount, indices, indexCount);
         return;
@@ -2165,6 +2201,7 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
                 m_aoProj = m_proj;
                 m_aoView = m_view;
                 m_aoProjValid = true;
+                m_aoCameraGen = 0;               // (AoCamera: asked again)
             }
         } else if (m_sceneSaw3D && IsInterfaceDraw(fvf)) {
             m_sceneEndDraw = m_dumpDraw;
@@ -2492,9 +2529,9 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     m_drawBumpBase = nullptr;
     if (terrain && m_textures[0]) {
         if (!m_rs[d3d::RS_LIGHTING] && !m_rs[d3d::RS_ALPHABLENDENABLE]) {
-            m_terrainBases[TerrainChunkKey(vertices, vertexCount, layout.stride, indexCount)] = m_textures[0];
+            m_terrainBases[TerrainChunkKey(vertices, vertexCount, layout.stride, indices, indexCount)] = m_textures[0];
         } else if (m_rs[d3d::RS_LIGHTING] && IsMultiplyPass()) {
-            auto it = m_terrainBases.find(TerrainChunkKey(vertices, vertexCount, layout.stride, indexCount));
+            auto it = m_terrainBases.find(TerrainChunkKey(vertices, vertexCount, layout.stride, indices, indexCount));
             if (it != m_terrainBases.end() &&
                 (m_bump > 0.0f || (m_normalMaps && m_pixelLighting && it->second->m_normalMap) ||
                  (m_pbr.enabled && m_pixelLighting && it->second->m_ormMap)))
