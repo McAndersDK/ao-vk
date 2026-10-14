@@ -4,6 +4,8 @@
 // blocks on it - the watchdog must still write every thread's place. Exits by itself, never with a dialog.
 #include "native/native.h"
 
+#include <intrin.h>
+
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -72,6 +74,17 @@ int main(int argc, char** argv)
     HeapUnlock(GetProcessHeap());
     Print("check: still running after both");
 
+    if (argc > 1 && !std::strcmp(argv[1], "--heap-smash")) {   // does the heap checking in use catch an overrun?
+        auto* p = static_cast<uint8_t*>(HeapAlloc(GetProcessHeap(), 0, 40));
+        std::memset(p, 0xCD, 160);                     // (not 0xAB: Wine fills block tails with it)
+        const BOOL valid = HeapValidate(GetProcessHeap(), 0, nullptr);
+        const BOOL freed = HeapFree(GetProcessHeap(), 0, p);
+        Print("check: HeapValidate %d, HeapFree %d", valid, freed);
+        Print("check: heap smashed (40-byte block, 160 written); NtGlobalFlag %08x, heap flags %08x",
+              *reinterpret_cast<const uint32_t*>(__readfsdword(0x30) + 0x68),
+              *reinterpret_cast<const uint32_t*>(reinterpret_cast<uintptr_t>(GetProcessHeap()) + 0x40));
+        return 0;
+    }
     if (argc > 1 && !std::strcmp(argv[1], "--no-hang")) return 0;
     Print("check: hang (a thread keeps the heap lock and a critical section, this one waits on the section)");
     InitializeCriticalSection(&g_held);

@@ -348,7 +348,7 @@ void Device::SavePipelineCache(const char* why)
     if (vkGetPipelineCacheData(m_device, m_pipelineCache, &size, data.data()) != VK_SUCCESS)
         return;
     data.resize(size);
-    const std::string temp = file + ".tmp";
+    const std::string temp = file + "." + std::to_string(GetCurrentProcessId()) + ".tmp";   // (two clients in one folder)
     FILE* f = std::fopen(temp.c_str(), "wb");
     if (!f)
         return;

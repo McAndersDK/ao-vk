@@ -19,6 +19,8 @@ namespace rvkproxy {
 HRESULT StubCall(unsigned index);                 // logs an unimplemented method once
 void CountBackendDraw();                          // heartbeat statistics
 unsigned ComIndex(const char* name);              // counter index of "Interface::Method"
+// randy-vk.log's path for this process (a second client in the same folder gets randy-vk-2.log).
+const char* LogPath();
 void RvkLog(const char* fmt, ...);
 void ParticleFrame();                             // each presented frame (rvk_particles.cpp)
 void WeatherFrame();                              // each presented frame (rvk_weather.cpp)

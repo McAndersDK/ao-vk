@@ -23,7 +23,7 @@ cp "${RANDY_DLL:-build/linux-release/randy31.dll}" "$client/randy31.dll"
 cd "$client" || exit 1
 # RANDYVK_DDRAW (e.g. trace) is passed through from the caller's environment.
 rm -f ../logs/randy-vk-harness.log
-WINEPREFIX=${WINEPREFIX:-$HOME/.wine-prk} WINEDEBUG=-all WINEDLLOVERRIDES="msvcr100,msvcp100=n,b" \
+WINEPREFIX=${WINEPREFIX:-$HOME/.wine-prk} WINEDEBUG=${HARNESS_WINEDEBUG:--all} WINEDLLOVERRIDES="msvcr100,msvcp100=n,b" \
 DXVK_CONFIG_FILE="$client/../dxvk.conf" DXVK_LOG_LEVEL=warn RANDYVK_CAPTURE_FRAME=${RANDYVK_CAPTURE_FRAME:-3} \
 RANDYVK_LOG="C:\\linux\\logs\\randy-vk-harness.log" \
     timeout 120 wine randy_harness.exe --shot randy_harness.bmp "$@" > "$out/wine-output.txt" 2>&1

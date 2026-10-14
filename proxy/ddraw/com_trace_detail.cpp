@@ -2,6 +2,7 @@
 // The first kMaxLines calls of each method go to the log one by one; all calls are also counted per
 // distinct description, printed by ComDetailSummary() in inspector captures.
 #include "com_trace.h"
+#include "rvk_backend.h"
 
 #include <cstdio>
 #include <map>
@@ -35,9 +36,7 @@ void Detail(const char* method, const std::string& summary, const std::string& d
     ++g_summary[std::string(method) + " " + summary];
     if (g_lines[method]++ >= kMaxLines)
         return;
-    char path[MAX_PATH] = "randy-vk.log";
-    GetEnvironmentVariableA("RANDYVK_LOG", path, sizeof(path));
-    if (FILE* f = std::fopen(path, "a")) {
+    if (FILE* f = std::fopen(rvkproxy::LogPath(), "a")) {
         std::fprintf(f, "ddraw %s %s%s%s\n", method, summary.c_str(), detail.empty() ? "" : " ", detail.c_str());
         std::fclose(f);
     }

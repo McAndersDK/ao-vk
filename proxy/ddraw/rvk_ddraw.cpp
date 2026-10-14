@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <vector>
 
@@ -41,21 +42,49 @@ ComScope::ComScope(unsigned methodIndex)
 
 ComScope::~ComScope() { LeaveCriticalSection(&g_comLock); }
 
-void RvkLog(const char* fmt, ...)
+// randy-vk.log's path for this process (RANDYVK_LOG, else randy-vk.log in the client folder), settled at the first
+// line anything writes: every writer of the log asks here.
+const char* LogPath()
 {
-    char path[MAX_PATH] = "randy-vk.log";
-    GetEnvironmentVariableA("RANDYVK_LOG", path, sizeof(path));
-    static bool started = false;
-    if (!started) {                              // a session's first line: an old log over 8 MB moves aside
-        started = true;
+    static char path[MAX_PATH] = "randy-vk.log";
+    static const bool settled = [] {
+        GetEnvironmentVariableA("RANDYVK_LOG", path, sizeof(path));
+        // Another client running from the same folder has this log: this one writes randy-vk-2.log (-3, ...), and
+        // RANDYVK_LOG says so to the writers that read it themselves (crash reports, crash.cpp).
+        for (int n = 2; n <= 8; ++n) {
+            char full[MAX_PATH];             // (the name: the whole path, any case - a relative one is per folder)
+            if (!GetFullPathNameA(path, MAX_PATH, full, nullptr)) std::snprintf(full, sizeof(full), "%s", path);
+            std::string name = "randy-vk-log:" + std::string(full);
+            for (char& c : name) c = c == '\\' ? '/' : char(std::tolower(static_cast<unsigned char>(c)));
+            HANDLE mutex = CreateMutexA(nullptr, FALSE, name.c_str());
+            if (mutex && GetLastError() != ERROR_ALREADY_EXISTS)
+                break;                       // (kept open for the process's life: it marks the log as taken)
+            if (mutex) CloseHandle(mutex);
+            std::string next(path);
+            const size_t dot = next.find_last_of('.');
+            std::string base = dot == std::string::npos ? next : next.substr(0, dot);
+            if (n > 2) base = base.substr(0, base.find_last_of('-'));
+            next = base + "-" + std::to_string(n) + ".log";
+            std::snprintf(path, sizeof(path), "%s", next.c_str());
+            SetEnvironmentVariableA("RANDYVK_LOG", path);
+        }
+        // A session's first line: an old log over 8 MB moves aside.
         WIN32_FILE_ATTRIBUTE_DATA a;
         if (GetFileAttributesExA(path, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > (8u << 20))) {
             std::string old(path);
-            size_t dot = old.find_last_of('.');
+            const size_t dot = old.find_last_of('.');
             old = (dot == std::string::npos ? old : old.substr(0, dot)) + ".old.log";
             MoveFileExA(path, old.c_str(), MOVEFILE_REPLACE_EXISTING);
         }
-    }
+        return true;
+    }();
+    (void)settled;
+    return path;
+}
+
+void RvkLog(const char* fmt, ...)
+{
+    const char* path = LogPath();
     if (FILE* f = std::fopen(path, "a")) {
         std::fputs("randy-vk rvk: ", f);
         va_list args;

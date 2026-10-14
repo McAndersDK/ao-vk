@@ -77,9 +77,7 @@ std::vector<uint32_t> g_comStart;            // COM call counters when the captu
 FILE* Log()
 {
     static FILE* f = [] {
-        char path[MAX_PATH] = "randy-vk.log";
-        GetEnvironmentVariableA("RANDYVK_LOG", path, sizeof(path));
-        FILE* file = std::fopen(path, "a");
+        FILE* file = std::fopen(rvkproxy::LogPath(), "a");
         if (file)
             std::fprintf(file, "\n==== randy-vk frame inspector, pid %lu, %u traced exports\n",
                          GetCurrentProcessId(), kExportCount);
