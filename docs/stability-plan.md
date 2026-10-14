@@ -103,3 +103,19 @@ proxy/trace.cpp captures a whole frame **every 60 s** (`now - g_lastAuto > 60000
 and map work plus `GetModuleHandleExA` (loader lock) per traced call, and a block appended to randy-vk.log (qnix: 330
 captures). That's a guaranteed hitch a minute for every user, and loader-lock traffic on the game thread. Make the
 auto capture opt-in (env/ini), keep Ctrl+Shift+F12.
+
+## Status (2026-10-14, end of day)
+
+Done on main (unpushed; release 0.5.0 = main + these):
+- P0 instrumentation: crash.cpp fault reports + hang watchdog (tools/crash-check.sh), slow-frame lines, frame
+  inspector auto-capture opt-in, ao-wine.sh logs the staged DLL.
+- Native parts default on, existing installs migrated once ([Native] Version=1).
+- Two clients in one folder: separate logs (randy-vk-2.log), per-process pipeline-cache temp file.
+- Texture writes: only the locked rows uploaded; "texture writes:" in the 600-frame line (chat-scroll report).
+- "Setting states while states are already set": only sun39/sun40 sessions (shadow-only draws, fixed); none since.
+
+Tried, didn't work: Wine heap checking (GlobalFlag 0xf0 is applied - heap flags 0x60000062 - but HeapValidate
+passes a 120-byte overrun); ASan for i386 needs clang_rt.asan_dynamic-i386.dll, which xwin didn't fetch.
+
+Waiting on in-game data (rc050b): the zone-load freeze (hang report), ben's AI-mission crash, kerri's planet-map
+spike, the chat-scroll numbers, cirassel's attack stutter (slow-frame lines).
