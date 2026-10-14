@@ -5,7 +5,8 @@
 // arguments, then restores everything and jumps to the original export with the stack exactly as the
 // caller left it. No signatures are needed, so any export can be traced.
 //
-// Normally OnCall() only watches for frame boundaries (Randy_t::Flip). Ctrl+Shift+F12, every 60 s, or
+// Normally OnCall() only watches for frame boundaries (Randy_t::Flip). Ctrl+Shift+F12, every RANDYVK_INSPECT_EVERY
+// seconds (unset: never - a captured frame is a hitch, and players don't need one a minute), or
 // frame number RANDYVK_CAPTURE_FRAME arms a capture of the next whole frame: the sequence of passes, render targets and draw calls
 // (grouped by calling module), per-export call counts, the contents of the render lists, and (with
 // RANDYVK_DDRAW=trace) the Direct3D 7 COM calls Randy made during the frame.
@@ -63,6 +64,7 @@ enum class Capture { Idle, Armed, Recording };
 Capture g_capture = Capture::Idle;
 DWORD g_captureThread;
 DWORD g_lastAuto;
+DWORD g_autoEvery;                           // RANDYVK_INSPECT_EVERY, in ms; 0 = no automatic captures
 unsigned g_frame;
 std::vector<std::string> g_events;
 std::map<std::string, unsigned> g_counts;   // "export <- module" -> calls
@@ -267,6 +269,9 @@ void Init()
     char frame[16] = "";
     if (GetEnvironmentVariableA("RANDYVK_CAPTURE_FRAME", frame, sizeof(frame)))
         g_captureFrame = unsigned(std::atoi(frame));
+    char every[16] = "";
+    if (GetEnvironmentVariableA("RANDYVK_INSPECT_EVERY", every, sizeof(every)) && std::atoi(every) > 0)
+        g_autoEvery = DWORD(std::atoi(every)) * 1000;
     if (g_orig) {
         rvkproxy::InstallDDrawHooks(g_orig);
         rnative::SetLog(&rvkproxy::RvkLog);
@@ -325,11 +330,12 @@ void __cdecl trace_on_call(CallFrame* f)
 
     // Frame boundary: the frame after this Flip is the next one to record.
     ++g_frame;
+    rnative::HangBeat();
     bool hotkey = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000) &&
                   (GetAsyncKeyState(VK_F12) & 1);
     DWORD now = GetTickCount();
     bool requested = g_captureFrame >= 2 && g_frame == g_captureFrame - 1;
-    if (g_capture == Capture::Idle && (hotkey || requested || now - g_lastAuto > 60000)) {
+    if (g_capture == Capture::Idle && (hotkey || requested || (g_autoEvery && now - g_lastAuto > g_autoEvery))) {
         g_lastAuto = now;
         g_capture = Capture::Recording;
         g_captureThread = GetCurrentThreadId();
