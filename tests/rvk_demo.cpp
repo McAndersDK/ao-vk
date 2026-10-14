@@ -1448,6 +1448,7 @@ float g_cloudSheet = 1.0f;        // --cloud-sheet X: RVK_CloudSheet
 float g_cloudShadow = 0.6f;       // --cloud-shadow X: RVK_CloudShadow
 float g_cloudNight = 0.8f;        // --cloud-night X: RVK_CloudNight
 float g_skyVary = 0.0f;           // --sky-vary X: RVK_SkyVary (off: the demo's skies as they were)
+uint32_t g_skyZone = 0;      // --sky-zone PF: the sky leans by that playfield's climate (sky.cpp)
 double g_skyTime = -1.0;          // --sky-time T: the sky weather's clock (seconds)
 float g_moonLight = 1.0f;         // --moon-light X: RVK_MoonLight
 float g_nightDark = 1.0f;         // --night-dark X: RVK_NightDark
@@ -3135,6 +3136,7 @@ int main(int argc, char** argv)
         else if (a == "--cloud-night" && i + 1 < argc) g_cloudNight = float(std::atof(argv[++i]));
         else if (a == "--sky-vary" && i + 1 < argc) g_skyVary = float(std::atof(argv[++i]));
         else if (a == "--sky-time" && i + 1 < argc) { g_skyTime = std::atof(argv[++i]); g_skyVary = 1.0f; }
+        else if (a == "--sky-zone" && i + 1 < argc) g_skyZone = uint32_t(std::atoi(argv[++i]));   // (a playfield's climate)
         else if (a == "--fixed-clock" && i + 1 < argc) { g_fixedClock = true; Device::SetFixedClock(std::atof(argv[++i]) * 1e-3); }
         else if (a == "--cache-test" && i + 1 < argc) { cacheTest = std::atoi(argv[++i]); shadowTest = shadows = true; }
         else if (a == "--dump" && i + 1 < argc) dump = argv[++i];
@@ -3355,6 +3357,7 @@ int main(int argc, char** argv)
         clouds.night = g_cloudNight;
         clouds.vary = g_skyVary;
         dev.SetSkyTime(g_skyTime);
+        dev.SetSkyPlayfield(g_skyZone);
         dev.SetCloudParams(clouds);
     }
     if (g_smoke) {

@@ -99,6 +99,7 @@ public:
     void LoadMeshIds(const char* path);                                       // (the path copied)
     void LoadStatels(const char* path, uint32_t playfield);                   // (the path copied)
     void SetStatelMode(uint32_t mode);
+    void SetSkyPlayfield(uint32_t playfield);
     void SetSway(float strength);
     void SetGrassPush(float strength);
     void SetPlantDetail(float detail);

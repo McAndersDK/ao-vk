@@ -936,6 +936,11 @@ void ThreadedDevice::LoadStatels(const char* path, uint32_t playfield)
     Enqueue([this, p, playfield](const uint8_t*) { m_device.LoadStatels(p.c_str(), playfield); });
 }
 
+void ThreadedDevice::SetSkyPlayfield(uint32_t playfield)
+{
+    Enqueue([this, playfield](const uint8_t*) { m_device.SetSkyPlayfield(playfield); });
+}
+
 void ThreadedDevice::SetStatelMode(uint32_t mode)
 {
     Enqueue([this, mode](const uint8_t*) { m_device.SetStatelMode(mode); });

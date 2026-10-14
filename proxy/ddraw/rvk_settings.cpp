@@ -160,6 +160,7 @@ Setting g_settings[] = {
     {"RVK_TimeOfDay",   "Testing: the game's time of day set to this hour (-1: the game's own; a day is 27 h)", "Experimental", Float, -1, 27, 0.25f, -1, nullptr, 0},
     {"RVK_TimeSpeed",   "Testing: how fast the time of day runs, x the game's (0 still; 1 and the hour -1: the game's own)", "Experimental", Float, 0, 500, 0.5f, 1, nullptr, 0},
     {"RVK_SkyVary",     "Clouds: the sky changes, clear to overcast (0: always some cloud)", "Experimental", Float, 0, 1, 0.1f, 1, nullptr, 0, "RVK_CloudsOn"},
+    {"RVK_SkyZones",    "Clouds: each zone its own skies - deserts clearer, coasts and forests cloudier (0: the same everywhere)", "Experimental", Float, 0, 1, 0.1f, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudDetail", "Clouds: billows and wisps (0 smooth)",                    "Experimental",     Float, 0, 2, 0.1f, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudHalf",   "Clouds: drawn at half resolution (much cheaper)",         "Experimental",     Bool,  0, 1, 1, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudShadow", "Clouds: their shadows on the ground (0 none)",            "Experimental",     Float, 0, 1, 0.05f, 0.6f, nullptr, 0, "RVK_CloudsOn"},
@@ -540,13 +541,14 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
         s.exact = V("RVK_SmokeExact") != 0.0f;
         d->SetSmokeParams(s);
     }
-    else if (std::strncmp(n, "RVK_Cloud", 9) == 0 || std::strcmp(n, "RVK_SkyVary") == 0) {
+    else if (std::strncmp(n, "RVK_Cloud", 9) == 0 || std::strcmp(n, "RVK_SkyVary") == 0 || std::strcmp(n, "RVK_SkyZones") == 0) {
         rvk::Device::CloudParams c;
         c.enable = V("RVK_CloudsOn") != 0.0f;
         c.density = V("RVK_CloudThick");
         c.brightness = V("RVK_CloudBright");
         c.night = V("RVK_CloudNight");
         c.vary = V("RVK_SkyVary");
+        c.zones = V("RVK_SkyZones");
         c.detail = V("RVK_CloudDetail");
         c.steps = uint32_t(V("RVK_CloudSteps"));
         c.half = V("RVK_CloudHalf") != 0.0f;

@@ -67,6 +67,7 @@ void StatelFrame()
     g_lastPlayfield = pf;
     g_lastId = id;
     g_lastDevice = dev;
+    dev->SetSkyPlayfield(id);                    // (its climate leans the sky: rvk sky.cpp)
     if (!pf || !ground) {
         if (pf)
             RvkLog("statels: playfield %u is indoors - no placed objects' shadows", id);

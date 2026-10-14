@@ -456,6 +456,8 @@ public:
     void SetGameSun(bool on) { m_gameSun = on; }
     // Tests: the sky weather's clock (seconds, as UTC; < 0 the wall clock).
     void SetSkyTime(double t) { m_skyTime = t; }
+    // The playfield the game is in (its resource id; 0 none): its climate leans the sky (sky.cpp SkyZoneLean).
+    void SetSkyPlayfield(uint32_t playfield);
     void SetContactShadows(float s) { m_contact = s; m_constantsDirty = true; }
     void SetEffectGlow(float gain) { if (m_effectGlow != gain) { m_effectGlow = gain; m_constantsDirty = true; } }
     float EffectGlow() const { return m_effectGlow; }
@@ -606,6 +608,7 @@ public:
         float night = 0.8f;                      // RVK_CloudNight: ... at night, x more (eased in as the sun goes down)
         float vary = 1.0f;                       // RVK_SkyVary: how much the sky changes, clear .. overcast (0: always
                                                  // scattered, as the game's puffs say; sky.cpp)
+        float zones = 1.0f;                      // RVK_SkyZones: how much a zone's climate leans its skies (sky.cpp)
         float detail = 1.0f;                     // RVK_CloudDetail: how much the noise frays them (0: smooth)
         uint32_t steps = 32;                     // RVK_CloudSteps: the march's steps through a puff
         bool half = true;                        // RVK_CloudHalf: marched at half resolution
@@ -1042,6 +1045,8 @@ private:
     float m_trueSunDir[3] = {0.0f, -1.0f, 0.0f};   // the sun's light's way, below the horizon too (last seen)
     // Sky weather (sky.cpp): how cloudy, from the clock.
     double m_skyTime = -1.0;                     // a test's sky clock (SetSkyTime; < 0: the wall clock)
+    float m_skyZoneLean = 0.0f;                  // the playfield's climate: - clearer, + cloudier (SetSkyPlayfield)
+    uint32_t m_skyPlayfield = 0;
     float m_skySheets = 1.0f;                    // the game's sheets' strength by the sky (none when clear)
     double SkyClock() const;
     float SkyCloudiness() const;

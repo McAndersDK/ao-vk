@@ -39,5 +39,8 @@ so clear, fair, scattered, broken and overcast all come up (clear 19% of the tim
 
 1. The clock's cloudiness -> the layer and the sheets; RVK_SkyVary; log; demo `--sky-time T` (seconds) to see each sky.
 2. Cloud type by state (broken, overcast: layered, flatter); wind by state.
-3. Zones' character (playfield id).
+3. Zones' character (playfield id). Done 2026-10-14: sky.cpp kZoneSkies leans the noise per playfield (the proxy
+   passes the resource id: rvk_statels.cpp) - deserts / wastelands -0.08..-0.20 (Newland Desert: clear 52%, overcast
+   0.4% of 60 simulated days), coasts / islands +0.12..+0.15 (clear 3%, overcast 35%), forests / green country
+   +0.04..+0.12; cities and the Shadowlands 0. RVK_SkyZones (0..1) scales it; demo `--sky-zone PF`.
 4. Hooks for the scattering (haze by state).
