@@ -21,6 +21,9 @@ void CountBackendDraw();                          // heartbeat statistics
 unsigned ComIndex(const char* name);              // counter index of "Interface::Method"
 // randy-vk.log's path for this process (a second client in the same folder gets randy-vk-2.log).
 const char* LogPath();
+// Texture writes through Lock on the game's thread since the last call (the 600-frame log line), then reset.
+struct TextureWrites { uint32_t locks, partial; uint64_t bytes; double ms; };
+TextureWrites TakeTextureWrites();
 void RvkLog(const char* fmt, ...);
 void ParticleFrame();                             // each presented frame (rvk_particles.cpp)
 void WeatherFrame();                              // each presented frame (rvk_weather.cpp)
@@ -200,6 +203,7 @@ public:
 
     rvk::Texture* RvkTexture();                    // creates/uploads as needed; null if not a GPU surface
     void Upload();                                 // shadow -> GPU for this level (if a device exists)
+    void UploadRows(uint32_t y0, uint32_t y1);     // only rows [y0, y1) changed (a Lock's rectangle): just them
     uint32_t Pitch() const;
     void EnsureShadow();
 

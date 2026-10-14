@@ -233,6 +233,35 @@ rvk::Texture* RSurface::RvkTexture()
     return t->texture;
 }
 
+namespace {
+TextureWrites g_writes;
+}  // namespace
+
+TextureWrites TakeTextureWrites()
+{
+    const TextureWrites w = g_writes;
+    g_writes = {};
+    return w;
+}
+
+// The rows a Lock rectangle covered, when only they need to go: an uncompressed texture uploaded before, no CPU
+// conversion. (A text window may rewrite a few lines of its texture at a time; the whole level went each time.)
+void RSurface::UploadRows(uint32_t y0, uint32_t y1)
+{
+    rvk::ThreadedDevice* dev = g_rvk.device;
+    const uint32_t h = desc.dwHeight;
+    y1 = std::min(y1, h);
+    if (!dev || !top->texture || shadow.empty() || convert24 || palettized || rvk::FormatIsCompressed(format) ||
+        y0 >= y1 || (y0 == 0 && y1 == h)) {
+        Upload();
+        return;
+    }
+    ++g_writes.partial;
+    g_writes.bytes += uint64_t(y1 - y0) * Pitch();
+    dirty = false;
+    dev->UpdateTexture(top->texture, level, 0, y0, desc.dwWidth, y1 - y0, shadow.data() + size_t(y0) * Pitch(), Pitch());
+}
+
 void RSurface::Upload()
 {
     if (kind != Kind::Texture)
@@ -251,6 +280,7 @@ void RSurface::Upload()
     }
     dirty = false;
     uint32_t w = desc.dwWidth, h = desc.dwHeight;
+    g_writes.bytes += uint64_t(Pitch()) * rvk::FormatRows(format, h);
     if (convert24 || palettized) {
         std::vector<uint32_t> argb(size_t(w) * h);
         const PALETTEENTRY* pal = t->palette ? t->palette->entries : nullptr;
@@ -580,7 +610,13 @@ HRESULT RSurface::DoUnlock(LPRECT)
     if (m_lockFlags & DDLOCK_READONLY)
         return DD_OK;
     if (kind == Kind::Texture) {
-        Upload();
+        LARGE_INTEGER t0, t1, freq;
+        QueryPerformanceCounter(&t0);
+        UploadRows(uint32_t(std::max<LONG>(m_lockRect.top, 0)), uint32_t(std::max<LONG>(m_lockRect.bottom, 0)));
+        QueryPerformanceCounter(&t1);
+        QueryPerformanceFrequency(&freq);
+        ++g_writes.locks;
+        g_writes.ms += double(t1.QuadPart - t0.QuadPart) * 1000.0 / double(freq.QuadPart);
     } else if (IsGpu(this)) {
         static bool logged;
         if (!logged) { logged = true; RvkLog("writes to a render target through Lock are ignored"); }

@@ -446,6 +446,10 @@ void RvkState::Present()
         RvkLog("presented %u frames: %.1f fps, %.2f ms/frame, %lld draws/frame; slowest %.0f ms, %u over 33 ms, "
                "%u over 100 ms", frames, 1000.0 / std::max(frameMs, 0.001), frameMs, (long long)(g_drawCalls / 600),
                slowest, over33, over100);
+        const TextureWrites w = TakeTextureWrites();
+        if (w.locks)
+            RvkLog("texture writes: %.1f a frame (%.1f only the rows locked), %.0f KB and %.3f ms on the game's thread a "
+                   "frame", w.locks / 600.0, w.partial / 600.0, double(w.bytes) / 1024.0 / 600.0, w.ms / 600.0);
         g_drawCalls = 0;
         lastTick = now;
         slowest = 0;

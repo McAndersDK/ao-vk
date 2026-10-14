@@ -462,6 +462,8 @@ void Device::UpdateTexture(Texture* t, uint32_t level, uint32_t x, uint32_t y, u
         if (x == 0 && y == 0 && width >= t->m_width && height >= t->m_height &&
             pitch >= FormatRowBytes(t->m_format, t->m_width))
             t->m_opaque = PixelsOpaque(t->m_format, data, t->m_width, t->m_height, pitch);
+        else if (x == 0 && width >= t->m_width && y + height <= t->m_height)   // whole rows: still opaque if they are
+            t->m_opaque = t->m_opaque && PixelsOpaque(t->m_format, data, t->m_width, height, pitch);
         else
             t->m_opaque = false;
         // The colour grid the ground-grass classification reads (grass.cpp): a full level-0 upload only.
