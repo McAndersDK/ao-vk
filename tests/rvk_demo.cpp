@@ -1405,6 +1405,367 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
                 sum / std::max(counted, 1), p99, worst, worstFrame);
 }
 
+// City benchmark (--city-bench, docs/render-batching-plan.md P0): shaped like West Bank's city in the game (2026-10-14:
+// ~4,000 draws a frame, the render thread the limit). Through ThreadedDevice with retained meshes (RegisterMesh /
+// DrawMesh, as the proxy's mesh handles): 600 buildings of two unique pieces each (walls, roof), 2,400 props of 40
+// kinds, 250 cut-out fences of 8 kinds, 120 blended panes of 4 kinds after the opaque ones - ~70% of the draws repeat a
+// mesh - on a two-pass ground (as AnarchyGround_t), a sun with shadows and 7 point lights, the camera circling slowly.
+// The clock is fixed (1/60 s a frame), so a run of N frames ends on the same picture (--shot; --dump: its draws).
+// After --city-warm frames a profile window opens; at the end the render thread's sections are logged ("city bench:"
+// lines, stderr) and the calling thread's frame printed.
+int g_cityWarm = 60;              // --city-warm N: frames before the measured window
+bool g_cityNoGrass = false;       // --city-no-grass: without the ground grass (on by default, as in the game)
+
+namespace city {
+// A box with each side face split into s x s quads (the roof: one quad), its base on y = 0.
+void AddBox(std::vector<VtxMesh>& v, std::vector<uint16_t>& idx, float w, float h, float d, int s, bool top, uint32_t col)
+{
+    struct Face { Vector o, u, w, n; };
+    const Face faces[5] = {{{-w, 0, -d}, {2 * w, 0, 0}, {0, h, 0}, {0, 0, -1}}, {{w, 0, d}, {-2 * w, 0, 0}, {0, h, 0}, {0, 0, 1}},
+                           {{w, 0, -d}, {0, 0, 2 * d}, {0, h, 0}, {1, 0, 0}}, {{-w, 0, d}, {0, 0, -2 * d}, {0, h, 0}, {-1, 0, 0}},
+                           {{-w, h, -d}, {2 * w, 0, 0}, {0, 0, 2 * d}, {0, 1, 0}}};
+    for (int f = 0; f < 5; ++f) {
+        if (f == 4 && !top) break;
+        const Face& F = faces[f];
+        const int n = f == 4 ? 1 : s;
+        const uint16_t base = uint16_t(v.size());
+        for (int j = 0; j <= n; ++j)
+            for (int i = 0; i <= n; ++i) {
+                const float a = float(i) / n, b = float(j) / n;
+                v.push_back({F.o.x + a * F.u.x + b * F.w.x, F.o.y + a * F.u.y + b * F.w.y, F.o.z + a * F.u.z + b * F.w.z,
+                             F.n.x, F.n.y, F.n.z, col, a * 2, b * 2});
+            }
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) {
+                const uint16_t q = uint16_t(base + j * (n + 1) + i);
+                const uint16_t t[6] = {q, uint16_t(q + n + 1), uint16_t(q + 1), uint16_t(q + 1), uint16_t(q + n + 1),
+                                       uint16_t(q + n + 2)};
+                idx.insert(idx.end(), t, t + 6);
+            }
+    }
+}
+
+// A cylinder (k sides, capped), its base on y = 0.
+void AddCylinder(std::vector<VtxMesh>& v, std::vector<uint16_t>& idx, float r, float h, int k)
+{
+    const uint16_t base = uint16_t(v.size());
+    for (int i = 0; i <= k; ++i) {
+        const float a = 2 * kPi * i / k, c = std::cos(a), s = std::sin(a);
+        v.push_back({r * c, 0, r * s, c, 0, s, 0xFFFFFFFF, float(i) / k, 0});
+        v.push_back({r * c, h, r * s, c, 0, s, 0xFFFFFFFF, float(i) / k, 1});
+    }
+    for (int i = 0; i < k; ++i) {
+        const uint16_t q = uint16_t(base + 2 * i);
+        const uint16_t t[6] = {q, uint16_t(q + 1), uint16_t(q + 2), uint16_t(q + 2), uint16_t(q + 1), uint16_t(q + 3)};
+        idx.insert(idx.end(), t, t + 6);
+    }
+    const uint16_t centre = uint16_t(v.size());
+    v.push_back({0, h, 0, 0, 1, 0, 0xFFFFFFFF, 0.5f, 0.5f});
+    for (int i = 0; i <= k; ++i) {
+        const float a = 2 * kPi * i / k;
+        v.push_back({r * std::cos(a), h, r * std::sin(a), 0, 1, 0, 0xFFFFFFFF, 0.5f + 0.5f * std::cos(a), 0.5f + 0.5f * std::sin(a)});
+    }
+    for (int i = 0; i < k; ++i) {
+        const uint16_t t[3] = {centre, uint16_t(centre + 2 + i), uint16_t(centre + 1 + i)};
+        idx.insert(idx.end(), t, t + 3);
+    }
+}
+
+// A flat panel w wide, h high, in the x-y plane (fences, panes): s columns.
+void AddPanel(std::vector<VtxMesh>& v, std::vector<uint16_t>& idx, float w, float h, int s)
+{
+    const uint16_t base = uint16_t(v.size());
+    for (int i = 0; i <= s; ++i) {
+        const float x = -w + 2 * w * i / s;
+        v.push_back({x, 0, 0, 0, 0, -1, 0xFFFFFFFF, float(i), 1});
+        v.push_back({x, h, 0, 0, 0, -1, 0xFFFFFFFF, float(i), 0});
+    }
+    for (int i = 0; i < s; ++i) {
+        const uint16_t q = uint16_t(base + 2 * i);
+        const uint16_t t[6] = {q, uint16_t(q + 1), uint16_t(q + 2), uint16_t(q + 2), uint16_t(q + 1), uint16_t(q + 3)};
+        idx.insert(idx.end(), t, t + 6);
+    }
+}
+
+uint32_t Hash(uint32_t x)
+{
+    x ^= x >> 16; x *= 0x7FEB352Du; x ^= x >> 15; x *= 0x846CA68Bu; x ^= x >> 16;
+    return x;
+}
+float Rand(uint32_t seed, uint32_t salt) { return float(Hash(seed * 0x9E3779B9u + salt) & 0xFFFFFF) / float(0x1000000); }
+
+struct Object {
+    float x, z, yaw;
+    uint32_t mesh[2];                            // pieces (0: none)
+    Texture* tex[2];
+    enum Kind { Opaque, Cutout, Blended } kind;
+    uint32_t visual;
+};
+}  // namespace city
+
+template <typename D>
+void RunCityBench(D& dev, int frames, const std::string& shot, const std::string& dump)
+{
+    using namespace city;
+    Device::SetFixedClock(1.0 / 60.0);
+    // Textures: 24 opaque (walls, roofs, props), 4 cut-out fences (transparent cells), 2 glass (half alpha).
+    std::vector<Texture*> opaque, fences, glass;
+    for (uint32_t i = 0; i < 24; ++i) {
+        const uint32_t a = 0xFF000000u | (0x30 + 7 * i) << 16 | (0x28 + 5 * (i % 7)) << 8 | (0x20 + 9 * (i % 5));
+        auto px = Checker(64, 2 + i % 6, a, 0xFF000000u | ((a & 0xFEFEFE) >> 1));
+        opaque.push_back(dev.CreateTexture(64, 64, px.data()));
+    }
+    for (uint32_t i = 0; i < 4; ++i) {
+        auto px = Checker(64, 4 + 2 * i, 0xFF706048u + 0x080808u * i, 0x00000000);
+        fences.push_back(dev.CreateTexture(64, 64, px.data()));
+    }
+    for (uint32_t i = 0; i < 2; ++i) {
+        std::vector<uint32_t> px(64 * 64, i ? 0x80A0C0E0u : 0x6080E0A0u);
+        glass.push_back(dev.CreateTexture(64, 64, px.data()));
+    }
+    // Meshes, registered once (ids from 1, as the proxy hands them out).
+    uint32_t nextId = 1;
+    size_t vertexBytes = 0;
+    auto add = [&](const std::vector<VtxMesh>& v, const std::vector<uint16_t>& idx) {
+        auto vs = std::make_shared<std::vector<uint8_t>>(reinterpret_cast<const uint8_t*>(v.data()),
+                                                         reinterpret_cast<const uint8_t*>(v.data() + v.size()));
+        auto is = std::make_shared<std::vector<uint8_t>>(reinterpret_cast<const uint8_t*>(idx.data()),
+                                                         reinterpret_cast<const uint8_t*>(idx.data() + idx.size()));
+        vertexBytes += vs->size();
+        const uint32_t id = nextId++;
+        dev.RegisterMesh(id, TriangleList, kFvfMesh, ThreadedDevice::SharedVertices(vs), 0, uint32_t(v.size()),
+                         ThreadedDevice::SharedVertices(is), uint32_t(idx.size()));
+        return id;
+    };
+    std::vector<uint32_t> propKinds, fenceKinds, paneKinds;
+    for (uint32_t k = 0; k < 40; ++k) {          // crates, pillars, posts, barrels
+        std::vector<VtxMesh> v;
+        std::vector<uint16_t> idx;
+        const float s = 0.4f + 0.8f * Rand(k, 1);
+        if (k % 3 == 0) AddCylinder(v, idx, s * 0.5f, s * (1.5f + 3.0f * Rand(k, 2)), 8 + 4 * (k % 3));
+        else AddBox(v, idx, s, s * (1.0f + 2.0f * Rand(k, 2)), s * (0.6f + 0.6f * Rand(k, 3)), 2 + k % 3, true, 0xFFFFFFFF);
+        propKinds.push_back(add(v, idx));
+    }
+    for (uint32_t k = 0; k < 8; ++k) {
+        std::vector<VtxMesh> v;
+        std::vector<uint16_t> idx;
+        AddPanel(v, idx, 2.0f + k * 0.25f, 1.2f + 0.1f * k, 4 + k);
+        fenceKinds.push_back(add(v, idx));
+    }
+    for (uint32_t k = 0; k < 4; ++k) {
+        std::vector<VtxMesh> v;
+        std::vector<uint16_t> idx;
+        AddPanel(v, idx, 1.0f + 0.3f * k, 2.0f + 0.4f * k, 1);
+        paneKinds.push_back(add(v, idx));
+    }
+    std::vector<Object> objects;
+    constexpr int kLotsX = 25, kLotsZ = 24;
+    constexpr float kLot = 12.0f;
+    uint32_t visual = 0x10000;
+    for (int lz = 0; lz < kLotsZ; ++lz)
+        for (int lx = 0; lx < kLotsX; ++lx) {
+            const uint32_t seed = uint32_t(lz * kLotsX + lx);
+            const float cx = (float(lx) - kLotsX / 2.0f + 0.5f) * kLot, cz = (float(lz) - kLotsZ / 2.0f + 0.5f) * kLot;
+            {                                    // the building: walls and roof, unique meshes
+                const float w = 2.5f + 1.8f * Rand(seed, 10), d = 2.5f + 1.8f * Rand(seed, 11);
+                const float h = 3.0f + 14.0f * Rand(seed, 12) * Rand(seed, 13);
+                std::vector<VtxMesh> v;
+                std::vector<uint16_t> idx;
+                AddBox(v, idx, w, h, d, 3 + int(h / 5), false, 0xFFFFFFFF);
+                const uint32_t walls = add(v, idx);
+                v.clear();
+                idx.clear();
+                AddBox(v, idx, w + 0.3f, 0.4f, d + 0.3f, 1, true, 0xFFE0E0E0);
+                for (VtxMesh& p : v) p.y += h;
+                const uint32_t roof = add(v, idx);
+                objects.push_back({cx, cz, Rand(seed, 14) * 0.3f, {walls, roof},
+                                   {opaque[Hash(seed) % 16], opaque[16 + Hash(seed + 7) % 8]}, Object::Opaque, visual++});
+            }
+            for (int p = 0; p < 4; ++p) {        // props around it
+                const uint32_t ps = seed * 8 + uint32_t(p);
+                const float a = Rand(ps, 20) * 2 * kPi, r = 4.6f + 0.8f * Rand(ps, 21);
+                objects.push_back({cx + r * std::cos(a), cz + r * std::sin(a), Rand(ps, 22) * 2 * kPi,
+                                   {propKinds[Hash(ps) % propKinds.size()], 0}, {opaque[Hash(ps + 3) % 24], nullptr},
+                                   Object::Opaque, visual++});
+            }
+            if (seed % 24 < 5) {                 // fences on 5 lots of 24 (250: 2 x 125)
+                objects.push_back({cx, cz - kLot * 0.45f, 0.0f, {fenceKinds[seed % 8], 0}, {fences[seed % 4], nullptr},
+                                   Object::Cutout, visual++});
+                objects.push_back({cx - kLot * 0.45f, cz, kPi * 0.5f, {fenceKinds[(seed + 3) % 8], 0},
+                                   {fences[(seed + 1) % 4], nullptr}, Object::Cutout, visual++});
+            }
+        }
+    // Blended panes on 120 lots (drawn after the opaque ones).
+    std::vector<Object> panes;
+    for (uint32_t i = 0; i < 120; ++i) {
+        const uint32_t lot = Hash(i + 999) % (kLotsX * kLotsZ);
+        const float cx = (float(lot % kLotsX) - kLotsX / 2.0f + 0.5f) * kLot, cz = (float(lot / kLotsX) - kLotsZ / 2.0f + 0.5f) * kLot;
+        panes.push_back({cx + 4.5f, cz + 4.5f, Rand(i, 30) * kPi, {paneKinds[i % 4], 0}, {glass[i % 2], nullptr},
+                         Object::Blended, visual++});
+    }
+    // The ground: 6 x 6 chunks of non-indexed triangles, base pass + multiplying light pass (AnarchyGround_t).
+    std::vector<uint32_t> groundPixels(64 * 64), lightmapPixels(64 * 64);
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x) {
+            groundPixels[y * 64 + x] = ((x / 4 + y / 4) & 1) ? 0xFF3C6A2A : 0xFF2E5320;
+            const uint32_t l = uint32_t(170 + 50 * std::sin(x * 0.2f) * std::cos(y * 0.15f));
+            lightmapPixels[y * 64 + x] = 0xFF000000u | l << 16 | l << 8 | l;
+        }
+    Texture* groundTex = dev.CreateTexture(64, 64, groundPixels.data());
+    Texture* lightmap = dev.CreateTexture(64, 64, lightmapPixels.data());
+    struct VtxTerrain { float x, y, z, nx, ny, nz, u0, v0, u1, v1; };
+    const uint32_t kFvfTerrain = FVF_XYZ | FVF_NORMAL | (2 << 8);
+    constexpr int kChunks = 6, kChunkCells = 16;
+    constexpr float kChunk = 56.0f, kCell = kChunk / kChunkCells, kOrigin = -kChunk * kChunks / 2;
+    std::vector<std::vector<VtxTerrain>> chunks;
+    for (int cz = 0; cz < kChunks; ++cz)
+        for (int cx = 0; cx < kChunks; ++cx) {
+            std::vector<VtxTerrain> v;
+            for (int j = 0; j < kChunkCells; ++j)
+                for (int i = 0; i < kChunkCells; ++i) {
+                    const float xs[2] = {kOrigin + cx * kChunk + i * kCell, kOrigin + cx * kChunk + (i + 1) * kCell};
+                    const float zs[2] = {kOrigin + cz * kChunk + j * kCell, kOrigin + cz * kChunk + (j + 1) * kCell};
+                    auto vert = [&](int a, int b) {
+                        return VtxTerrain{xs[a], 0.0f, zs[b], 0, 1, 0, xs[a] / 4, zs[b] / 4, float(i + a) / kChunkCells,
+                                          float(j + b) / kChunkCells};
+                    };
+                    const VtxTerrain q[6] = {vert(0, 0), vert(0, 1), vert(1, 0), vert(1, 0), vert(0, 1), vert(1, 1)};
+                    v.insert(v.end(), q, q + 6);
+                }
+            chunks.push_back(std::move(v));
+        }
+    if (g_grassFieldOn && !g_cityNoGrass)
+        dev.SetGrassField(true, g_grassFieldDist, 5.0f, 0.5f, true);
+    std::printf("city bench: %u meshes (%.1f MB of vertices), %zu objects + %zu panes, %d frames (window from %d)\n",
+                nextId - 1, double(vertexBytes) / 1048576.0, objects.size(), panes.size(), frames, g_cityWarm);
+
+    LARGE_INTEGER freq, t0, t1;
+    QueryPerformanceFrequency(&freq);
+    double frameSum = 0.0, recordSum = 0.0;
+    int counted = 0;
+    uint32_t drawsPerFrame = 0;
+    QueryPerformanceCounter(&t0);
+    for (int frame = 0; frame < frames; ++frame) {
+        if (frame == g_cityWarm) dev.ProfileWindow(true, "");
+        if (frame == frames - 1 && !shot.empty()) dev.RequestScreenshot(shot);
+        if (frame == frames - 1 && !dump.empty()) dev.RequestFrameDump(dump);
+        LARGE_INTEGER r0, r1;
+        QueryPerformanceCounter(&r0);
+        uint32_t draws = 0;
+        dev.BeginFrame();
+        dev.SetViewport({0, 0, g_width, g_height, 0.0f, 1.0f});
+        dev.Clear(CLEAR_TARGET | CLEAR_ZBUFFER, 0xFF6080A0, 1.0f);
+        const float a = 0.6f + 0.0015f * float(frame);
+        const Vector eye{70.0f * std::sin(a), 14.0f, -70.0f * std::cos(a)};
+        dev.SetTransform(View, LookAtLH(eye, {eye.x - 40.0f * std::sin(a), 2.0f, eye.z + 40.0f * std::cos(a)}, {0, 1, 0}));
+        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.5f, 300.0f));
+        dev.SetTransform(World, Identity());
+        dev.SetRenderState(RS_ZENABLE, 1);
+        dev.SetRenderState(RS_ZWRITEENABLE, 1);
+        dev.SetRenderState(RS_ZFUNC, CMP_LESSEQUAL);
+        dev.SetRenderState(RS_CULLMODE, CULL_NONE);
+        dev.SetRenderState(RS_ALPHATESTENABLE, 0);
+        dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
+        Light sun{};
+        sun.type = LIGHT_DIRECTIONAL;
+        sun.diffuse = {0.9f, 0.85f, 0.75f, 1};
+        sun.direction = {0.55f, -0.7f, 0.45f};
+        dev.SetLight(0, sun);
+        dev.LightEnable(0, true);
+        for (uint32_t i = 1; i < 8; ++i) {       // street lamps
+            Light l{};
+            l.type = LIGHT_POINT;
+            l.diffuse = {1.0f, 0.85f, 0.6f, 1};
+            l.position = {(Rand(i, 40) - 0.5f) * 120.0f, 3.0f, (Rand(i, 41) - 0.5f) * 120.0f};
+            l.range = 12.0f;
+            l.attenuation0 = 1.0f;
+            l.attenuation1 = 0.1f;
+            dev.SetLight(i, l);
+            dev.LightEnable(i, true);
+        }
+        dev.SetTextureStageState(0, TSS_COLORARG1, TA_TEXTURE);
+        dev.SetTextureStageState(0, TSS_COLORARG2, TA_DIFFUSE);
+        dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG1);
+        dev.SetTextureStageState(0, TSS_ALPHAARG1, TA_TEXTURE);
+        Material mat{{1, 1, 1, 1}, {1, 1, 1, 1}, {0, 0, 0, 0}, {0, 0, 0, 0}, 0.0f};
+        for (const auto& c : chunks) {           // the ground
+            dev.SetRenderState(RS_LIGHTING, 0);
+            dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
+            dev.SetRenderState(RS_ZFUNC, CMP_LESSEQUAL);
+            dev.SetTexture(0, groundTex);
+            dev.SetTextureStageState(0, TSS_TEXCOORDINDEX, 0);
+            dev.SetTextureStageState(0, TSS_COLOROP, TOP_SELECTARG1);
+            dev.DrawPrimitive(TriangleList, kFvfTerrain, c.data(), uint32_t(c.size()));
+            dev.SetRenderState(RS_LIGHTING, 1);
+            dev.SetRenderState(RS_AMBIENT, 0xFF515151);
+            dev.SetRenderState(RS_ALPHABLENDENABLE, 1);
+            dev.SetRenderState(RS_SRCBLEND, BLEND_ZERO);
+            dev.SetRenderState(RS_DESTBLEND, BLEND_SRCCOLOR);
+            dev.SetRenderState(RS_ZFUNC, CMP_EQUAL);
+            dev.SetTexture(0, lightmap);
+            dev.SetTextureStageState(0, TSS_TEXCOORDINDEX, 1);
+            dev.SetTextureStageState(0, TSS_COLOROP, TOP_ADD);
+            dev.DrawPrimitive(TriangleList, kFvfTerrain, c.data(), uint32_t(c.size()));
+            draws += 2;
+        }
+        dev.SetTextureStageState(0, TSS_TEXCOORDINDEX, 0);
+        dev.SetRenderState(RS_ZFUNC, CMP_LESSEQUAL);
+        dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
+        dev.SetRenderState(RS_LIGHTING, 1);
+        dev.SetRenderState(RS_AMBIENT, 0xFF6F6F6F);
+        dev.SetRenderState(RS_DIFFUSEMATERIALSOURCE, MCS_MATERIAL);
+        dev.SetTextureStageState(0, TSS_COLOROP, TOP_MODULATE);
+        auto drawObject = [&](const Object& o) {
+            dev.SetDrawVisual(uint32_t(VisualKind::Static), "RTriMesh_t", 0, o.visual);
+            dev.SetTransform(World, Mul(RotateY(o.yaw), Translate(o.x, 0.0f, o.z)));
+            for (int p = 0; p < 2 && o.mesh[p]; ++p) {
+                // As the game's pieces: their state set again for each (the hand-off drops repeats).
+                dev.SetMaterial(mat);
+                dev.SetTexture(0, o.tex[p]);
+                dev.SetRenderState(RS_ALPHATESTENABLE, o.kind == Object::Cutout);
+                if (o.kind == Object::Cutout) {
+                    dev.SetRenderState(RS_ALPHAREF, 0x80);
+                    dev.SetRenderState(RS_ALPHAFUNC, CMP_GREATEREQUAL);
+                }
+                dev.DrawMesh(o.mesh[p]);
+                ++draws;
+            }
+        };
+        for (const Object& o : objects) drawObject(o);
+        dev.SetRenderState(RS_ALPHATESTENABLE, 0);
+        dev.SetRenderState(RS_ALPHABLENDENABLE, 1);    // the blended ones: the game's own order, after the opaque
+        dev.SetRenderState(RS_SRCBLEND, BLEND_SRCALPHA);
+        dev.SetRenderState(RS_DESTBLEND, BLEND_INVSRCALPHA);
+        dev.SetRenderState(RS_ZWRITEENABLE, 0);
+        for (const Object& o : panes) drawObject(o);
+        dev.SetRenderState(RS_ZWRITEENABLE, 1);
+        dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
+        dev.SetDrawVisual(0, nullptr);
+        QueryPerformanceCounter(&r1);
+        dev.EndFrame();
+        QueryPerformanceCounter(&t1);
+        if (frame >= g_cityWarm) {
+            frameSum += double(t1.QuadPart - t0.QuadPart) * 1000.0 / double(freq.QuadPart);
+            recordSum += double(r1.QuadPart - r0.QuadPart) * 1000.0 / double(freq.QuadPart);
+            ++counted;
+        }
+        t0 = t1;
+        drawsPerFrame = draws;
+    }
+    dev.ProfileWindow(false, "city bench: ");
+    dev.Sync();
+    for (uint32_t id = 1; id < nextId; ++id) dev.ReleaseMesh(id);
+    for (Texture* t : opaque) dev.DestroyTexture(t);
+    for (Texture* t : fences) dev.DestroyTexture(t);
+    for (Texture* t : glass) dev.DestroyTexture(t);
+    dev.DestroyTexture(groundTex);
+    dev.DestroyTexture(lightmap);
+    dev.Sync();
+    std::printf("city bench: %u draws a frame; calling thread: frame %.3f ms (%.1f fps), recording %.3f ms (avg of %d frames)\n",
+                drawsPerFrame, frameSum / std::max(counted, 1), 1000.0 * std::max(counted, 1) / std::max(frameSum, 1e-9),
+                recordSum / std::max(counted, 1), counted);
+}
+
 // Water test scenes (--water-lake, --water-coast): terrain drawn like AnarchyGround_t (base pass, then the light pass
 // that gives the water its sun and ambient), a few lit props standing in and over the water, the game's fog, and the
 // water handed over as the proxy does with the game's VisualLiquid_t mesh - a few huge flat triangles (DrawWater).
@@ -3092,6 +3453,7 @@ int main(int argc, char** argv)
     uint32_t motionMode = 0;
     float knee = 0.85f;
     int bench = 0;
+    bool cityBench = false;
     int frames = 3;
     std::string shot = "rvk_demo.bmp", dump;
     for (int i = 1; i < argc; ++i) {
@@ -3141,6 +3503,9 @@ int main(int argc, char** argv)
         else if (a == "--cache-test" && i + 1 < argc) { cacheTest = std::atoi(argv[++i]); shadowTest = shadows = true; }
         else if (a == "--dump" && i + 1 < argc) dump = argv[++i];
         else if (a == "--bench" && i + 1 < argc) bench = std::atoi(argv[++i]);
+        else if (a == "--city-bench") { cityBench = true; hdr = shadows = g_grassFieldOn = true; }
+        else if (a == "--city-warm" && i + 1 < argc) g_cityWarm = std::atoi(argv[++i]);
+        else if (a == "--city-no-grass") g_cityNoGrass = true;
         else if (a == "--game-ms" && i + 1 < argc) g_benchGameMs = std::atof(argv[++i]);
         else if (a == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
         else if (a == "--hdr") hdr = true;
@@ -3462,6 +3827,20 @@ int main(int argc, char** argv)
     std::printf("GPU: %s (Vulkan %u.%u), driver %s\n", dev.Info().gpu.c_str(), VK_API_VERSION_MAJOR(dev.Info().apiVersion),
                 VK_API_VERSION_MINOR(dev.Info().apiVersion), dev.Info().driver.c_str());
 
+    if (cityBench) {
+        // The city bench (render-batching P0): always through ThreadedDevice, its settings as the main device's.
+        ThreadedDevice tdev;
+        std::string err;
+        if (!tdev.Init(nullptr, g_width, g_height, &err)) { std::printf("init failed: %s\n", err.c_str()); return 1; }
+        tdev.SetPixelLighting(pixelLighting);
+        tdev.SetHideInterface(g_hideUi);
+        tdev.SetShadows(shadows);
+        tdev.SetHdr(hdr);
+        tdev.SetBloom(bloom, 1.0f);
+        RunCityBench(tdev, frames, shot, dump);
+        std::printf("rendered; screenshot %s\n", shot.c_str());
+        return 0;
+    }
     if (bench && threaded) {
         // The benchmark through rvk::ThreadedDevice: the time measured is what stays on the calling thread.
         ThreadedDevice tdev;
