@@ -424,6 +424,102 @@ void TestPng()
     std::printf("png: bitmap %ux%u %d bpp checksum %08x\n", w, h, bpp, hash);
 }
 
+// --map-tiles FILE N ROUNDS: what opening the planet map does - N of the map's 128x128 PNG tiles (the PNGs in FILE,
+// e.g. cd_image/textures/PlanetMap/normal/PlanetMapIndexNormal.bin) decoded by LBitmap_t::Load and made textures by
+// TextureStreamCreator, ROUNDS times; the time of each part, for profiling (tools/profile-game.sh on the harness).
+std::string g_mapTiles;
+int g_mapTileCount = 110, g_mapRounds = 5;
+
+void TestMapTiles()
+{
+    std::vector<uint8_t> file;
+    if (FILE* f = std::fopen(g_mapTiles.c_str(), "rb")) {
+        std::fseek(f, 0, SEEK_END);
+        file.resize(size_t(std::ftell(f)));
+        std::fseek(f, 0, SEEK_SET);
+        if (std::fread(file.data(), 1, file.size(), f) != file.size()) file.clear();
+        std::fclose(f);
+    }
+    static const uint8_t sig[8] = {0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a};
+    std::vector<std::pair<size_t, size_t>> tiles;              // offset, size
+    for (size_t at = 0; at + 8 < file.size() && int(tiles.size()) < g_mapTileCount;) {
+        if (std::memcmp(file.data() + at, sig, 8) != 0) { ++at; continue; }
+        size_t end = at + 8;
+        while (end + 12 <= file.size()) {                      // chunks up to IEND
+            const uint32_t len = (uint32_t(file[end]) << 24) | (uint32_t(file[end + 1]) << 16) |
+                                 (uint32_t(file[end + 2]) << 8) | file[end + 3];
+            const bool iend = std::memcmp(file.data() + end + 4, "IEND", 4) == 0;
+            end += 12 + len;
+            if (iend) break;
+        }
+        tiles.push_back({at, end - at});
+        at = end;
+    }
+    std::printf("map tiles: %zu PNGs from %s (%zu bytes)\n", tiles.size(), g_mapTiles.c_str(), file.size());
+    if (tiles.empty()) return;
+    void* streamVt[21] = {};
+    streamVt[0] = reinterpret_cast<void*>(&FakeStreamRead);
+    streamVt[5] = reinterpret_cast<void*>(&FakeStreamReadDword);
+    streamVt[7] = reinterpret_cast<void*>(&FakeStreamReadWord);
+    streamVt[18] = reinterpret_cast<void*>(&FakeStreamSeek);
+    streamVt[19] = reinterpret_cast<void*>(&FakeStreamSize);
+    using LBitmapLoadFn = void*(__cdecl*)(void*, const char*, int);
+    using TSCCtorBitmapFn = void*(__fastcall*)(void*, void*, void*, const char*, int);
+    using TSCreateTextureBitmapFn = void*(__fastcall*)(void*, void*, void*, const char*);
+    auto load = Export<LBitmapLoadFn>("?Load@LBitmap_t@@SAPAV1@PAVPositionIO_t@fun@@PBDW4CreationFlags_e@1@@Z");
+    auto ctor = Export<TSCCtorBitmapFn>("??0TextureStreamCreator@@QAE@PAVLBitmap_t@@PBDH@Z");
+    auto create = Export<TSCreateTextureBitmapFn>("?CreateTexture@TextureStreamCreator@@QAEPAVsurface_t@@PAVLBitmap_t@@PBD@Z");
+    LARGE_INTEGER freq;
+    QueryPerformanceFrequency(&freq);
+    auto now = [&] { LARGE_INTEGER t; QueryPerformanceCounter(&t); return double(t.QuadPart) * 1000.0 / double(freq.QuadPart); };
+    for (int round = 0; round < g_mapRounds; ++round) {
+        double decode = 0, texture = 0;
+        int made = 0, levels = 0;
+        uint32_t checksum = 2166136261u;
+        for (size_t i = 0; i < tiles.size(); ++i) {
+            char name[32];
+            std::snprintf(name, sizeof(name), "maptile_%d_%zu", round, i);
+            FakeStream stream{streamVt, file.data() + tiles[i].first, tiles[i].second, 0};
+            double t0 = now();
+            void* bitmap = load(&stream, "maptile.png", 0);
+            double t1 = now();
+            if (!bitmap) continue;
+            void* creator = ctor(::operator new(0x40), nullptr, bitmap, name, 1);
+            void* surface = create(creator, nullptr, bitmap, name);
+            double t2 = now();
+            decode += t1 - t0;
+            texture += t2 - t1;
+            made += surface != nullptr;
+            // Every level's pixels into one checksum (the same tiles must give the same textures, cached or not).
+            IDirectDrawSurface7** pp = surface ? Export<GetSurfacePointerFn>(
+                "?GetSurfacePointer@surface_t@@QAEPAPAUIDirectDrawSurface7@@XZ")(surface, nullptr) : nullptr;
+            IDirectDrawSurface7* level = pp ? *pp : nullptr;
+            if (level) level->AddRef();
+            while (level) {
+                DDSURFACEDESC2 sd{};
+                sd.dwSize = sizeof(sd);
+                if (level->Lock(nullptr, &sd, DDLOCK_READONLY | DDLOCK_WAIT, nullptr) == DD_OK) {
+                    const uint32_t bytes = sd.dwWidth * (sd.ddpfPixelFormat.dwRGBBitCount / 8);
+                    for (uint32_t y = 0; y < sd.dwHeight; ++y) {
+                        const uint8_t* row = static_cast<const uint8_t*>(sd.lpSurface) + size_t(y) * sd.lPitch;
+                        for (uint32_t b = 0; b < bytes; ++b) checksum = (checksum ^ row[b]) * 16777619u;
+                    }
+                    level->Unlock(nullptr);
+                    ++levels;
+                }
+                DDSCAPS2 caps{DDSCAPS_TEXTURE | DDSCAPS_MIPMAP, 0, 0, {0}};
+                IDirectDrawSurface7* next = nullptr;
+                if (FAILED(level->GetAttachedSurface(&caps, &next))) next = nullptr;
+                level->Release();
+                level = next;
+            }
+        }
+        std::printf("map tiles: round %d: %d textures, decode %.2f ms, texture %.2f ms (%.3f + %.3f ms a tile); "
+                    "%d levels, checksum %08x\n", round, made, decode, texture, decode / tiles.size(),
+                    texture / tiles.size(), levels, checksum);
+    }
+}
+
 // An 8x8 JPEG (PIL, quality 70, optimized tables), decoded through LBitmap_t::Load: the JPEG loader's factory.
 void TestJpeg()
 {
@@ -1462,6 +1558,11 @@ int main(int argc, char** argv)
         else if (a == "--materials") g_materials = true;
         else if (a == "--texture") g_texture = true;
         else if (a == "--png") g_png = true;
+        else if (a == "--map-tiles" && i + 3 < argc) {
+            g_mapTiles = argv[++i];
+            g_mapTileCount = std::atoi(argv[++i]);
+            g_mapRounds = std::atoi(argv[++i]);
+        }
         else if (a == "--jpeg") g_jpeg = true;
         else if (a == "--status") g_status = true;
         else if (a == "--lightmap") g_lightmap = true;
@@ -1544,6 +1645,7 @@ int main(int argc, char** argv)
     if (g_materials) TestMaterials();
     if (g_texture) TestTextureStream();   // before the first present: in the frame=1 call log window
     if (g_png) TestPng();                 // likewise
+    if (!g_mapTiles.empty()) TestMapTiles();
     if (g_jpeg) TestJpeg();               // likewise
     if (g_status) TestStatus();           // likewise
     {

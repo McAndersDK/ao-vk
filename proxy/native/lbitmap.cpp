@@ -12,6 +12,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <list>
+#include <mutex>
+#include <unordered_map>
+#include <vector>
 
 namespace rnative::lbitmap {
 
@@ -249,6 +253,50 @@ constexpr uint32_t kPngVtable = 0x8AA10, kJpegVtable = 0x8A4D0;
 
 int32_t StreamSize(Stream* s) { return reinterpret_cast<int32_t(__fastcall*)(void*, void*)>(s->vtable[19])(s, nullptr); }
 
+// Decoded images, remembered by their file's bytes: the planet map decodes the same ~110 PNG tiles each time it opens
+// (~27 ms of stb). Exact by construction (what is copied is what stb made); 48 MB, least recently used out.
+// RANDYVK_TEXTURE_CACHE=0 turns it off with the texture cache (texture_stream.cpp).
+namespace decoded {
+
+struct Entry {
+    uint64_t key;
+    uint32_t width, height;
+    int32_t bitsPerPixel;
+    std::vector<uint8_t> pixels;
+};
+constexpr size_t kBytes = size_t(48) << 20;
+std::mutex g_mutex;
+std::list<Entry> g_lru;
+std::unordered_map<uint64_t, std::list<Entry>::iterator> g_index;
+size_t g_bytes;
+
+bool Enabled()
+{
+    static const bool on = [] {
+        char v[8] = "";
+        return !(GetEnvironmentVariableA("RANDYVK_TEXTURE_CACHE", v, sizeof(v)) && v[0] == '0');
+    }();
+    return on;
+}
+
+uint64_t Key(const uint8_t* p, size_t n)
+{
+    uint64_t k = 0xcbf29ce484222325ull ^ n;
+    size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        uint64_t v;
+        std::memcpy(&v, p + i, 8);
+        k = (k ^ v) * 0x9E3779B97F4A7C15ull;
+        k ^= k >> 29;
+    }
+    uint64_t tail = 0;
+    std::memcpy(&tail, p + i, n - i);
+    k = (k ^ tail) * 0x9E3779B97F4A7C15ull;
+    return k ^ (k >> 31);
+}
+
+}  // namespace decoded
+
 void DecodeImage(Bitmap* self, Stream* stream, bool headerOnly)
 {
     const int32_t size = StreamSize(stream);
@@ -258,6 +306,23 @@ void DecodeImage(Bitmap* self, Stream* stream, bool headerOnly)
     }
     uint8_t* bytes = static_cast<uint8_t*>(vc10::AllocateArray(size_t(size)));
     Read(stream, bytes, size);
+    const bool cached = !headerOnly && decoded::Enabled();
+    const uint64_t key = cached ? decoded::Key(bytes, size_t(size)) : 0;
+    if (cached) {
+        std::lock_guard<std::mutex> lock(decoded::g_mutex);
+        auto it = decoded::g_index.find(key);
+        if (it != decoded::g_index.end()) {
+            decoded::g_lru.splice(decoded::g_lru.begin(), decoded::g_lru, it->second);
+            const decoded::Entry& e = *it->second;
+            self->width = e.width;
+            self->height = e.height;
+            self->bitsPerPixel = e.bitsPerPixel;
+            self->data = static_cast<uint8_t*>(vc10::Allocate(e.pixels.size()));
+            std::memcpy(self->data, e.pixels.data(), e.pixels.size());
+            vc10::FreeArray(bytes);
+            return;
+        }
+    }
     int width = 0, height = 0, channels = 0;
     if (!stbi_info_from_memory(bytes, size, &width, &height, &channels)) {
         vc10::FreeArray(bytes);
@@ -289,6 +354,21 @@ void DecodeImage(Bitmap* self, Stream* stream, bool headerOnly)
         if (wanted == 4) out[i * wanted + 3] = pixels[i * wanted + 3];
     }
     stbi_image_free(pixels);
+    const size_t outBytes = count * size_t(wanted);
+    if (cached && outBytes <= decoded::kBytes / 8) {
+        std::lock_guard<std::mutex> lock(decoded::g_mutex);
+        if (!decoded::g_index.count(key)) {
+            decoded::g_lru.push_front({key, self->width, self->height, self->bitsPerPixel,
+                                       std::vector<uint8_t>(out, out + outBytes)});
+            decoded::g_index[key] = decoded::g_lru.begin();
+            decoded::g_bytes += outBytes;
+            while (decoded::g_bytes > decoded::kBytes && decoded::g_lru.size() > 1) {
+                decoded::g_bytes -= decoded::g_lru.back().pixels.size();
+                decoded::g_index.erase(decoded::g_lru.back().key);
+                decoded::g_lru.pop_back();
+            }
+        }
+    }
 }
 
 Bitmap* __fastcall PNGCreate(Bitmap* self, void*, Stream* stream, int32_t flags)   // FUN_10019154 (vtable slot 4)
