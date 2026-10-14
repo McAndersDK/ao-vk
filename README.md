@@ -403,7 +403,10 @@ feature costs exactly where you are.
 | `RANDYVK_DDRAW` | `rvk` (default): render with ao-vk. `off`: the game's stock renderer, ao-vk passing everything through. `trace`: the stock renderer, counting its Direct3D calls |
 | `RANDYVK_THREADED` | `0` runs the Vulkan work on the game's thread (for comparison) |
 | `RANDYVK_PIPELINE_CACHE` | path of the pipeline cache when the proxy sets none (the game keeps it as `randy-vk.cache` in the client folder; delete the file to rebuild it, `off` disables it here) |
-| `RANDYVK_LOG` | log file path (default `randy-vk.log` in the client folder; moved to `randy-vk.old.log` once over 8 MB) |
+| `RANDYVK_LOG` | log file path (default `randy-vk.log` in the client folder; moved to `randy-vk.old.log` once over 8 MB; a second client running from the same folder writes `randy-vk-2.log`) |
+| `RANDYVK_HANG_SECONDS` | seconds without a frame before the hang report (every thread's place, into the log; default 20). `RANDYVK_NO_WATCHDOG=1` turns the watchdog off |
+| `RANDYVK_TEXTURE_CACHE` | `0` turns off the caches of decoded images and converted textures (they make the planet map and revisited zones load faster) |
+| `RANDYVK_INSPECT_EVERY` | capture a frame for the frame inspector every N seconds (default: only on Ctrl+Shift+F12) |
 
 ## Known limitations
 
