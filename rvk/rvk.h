@@ -802,6 +802,9 @@ private:
     VkSampler m_normalSampler = VK_NULL_HANDLE;
     Texture* m_constantsNormalMap = nullptr;
     bool m_constantsSkyScenery = false;
+    uint32_t m_constantsBlend = ~0u;             // the blend enable the block was written with (Draw may turn it off)
+    bool m_opaqueBlend = true;                   // RANDYVK_OPAQUE_BLEND=0: alpha-1 blended draws stay blended (A/B)
+    uint64_t m_opaqueBlendDraws = 0;             // (logged with the opaque fast path)
     PbrSettings m_pbr;
     uint32_t m_anisotropy = 1;
     float m_maxAnisotropy = 1.0f;               // GPU limit (0 without the feature)

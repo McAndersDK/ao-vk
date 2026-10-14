@@ -2347,6 +2347,27 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
             m_drawStaticIndexBuffer = VK_NULL_HANDLE;
     }
     ProfileDrawSection("draw: setup (canopy, plants)", since);
+    // Blended SRCALPHA / INVSRCALPHA with an alpha provably 1 (AlphaOneCheck) - most of the game's statics - blends to
+    // exactly its own colour, in every attachment: drawn unblended from here (its constants, batch and blend state
+    // an opaque draw's: blend toggling split the batches and set the blend state ~900 times a frame over a city). After
+    // the grass tiles' trigger above (the first blended draw: where they go stays the game's order); not the sky, the
+    // cloud sheets or a canopy with leaves (they change the alpha in the shader), nor a translucent material (not a
+    // shadow caster). The render state is put back when the draw ends.
+    struct BlendRestore {
+        Device* d;
+        bool on;
+        ~BlendRestore() { if (on) d->m_rs[d3d::RS_ALPHABLENDENABLE] = 1; }
+    } blendRestore{this, false};
+    if (m_opaqueBlend && m_rs[d3d::RS_ALPHABLENDENABLE] == 1 && m_rs[d3d::RS_SRCBLEND] == d3d::BLEND_SRCALPHA &&
+        m_rs[d3d::RS_DESTBLEND] == d3d::BLEND_INVSRCALPHA && m_rs[d3d::RS_ZENABLE] && m_rs[d3d::RS_ZWRITEENABLE] &&
+        !m_rs[d3d::RS_ALPHATESTENABLE] && !m_external && !m_drawIsLabel && !m_drawLeaves && !m_drawIsCloudPuff &&
+        VisualKind(m_drawVisualKind) != VisualKind::Sky && (m_target == m_scene || m_target == m_main) &&
+        (fvf & d3d::FVF_POSITION_MASK) == d3d::FVF_XYZ && !IsTerrain(fvf) &&
+        !(m_rs[d3d::RS_LIGHTING] && m_material.diffuse.a < 0.5f) && AlphaOneCheck(fvf) == kPreIn) {
+        m_rs[d3d::RS_ALPHABLENDENABLE] = 0;
+        blendRestore.on = true;
+        ++m_opaqueBlendDraws;
+    }
     // Retained indices only with the retained vertices (one static draw path).
     const VkBuffer staticIb = m_drawStaticBuffer && indices ? m_drawStaticIndexBuffer : VK_NULL_HANDLE;
 
@@ -2595,7 +2616,8 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
                    m_constantsCarrier != carrier || m_constantsBumpBase != m_drawBumpBase ||
                    m_constantsFoliageLod != foliageLod || m_constantsNormalMap != normalMap ||
                    m_constantsCharacter != m_drawIsCharacter || m_constantsOpaque != cutoutTexture ||
-                   m_constantsHoles != textureHoles || m_constantsSkyScenery != skyScenery;
+                   m_constantsHoles != textureHoles || m_constantsSkyScenery != skyScenery ||
+                   m_constantsBlend != m_rs[d3d::RS_ALPHABLENDENABLE];
     uint32_t constIndex = m_constIndex;
     bool sameArena = m_constantsGeneration == m_ringGeneration && m_constIndex < m_constCount;   // m_constIndex valid
     if (rewrite) {
@@ -2609,6 +2631,7 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     m_constantsBumpBase = m_drawBumpBase;
     m_constantsFoliageLod = foliageLod;
     m_constantsSkyScenery = skyScenery;
+    m_constantsBlend = m_rs[d3d::RS_ALPHABLENDENABLE];
     m_constantsCharacter = m_drawIsCharacter;
     m_constantsOpaque = cutoutTexture;
     m_constantsHoles = textureHoles;
@@ -2980,8 +3003,9 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
              uint64_t(m_rs[d3d::RS_ZWRITEENABLE] != 0) << 9 | uint64_t(m_rs[d3d::RS_ALPHABLENDENABLE] != 0) << 10 |
              uint64_t(m_drawMayDiscard) << 11 | uint64_t(m_drawIsLabel) << 12 | uint64_t(m_drawOverbright2x) << 13 |
              uint64_t(m_drawTerrainBase) << 14 | uint64_t(m_drawTerrainLight) << 15 |
-             uint64_t(m_rs[d3d::RS_ZFUNC]) << 16 | uint64_t(m_rs[d3d::RS_SRCBLEND]) << 32 |
-             uint64_t(m_rs[d3d::RS_DESTBLEND]) << 48);
+             uint64_t(m_rs[d3d::RS_ZFUNC]) << 16 |   // (the blend factors only while blending: they aren't set else)
+             (m_rs[d3d::RS_ALPHABLENDENABLE] ? uint64_t(m_rs[d3d::RS_SRCBLEND]) << 32 |
+                                                   uint64_t(m_rs[d3d::RS_DESTBLEND]) << 48 : 0));
         groupKey = k ? k : 1;
     }
     if (m_group.active && (groupKey == 0 || groupKey != m_group.key))

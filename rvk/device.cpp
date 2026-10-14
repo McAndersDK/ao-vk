@@ -560,6 +560,8 @@ bool Device::CreateLogicalDevice(std::string* error)
     {
         const char* v = std::getenv("RANDYVK_SCENE_PROFILE");
         m_sceneProfile = v && *v == '1';
+        const char* o = std::getenv("RANDYVK_OPAQUE_BLEND");
+        m_opaqueBlend = !(o && *o == '0');
     }
     m_shadeQueries = features.features.pipelineStatisticsQuery && m_sceneProfile;
     enabled.features.pipelineStatisticsQuery = features.features.pipelineStatisticsQuery;
@@ -1542,7 +1544,9 @@ void Device::BeginFrame()
             Log("address space: %llu of %llu MB free (the game's process)", (unsigned long long)(mem.ullAvailVirtual >> 20),
                 (unsigned long long)(mem.ullTotalVirtual >> 20));
         Log("%s", GpuMemoryReport().c_str());
-        Log("opaque static fast path: %llu draws (last 600 frames)", (unsigned long long)m_opaqueDraws);
+        Log("opaque static fast path: %llu draws; %llu alpha-1 blended draws drawn unblended (last 600 frames)",
+            (unsigned long long)m_opaqueDraws, (unsigned long long)m_opaqueBlendDraws);
+        m_opaqueBlendDraws = 0;
         Log("foliage: %llu draws, %llu of them far (LOD) (last 600 frames)", (unsigned long long)m_foliageDraws,
             (unsigned long long)m_foliageLodDraws);
         Log("foliage survey: %.0f draws a frame (%.0f static, %.0f changing), %.0f vertices; box height %.2f .. %.2f",
