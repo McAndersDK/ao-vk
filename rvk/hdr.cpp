@@ -451,6 +451,9 @@ void Device::EndScene()
         taa = taa && m_tonemapped;
     }
     Texture* toned = blur || taa ? m_tonemapped : m_ldrMain;
+    // With TAA the tone mapping's alpha says how much of each pixel additive effects made (taa.frag: those pixels
+    // take more of the new frame - sparks and spell effects, new each frame, were averaged away).
+    if (taa) params[7] = float(int(params[7]) | 16);
     TonemapInputsPass(cmd, toned, m_tonemapPipeline, scene, bloom, ao, gi, volume, params);
     ProfileMark("tonemap");
     if (taa)
@@ -499,6 +502,7 @@ void Device::TonemapInputsPass(VkCommandBuffer cmd, Texture* dst, VkPipeline pip
                                bool gi, bool volume, const float params[16])
 {
     Transition(cmd, dst, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    Transition(cmd, m_glow, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);   // (binding 12: the effects' share, for TAA)
     VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     color.imageView = dst->m_view;
     color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -534,7 +538,8 @@ void Device::TonemapInputsPass(VkCommandBuffer cmd, Texture* dst, VkPipeline pip
                                        {m_pointSampler, reflections->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                        {m_pointSampler, contact->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                        {m_linearSampler, m_lut[0]->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                       {m_linearSampler, m_lut[1]->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+                                       {m_linearSampler, m_lut[1]->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                       {m_pointSampler, m_glow->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
     static_assert(sizeof(images) / sizeof(images[0]) == kTonemapInputs, "occlusion.glsl bindings");
     VkWriteDescriptorSet w[kTonemapInputs] = {};
     for (uint32_t i = 0; i < kTonemapInputs; ++i) {

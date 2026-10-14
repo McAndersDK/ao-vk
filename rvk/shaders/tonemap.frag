@@ -127,5 +127,12 @@ void main()
         float white = m > 1.0 ? 1.0 - 1.0 / (1.0 + 0.25 * (m - 1.0)) : 0.0;   // 0 at 1, 0.2 at 2, 0.5 at 5
         c = mix(c * (shown / m), vec3(shown), white);
     }
-    outColor = vec4(Grade(min(c, vec3(1.0)), far), clamp(s.a, 0.0, 1.0));
+    // Alpha: with TAA (flag 16), how much of this pixel additive effects made - their glow, as shown (taa.frag gives
+    // those pixels more of the new frame); else the scene's alpha.
+    float alpha = clamp(s.a, 0.0, 1.0);
+    if ((int(P.proj.w) & 16) != 0) {
+        vec3 effect = texelFetch(glowRaw, ivec2(gl_FragCoord.xy), 0).rgb * P.params.y;
+        alpha = smoothstep(0.01, 0.25, dot(effect, vec3(0.3, 0.59, 0.11)));
+    }
+    outColor = vec4(Grade(min(c, vec3(1.0)), far), alpha);
 }

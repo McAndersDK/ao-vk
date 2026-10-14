@@ -2246,7 +2246,7 @@ private:
                m_dofPrefilterPipeline = VK_NULL_HANDLE, m_dofTilesPipeline = VK_NULL_HANDLE,
                m_dofGatherPipeline = VK_NULL_HANDLE, m_dofFinalPipeline = VK_NULL_HANDLE;
     bool RenderDof(VkCommandBuffer cmd, bool bloom, bool ao, bool gi, bool volume, const float tonemapParams[16]);
-    static constexpr uint32_t kTonemapInputs = 12;   // occlusion.glsl's bindings
+    static constexpr uint32_t kTonemapInputs = 13;   // occlusion.glsl's bindings
     void TonemapInputsPass(VkCommandBuffer cmd, Texture* dst, VkPipeline pipeline, Texture* scene, bool bloom, bool ao,
                            bool gi, bool volume, const float params[16]);
     void MakeDepthReadable(VkCommandBuffer cmd);

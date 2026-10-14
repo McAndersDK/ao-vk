@@ -11,6 +11,7 @@ layout(set = 0, binding = 8) uniform sampler2D ssr;     // reflected colour, how
 layout(set = 0, binding = 9) uniform sampler2D contact; // half resolution: contact shadow (1 = lit), view depth
 layout(set = 0, binding = 10) uniform sampler3D lutDay;  // colour grading lookup tables (identity unless loaded)
 layout(set = 0, binding = 11) uniform sampler3D lutNight;
+layout(set = 0, binding = 12) uniform sampler2D glowRaw; // full resolution: what additive effects added (the scene's glow)
 layout(push_constant) uniform Push {
     vec4 params;        // knee, exposure, bloom strength, bloom left on objects nearer than its light (-1: no depth)
     vec4 proj;          // D3D projection m[2][2], m[3][2] (view depth from the depth buffer), indirect light strength,
