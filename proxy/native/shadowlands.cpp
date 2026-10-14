@@ -149,7 +149,7 @@ void SetModule(HMODULE orig) { g_orig = orig; }
 void Install(HMODULE orig)
 {
     g_orig = orig;
-    if (GetMode("Scene", Mode::Off) != Mode::On) return;
+    if (GetMode("Scene", Mode::On) != Mode::On) return;
     struct Entry {
         uint32_t rva;
         void* target;

@@ -91,7 +91,7 @@ void __fastcall Stop(Timer* t, void*)   // Timer::Stop
 
 void Install(HMODULE orig)
 {
-    if (GetMode("Scene", Mode::Off) != Mode::On) return;
+    if (GetMode("Scene", Mode::On) != Mode::On) return;
     g_orig = orig;
     struct Entry {
         uint32_t rva;

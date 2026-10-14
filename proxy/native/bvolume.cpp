@@ -173,7 +173,7 @@ void* __fastcall Delete(uint8_t* v, void*, uint8_t flags)   // vtable slot 0 (FU
 
 void Install(HMODULE orig)
 {
-    if (GetMode("Scene", Mode::Off) != Mode::On) return;
+    if (GetMode("Scene", Mode::On) != Mode::On) return;
     g_orig = orig;
     if (!S().complete) return;
     struct Entry {

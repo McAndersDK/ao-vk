@@ -285,7 +285,7 @@ void __cdecl Format(void* out, const char* format, ...)
 
 void Install(HMODULE orig)
 {
-    if (GetMode("Device", Mode::Off) != Mode::On) return;
+    if (GetMode("Device", Mode::On) != Mode::On) return;
     g_orig = orig;
     struct Entry {
         uint32_t rva;

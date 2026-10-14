@@ -112,7 +112,7 @@ void __fastcall ToFloats(Format* self, void*, float* out, const void* src, const
 
 void Install(HMODULE orig)
 {
-    if (GetMode("Device", Mode::Off) != Mode::On) return;
+    if (GetMode("Device", Mode::On) != Mode::On) return;
     struct Entry {
         uint32_t rva;
         void* target;

@@ -101,7 +101,7 @@ void __fastcall Process(uint8_t* visual)
 
 void Install(HMODULE orig)
 {
-    if (GetMode("CatMesh", Mode::Off) != Mode::On)
+    if (GetMode("CatMesh", Mode::On) != Mode::On)
         return;
     g_orig = orig;
     static const uint8_t kBones[] = {0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x40};

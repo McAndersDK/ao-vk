@@ -55,7 +55,7 @@ FIND(0x47ECC, 0xB6614)
 
 void Install(HMODULE orig)
 {
-    if (GetMode("Scene", Mode::Off) != Mode::On) return;
+    if (GetMode("Scene", Mode::On) != Mode::On) return;
     g_orig = orig;
     if (!serialize::Get().findObject) {
         Log("find object: serialize.dll missing - not replaced");

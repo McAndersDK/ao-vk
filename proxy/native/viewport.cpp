@@ -557,7 +557,7 @@ void* __fastcall Delete(void* vp, void*, uint8_t flags)   // FUN_1004c7c8
 
 void Install(HMODULE orig)
 {
-    if (GetMode("Scene", Mode::Off) != Mode::On) return;
+    if (GetMode("Scene", Mode::On) != Mode::On) return;
     g_orig = orig;
     g_render = reinterpret_cast<void* const*>(GetProcAddress(orig, "?m_pcInstance@render_t@@0PAV1@A"));
     g_randy = reinterpret_cast<void* const*>(GetProcAddress(orig, "?s_pcRandy@Randy_t@@1PAV1@A"));

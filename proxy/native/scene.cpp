@@ -295,11 +295,11 @@ void AfterProcess()
 
 void Install(HMODULE orig)
 {
-    if (GetMode("Visuals", Mode::Off) != Mode::On)
+    if (GetMode("Visuals", Mode::On) != Mode::On)
         return;
     g_renderInstance = reinterpret_cast<void* const*>(GetProcAddress(orig, "?m_pcInstance@render_t@@0PAV1@A"));
     g_lightsBegin = reinterpret_cast<const void* const*>(reinterpret_cast<uint8_t*>(orig) + kLightListRva);
-    if (GetMode("Scene", Mode::Off) == Mode::On) {  // viewport.cpp's native Render / Process call in
+    if (GetMode("Scene", Mode::On) == Mode::On) {  // viewport.cpp's native Render / Process call in
         g_active = true;
         Log("visuals: on, lights from the scene (through the native viewport)");
         return;

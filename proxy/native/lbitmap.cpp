@@ -346,7 +346,7 @@ Bitmap* __cdecl Load(Stream* stream, const char* name, int32_t flags)
 
 void Install(HMODULE orig)
 {
-    if (GetMode("Device", Mode::Off) != Mode::On) return;
+    if (GetMode("Device", Mode::On) != Mode::On) return;
     g_orig = orig;
     struct Entry {
         uint32_t rva;

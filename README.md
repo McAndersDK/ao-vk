@@ -239,7 +239,8 @@ measures what each costs where you stand.
 
 ao-vk started as a layer under the game's renderer. It is now replacing that renderer too: Randy's own code (the
 original `randy31_orig.dll`, about 1,900 functions) is being rewritten function by function as native code in
-`proxy/native/`, with the goal of no longer loading the original at all. Each part is switched on in `randy-vk.ini`:
+`proxy/native/`, with the goal of no longer loading the original at all. Each part has a switch in `randy-vk.ini`,
+and all of them are on by default:
 
 ```ini
 [Native]
@@ -256,8 +257,10 @@ Direct=on     ; with Device=on: render state reaches the renderer directly, one 
 Retain=on     ; (default) with Device, Scene and Direct on: static meshes kept on the GPU and drawn by handle
 ```
 
-All of them but `Direct` default to `off` (the original code). They have been played with in game; if something misbehaves,
-turning the one key back off brings the original back for that part.
+All of them default to `on` since 0.5 (the first start of 0.5 also switches on any part an earlier version left
+`off`). Native parts are part of how ao-vk gets its frame rate (characters skinned on the GPU, static meshes kept on
+the GPU). If something misbehaves, setting one key to `off` brings the original back for that part - and please
+report it, with `randy-vk.log`.
 
 Every part is checked against the original before it is switched on: computations side by side on random input
 (`tools/native-check.sh`), drawing with a log of every Direct3D call of a frame, which must be identical with the

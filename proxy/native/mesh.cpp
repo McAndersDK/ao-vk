@@ -802,7 +802,7 @@ void* __fastcall TriMeshSubjectDelete(void* self, void*, uint8_t flags)
 
 void Install(HMODULE orig)
 {
-    if (GetMode("Scene", Mode::Off) != Mode::On) return;
+    if (GetMode("Scene", Mode::On) != Mode::On) return;
     g_orig = orig;
     g_randy = reinterpret_cast<void* const*>(GetProcAddress(orig, "?s_pcRandy@Randy_t@@1PAV1@A"));
     const serialize::Api& s = serialize::Get();

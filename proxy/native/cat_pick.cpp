@@ -299,7 +299,7 @@ bool __fastcall IsRayIntersecting(uint8_t* visual, void*, const float* from, con
 
 void Install(HMODULE orig)
 {
-    if (GetMode("Scene", Mode::Off) != Mode::On) return;
+    if (GetMode("Scene", Mode::On) != Mode::On) return;
     g_orig = orig;
     struct Entry {
         uint32_t rva;

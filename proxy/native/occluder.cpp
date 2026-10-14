@@ -697,7 +697,7 @@ void __fastcall PreProcessPlayfield(Occ* o, void*, int32_t playfield)
 
 void Install(HMODULE orig)
 {
-    if (GetMode("Scene", Mode::Off) != Mode::On) return;
+    if (GetMode("Scene", Mode::On) != Mode::On) return;
     g_orig = orig;
     struct Entry {
         uint32_t rva;

@@ -18,6 +18,8 @@ scenes=${*:-"setup setup0 setup16 setupfs defaults targets shutdown resize debug
 # each launch boots the prefix's services again (~20 s).
 WINEPREFIX=${WINEPREFIX:-$HOME/.wine-prk} wineserver -p 120 2>/dev/null
 grep -q "^$mode=" "$ini" || printf '%s=off\n' "$mode" >> "$ini"
+# The one-time migration (native.cpp MigrateDefaults) would turn an `off` back on: mark it done.
+grep -q '^Version=' "$ini" || sed -i 's/^\[Native\]$/[Native]\nVersion=1/' "$ini"
 before=$(grep "^$mode=" "$ini" | cut -d= -f2)
 fail=0
 for scene in $scenes; do

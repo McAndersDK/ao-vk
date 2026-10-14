@@ -42,6 +42,34 @@
 
 namespace rnative {
 
+namespace {
+
+// Before 0.5 every part defaulted to off, and the first run wrote `off` into randy-vk.ini - so a new default never
+// reached an existing install. Once ([Native] Version < 1): a part that reads off goes on. (Version=1 marks it done;
+// a part turned off after that stays off.)
+void MigrateDefaults()
+{
+    const char* ini = IniPath();
+    if (!ini[0] || GetPrivateProfileIntA("Native", "Version", 0, ini) >= 1)
+        return;
+    static const char* const kParts[] = {"Skin", "Anim", "Visuals", "CatRender", "CatMesh", "CatQuery", "Device", "Scene"};
+    int switched = 0;
+    for (const char* part : kParts) {
+        char value[16] = "";
+        GetPrivateProfileStringA("Native", part, "", value, sizeof(value), ini);
+        if (value[0] && !_stricmp(value, "off")) {
+            WritePrivateProfileStringA("Native", part, "on", ini);
+            ++switched;
+        }
+    }
+    WritePrivateProfileStringA("Native", "Version", "1", ini);
+    if (switched)
+        Log("settings: %d [Native] parts switched on (the new default; turn one off again in randy-vk.ini if it misbehaves)",
+            switched);
+}
+
+}  // namespace
+
 void Install(HMODULE orig)
 {
     static bool done = false;
@@ -50,6 +78,7 @@ void Install(HMODULE orig)
     done = true;
     SetOriginal(orig);
     InstallCrashLog();
+    MigrateDefaults();
     skin::Install(orig);
     anim::Install(orig);
     scene::Install(orig);

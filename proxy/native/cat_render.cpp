@@ -384,7 +384,7 @@ void ObserversAfter(void* visual, void* viewport) { ObserversAfterImpl(visual, v
 
 void Install(HMODULE orig)
 {
-    if (GetMode("CatRender", Mode::Off) != Mode::On)
+    if (GetMode("CatRender", Mode::On) != Mode::On)
         return;
     g_orig = orig;
     g_randy = reinterpret_cast<void* const*>(GetProcAddress(orig, "?s_pcRandy@Randy_t@@1PAV1@A"));
