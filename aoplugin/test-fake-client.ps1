@@ -33,7 +33,7 @@ function Run([string]$name, [bool]$withRenderer, [string]$sets) {
     Set-Content (Join-Path $panel "Root.xml") -NoNewline -Value (
         "<root>`n  <ScrollView label=`"General`"><View/></ScrollView>`n" +
         "  <ScrollView h_alignment=`"LEFT`" label=`"Renderer`"><TextView value=`"STALE`"/></ScrollView>`n</root>`n")
-    Set-Content (Join-Path $dir "AOReloaded.ini") "[AOReloaded]`r`nAOR_FpsCap=144`r`n"
+    Set-Content (Join-Path $dir "AOReloaded.ini") "[AOReloaded]`r`nAOR_FpsCap=144`r`nAOR_CharDist=150`r`nAOR_ObjDist=200`r`n"
 
     $env:FAKE_CLIENT_PRELOAD = if ($withRenderer) { "randy31.dll" } else { "" }
     $env:FAKE_CLIENT_SET = $sets
@@ -53,9 +53,9 @@ function Run([string]$name, [bool]$withRenderer, [string]$sets) {
 
 function Has([string]$text, [string]$literal) { return $text.Contains($literal) }
 
-$r = Run "renderer" $true "AOVK_FpsCap=double:200;RVK_Preset=double:3;RVK_Prepass=bool:0;RVK_PixelLight=bool:0"
+$r = Run "renderer" $true "AOVK_FpsCap=double:200;RVK_Preset=double:3;RVK_Prepass=bool:0;RVK_PixelLight=bool:0;AOVK_ObjDist=double:250;DisplayGroundFullQualityRadius=double:30"
 if ($r) {
-    Check "ao-vk runs" (Has $r.Log "ao-vk 1.0.0: running")
+    Check "ao-vk runs" ($r.Log -match "ao-vk [0-9.]+: running")
     Check "the renderer's settings are found" ($r.Log -match "\[ao-vk\] renderer settings: [1-9][0-9]* \(presets: yes\)")
     Check "they are DValues" (($r.Values -match "RVK_Enhance=bool:") -and ($r.Values -match "RVK_Preset=int:"))
     Check "the frame rate cap starts from AOReloaded.ini's" (Has $r.Log "[ao-vk] maximum frame rate 144")
@@ -67,12 +67,17 @@ if ($r) {
     Check "a change of a preset setting: the preset buttons show Custom" ($r.Values -match "RVK_Preset=int:99")
     Check "renderer settings aren't kept in AOPlugins.ini" (-not ($r.Ini -match "RVK_"))
     Check "one Renderer tab, the skin's copy replaced" ((([regex]::Matches($r.Xml, 'label="Renderer"')).Count -eq 1) -and -not (Has $r.Xml "STALE"))
+    Check "view distance: AOReloaded.ini's 150 m goes back on the game thread after login (80: no N3 here to unclamp)" (Has $r.Log "[ao-vk] DisplayCharViewDistance 70 -> 80")
+    Check "... the game's slider is remembered" ($r.Ini -match "AOVK_GroundHQ=30")
+    Check "... object detail distance changes" (Has $r.Log "statel rings at 250%")
+    Check "... without N3 / DisplaySystem nothing is patched, and the log says so" (Has $r.Log "view distance: characters stock (not patched), ground stock (not patched), objects stock (not patched)")
+    Check "... the tab has the view distance note" (Has $r.Xml "own sliders go further")
     Check "the tab has the presets, the frame rate and the settings" ((Has $r.Xml 'opt_variable="RVK_Preset"') -and (Has $r.Xml 'opt_variable="AOVK_FpsCap"') -and (Has $r.Xml 'opt_variable="RVK_Enhance"'))
 }
 
 $r = Run "no-renderer" $false ""
 if ($r) {
-    Check "ao-vk runs" (Has $r.Log "ao-vk 1.0.0: running")
+    Check "ao-vk runs" ($r.Log -match "ao-vk [0-9.]+: running")
     Check "it says the renderer isn't there" (Has $r.Log "[ao-vk] no renderer settings: ao-vk's renderer (randy31.dll) isn't installed")
     Check "the tab says so, with the frame rate cap" ((Has $r.Xml "isn&#39;t installed") -or (Has $r.Xml "isn't installed"))
     Check "no renderer settings in the tab" (-not (Has $r.Xml "RVK_"))

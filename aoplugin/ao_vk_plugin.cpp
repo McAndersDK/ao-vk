@@ -10,6 +10,7 @@
 // fps_cap.cpp), where it lived inside version.dll.
 
 #include "aop_plugin.h"
+#include "view_distance.h"
 
 #include <windows.h>
 #include <cmath>
@@ -169,12 +170,6 @@ void InitFpsCap() {
     ApplyFps(fps);
 }
 
-// The AOReloaded fork kept the cap as AOR_FpsCap in AOReloaded.ini: its value is the default here, once.
-int32_t FpsDefault() {
-    char ini[MAX_PATH];
-    std::snprintf(ini, sizeof(ini), "%sAOReloaded.ini", g_host->clientDir(g_host));
-    return static_cast<int32_t>(GetPrivateProfileIntA("AOReloaded", "AOR_FpsCap", kStockFps, ini));
-}
 
 // ---- The Renderer tab ----
 
@@ -307,6 +302,7 @@ void __cdecl WriteTab(void* /*user*/, AopBuffer* out) {
         x += "        <TextView value=\"" + Escape(g_missing.c_str()) +
              ". The frame rate cap works without it.\" font=\"LARGE\" layout_borders=\"Rect(0,0,0,10)\" />\n";
         FrameRate(x, 0);
+        aovk::viewdist::WriteTab(x);
         Out(out, x);
         return;
     }
@@ -314,6 +310,7 @@ void __cdecl WriteTab(void* /*user*/, AopBuffer* out) {
          " layout_borders=\"Rect(0,0,0,10)\" />\n";
     if (g_presetCount) Presets(x);
     FrameRate(x, g_presetCount ? 12 : 0);
+    aovk::viewdist::WriteTab(x);
 
     std::vector<RvkSettingInfo> all;
     const uint32_t count = g_count();
@@ -357,6 +354,7 @@ void __cdecl WriteTab(void* /*user*/, AopBuffer* out) {
 // ---- Events ----
 
 void __cdecl GameReady() {
+    aovk::viewdist::GameReady();
     InitFpsCap();
     TryRenderer();
 }
@@ -364,10 +362,16 @@ void __cdecl GameReady() {
 // The renderer may be loaded after Utils.dll: one more look. (If it is only found now, the tab the game has already
 // read has no settings; they are there from the next start.)
 void __cdecl WorldReady() {
+    aovk::viewdist::WorldReady();
     if (!g_available) TryRenderer();
 }
 
+void __cdecl GameFrame() { aovk::viewdist::GameFrame(); }
+
+void __cdecl DValueChanged(const char* name, const AopValue* value) { aovk::viewdist::DValueChanged(name, value); }
+
 void __cdecl SettingChanged(const char* name, int32_t value) {
+    if (aovk::viewdist::SettingChanged(name, value)) return;
     if (std::strcmp(name, kFpsVar) == 0) {
         ApplyFps(value);
         return;
@@ -394,13 +398,13 @@ void __cdecl SettingChanged(const char* name, int32_t value) {
 
 const AopPluginInfo kInfo = {
     sizeof(AopPluginInfo), AOP_API_VERSION,
-    "ao-vk", "ao-vk", AOP_VERSION(1, 0, 0),
+    "ao-vk", "ao-vk", AOP_VERSION(1, 1, 0),
     AOP_PLUGIN_EXCLUSIVE,   // a project: the renderer changes how the whole game looks
     nullptr, 0,
 };
 
 const AopPlugin kPlugin = {
-    AOP_API_VERSION, sizeof(AopPlugin), &GameReady, &WorldReady, &SettingChanged, nullptr, nullptr,
+    AOP_API_VERSION, sizeof(AopPlugin), &GameReady, &WorldReady, &SettingChanged, &DValueChanged, nullptr, &GameFrame,
 };
 
 }  // namespace
@@ -410,11 +414,17 @@ AOP_EXPORT const AopPluginInfo* __cdecl AopPluginQuery(void) {
 }
 
 AOP_EXPORT const AopPlugin* __cdecl AopPluginAttach(const AopHost* host) {
-    if (host->size < sizeof(AopHost)) return nullptr;
+    // API 2: patches, DValue ranges, the game frame (view distance).
+    if (host->version < 2 || host->size < sizeof(AopHost)) {
+        host->log(host, "AOPlugins is too old for this plugin (plugin API %u, 2 needed)", host->version);
+        return nullptr;
+    }
     g_host = host;
+    aovk::viewdist::Attach(host);
     // The cap is AOPlugins' to keep (AOPlugins.ini [ao-vk]); the renderer's settings come in gameReady, once
     // randy31.dll can be asked.
-    const int32_t fps = FpsDefault();
+    // The AOReloaded fork kept the cap as AOR_FpsCap in AOReloaded.ini: its value is the default here, once.
+    const int32_t fps = aovk::viewdist::AOReloadedIni(host, "AOR_FpsCap", kStockFps);
     AddSetting(kFpsVar, AOP_SETTING_INT, fps < kMinFps ? kMinFps : fps > kMaxFps ? kMaxFps : fps, kMinFps, kMaxFps, 0);
     // "Renderer" also replaces a static copy of the tab in a GUI skin (PRK-VK's Root.xml has one).
     if (!host->addOptionsTab(host, "Renderer", &WriteTab, nullptr)) return nullptr;

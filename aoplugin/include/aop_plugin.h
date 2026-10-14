@@ -26,7 +26,8 @@
 
 #include <stdint.h>
 
-#define AOP_API_VERSION 1
+/* 1: the first. 2: AopHost.patch, dvalueRange; dvalue* take names longer than 15 characters; AopPlugin.gameFrame. */
+#define AOP_API_VERSION 2
 
 /* A plugin's version as one number, comparable with < and >: AOP_VERSION(1, 2, 0). */
 #define AOP_VERSION(major, minor, patch) \
@@ -138,7 +139,7 @@ struct AopHost {
      * settingChanged isn't called for it. */
     int(__cdecl* setSetting)(const AopHost* host, const char* name, int32_t value);
 
-    /* Any DValue (the game's own too). dvalue* work from gameReady on. */
+    /* Any DValue (the game's own too), names up to 63 characters (API 1: 15). dvalue* work from gameReady on. */
     int(__cdecl* dvalueExists)(const AopHost* host, const char* name);
     int(__cdecl* dvalueGet)(const AopHost* host, const char* name, AopValue* out);
     int(__cdecl* dvalueSet)(const AopHost* host, const char* name, const AopValue* value);
@@ -164,12 +165,24 @@ struct AopHost {
     int(__cdecl* pluginActive)(const AopHost* host, const char* id, uint32_t* version);
     /* What another active plugin's getInterface returns for `name` - how plugins that support each other talk. */
     void*(__cdecl* pluginInterface)(const AopHost* host, const char* id, const char* name);
+
+    /* ---- API 2 ---- */
+
+    /* Patch `length` bytes of code or data at `target` (an operand, a jump over a check), with the same ownership as
+     * hooks: refused when the bytes overlap another plugin's (or the host's) hook or patch, or when they aren't
+     * `expected` (another client build, or patched by something outside AOPlugins). Bytes that are `bytes` already
+     * count as done. Executable code stays executable while it is written. Patches stay for the life of the process. */
+    int(__cdecl* patch)(const AopHost* host, void* target, const void* expected, const void* bytes, uint32_t length);
+    /* Any DValue's range: what its option slider spans and what SetDValue clamps to (e.g. raising a game slider's
+     * maximum). */
+    int(__cdecl* dvalueRange)(const AopHost* host, const char* name, int32_t minValue, int32_t maxValue);
 };
 
 /* ---- The plugin's table ---------------------------------------------------------------------------------------- */
 
 /* Returned by AopPluginAttach; any entry may be null. attach, gameReady and worldReady run on the host's start-up
- * thread; settingChanged and dvalueChanged on the thread that changed the DValue (the game's). */
+ * thread; settingChanged and dvalueChanged on the thread that changed the DValue (the game's); gameFrame on the game
+ * thread. */
 typedef struct AopPlugin {
     uint32_t version; /* AOP_API_VERSION */
     uint32_t size;    /* sizeof(AopPlugin) */
@@ -184,6 +197,12 @@ typedef struct AopPlugin {
     void(__cdecl* dvalueChanged)(const char* name, const AopValue* value);
     /* An interface of the plugin's own for other plugins (pluginInterface), or null. */
     void*(__cdecl* getInterface)(const char* name);
+
+    /* ---- API 2 ---- */
+
+    /* Once a frame, on the game thread (from AFCM.dll's frame limiter, Timer_t::FrameProcess), from gameReady on:
+     * where to touch the game's objects. Keep it short - it runs every frame. */
+    void(__cdecl* gameFrame)(void);
 } AopPlugin;
 
 typedef const AopPluginInfo*(__cdecl* AopPluginQueryFn)(void);
