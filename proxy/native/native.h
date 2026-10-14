@@ -73,9 +73,12 @@ bool Replaceable(HMODULE module, uint32_t rva);
 // Replaces a vtable entry (`vtable` = rva of the table) that holds module + `expected`; returns the original.
 void* HookSlot(HMODULE module, uint32_t vtable, uint32_t slot, uint32_t expected, void* target, const char* what);
 
-// Logs the first few faults (access violations etc.) in Randy (ours or the original), DisplaySystem or Gamecode, with their module + offset and the
-// return addresses on the stack, before anyone handles them (randy-vk.log).
+// Crash and hang reports into randy-vk.log (crash.cpp): faults in any module, first chance, with module + offset and
+// the return addresses on the stack; and a watchdog that, when frames stop for 20 s, writes every thread's place.
+// Neither takes the loader or heap lock, so they report even when the fault happened inside one.
 void InstallCrashLog();
+// A frame went by (Randy_t::Flip, the game's thread): feeds the hang watchdog.
+void HangBeat();
 
 // The module the replacements run against (the original randy31_orig.dll), set once by Install.
 void SetOriginal(HMODULE module);

@@ -386,16 +386,41 @@ void RvkState::Present()
     }
     f9Down = f9;
     ProfileSweep(pressed('O'));
+    // Slow frames: averages hide stutter, so each frame's time is checked too. A frame over 50 ms gets a line with
+    // the time of day (players can match it to what they did), up to 5 per 600 frames; the 600-frame line counts
+    // them all.
+    static LARGE_INTEGER qpcFreq, qpcLast;
+    static double slowest;
+    static unsigned over33, over100, slowLogged;
+    LARGE_INTEGER qpcNow;
+    QueryPerformanceCounter(&qpcNow);
+    if (!qpcFreq.QuadPart) QueryPerformanceFrequency(&qpcFreq);
+    if (qpcLast.QuadPart) {
+        const double ms = double(qpcNow.QuadPart - qpcLast.QuadPart) * 1000.0 / double(qpcFreq.QuadPart);
+        slowest = std::max(slowest, ms);
+        over33 += ms > 33.3;
+        over100 += ms > 100.0;
+        if (ms > 50.0 && slowLogged < 5) {
+            ++slowLogged;
+            SYSTEMTIME t;
+            GetLocalTime(&t);
+            RvkLog("slow frame: %.0f ms at %02d:%02d:%02d.%03d", ms, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
+        }
+    }
+    qpcLast = qpcNow;
     // Heartbeat: shows whether frames keep coming (a frozen picture vs. a hung game).
     static unsigned frames;
     static DWORD lastTick = GetTickCount();
     if (++frames % 600 == 0) {
         DWORD now = GetTickCount();
         double frameMs = double(now - lastTick) / 600.0;
-        RvkLog("presented %u frames: %.1f fps, %.2f ms/frame, %lld draws/frame", frames, 1000.0 / std::max(frameMs, 0.001),
-               frameMs, (long long)(g_drawCalls / 600));
+        RvkLog("presented %u frames: %.1f fps, %.2f ms/frame, %lld draws/frame; slowest %.0f ms, %u over 33 ms, "
+               "%u over 100 ms", frames, 1000.0 / std::max(frameMs, 0.001), frameMs, (long long)(g_drawCalls / 600),
+               slowest, over33, over100);
         g_drawCalls = 0;
         lastTick = now;
+        slowest = 0;
+        over33 = over100 = slowLogged = 0;
     }
 }
 
