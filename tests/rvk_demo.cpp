@@ -1418,6 +1418,9 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
 // lines, stderr) and the calling thread's frame printed.
 int g_cityWarm = 60;              // --city-warm N: frames before the measured window
 bool g_cityNoGrass = false;       // --city-no-grass: without the ground grass (on by default, as in the game)
+bool g_cityNoCull = false;        // --city-no-cull: every object drawn every frame (the game draws what is in view)
+std::string g_cityStatels;        // --city-statels PACK: playfield 790's placed objects (their shadows), the scene moved
+                                  // to West Bank's city (1380, 0, 2950) where they stand
 
 namespace city {
 struct Vtx { float x, y, z, nx, ny, nz, u, v; };   // FVF 0x112, the game's statics
@@ -1597,7 +1600,8 @@ void RunCityBench(D& dev, int frames, const std::string& shot, const std::string
         cx = (float(lot % kLotsX) - kLotsX / 2.0f + 0.5f) * kLot;
         cz = (float(lot / kLotsX) - kLotsZ / 2.0f + 0.5f) * kLot;
     };
-    for (uint32_t i = 0; i < 2000; ++i) {        // statics: 1 or 2 pieces (~1.47 a static, as the game's 3,029 / 2,067)
+    // (Culled to the view as the game does, ~40% are drawn: ~3,500 draws, as the game's frame.)
+    for (uint32_t i = 0; i < 4800; ++i) {        // statics: 1 or 2 pieces (~1.47 a static, as the game's 3,029 / 2,067)
         float cx, cz;
         lotCentre(i % (kLotsX * kLotsZ), cx, cz);
         Object o{};
@@ -1613,7 +1617,7 @@ void RunCityBench(D& dev, int frames, const std::string& shot, const std::string
         o.visual = visual++;
         objects.push_back(o);
     }
-    for (uint32_t i = 0; i < 85; ++i) {          // fences on 85 lots: 170 pieces with holes (the game's ~170 foliage)
+    for (uint32_t i = 0; i < 200; ++i) {         // fences on 200 lots: ~170 pieces with holes in view (the game's foliage)
         float cx, cz;
         lotCentre(Hash(i + 500) % (kLotsX * kLotsZ), cx, cz);
         for (int s = 0; s < 2; ++s) {
@@ -1629,7 +1633,7 @@ void RunCityBench(D& dev, int frames, const std::string& shot, const std::string
         }
     }
     std::vector<Object> panes;                   // additive, no depth writes, after the rest (the game's effects)
-    for (uint32_t i = 0; i < 40; ++i) {
+    for (uint32_t i = 0; i < 95; ++i) {
         float cx, cz;
         lotCentre(Hash(i + 999) % (kLotsX * kLotsZ), cx, cz);
         Object o{};
@@ -1691,6 +1695,20 @@ void RunCityBench(D& dev, int frames, const std::string& shot, const std::string
     const uint32_t groundVertices = uint32_t(kGridX * kGridZ);
     if (g_grassFieldOn && !g_cityNoGrass)
         dev.SetGrassField(true, g_grassFieldDist, 5.0f, 0.5f, true);
+    // (--city-statels: everything moved to the placed objects' city; its ground buffers too.)
+    const float ox = g_cityStatels.empty() ? 0.0f : 1380.0f, oz = g_cityStatels.empty() ? 0.0f : 2950.0f;
+    if (!g_cityStatels.empty()) {
+        dev.SetStatelMode(2);
+        dev.LoadStatels(g_cityStatels.c_str(), 790);
+        for (auto& b : groundBuffers) {
+            auto moved = std::make_shared<std::vector<uint8_t>>(*b);
+            auto* v = reinterpret_cast<VtxTerrain*>(moved->data());
+            for (size_t i = 0; i < moved->size() / sizeof(VtxTerrain); ++i) { v[i].x += ox; v[i].z += oz; }
+            b = moved;
+        }
+        for (Object& o : objects) { o.x += ox; o.z += oz; }
+        for (Object& o : panes) { o.x += ox; o.z += oz; }
+    }
     std::printf("city bench: %u meshes (%.2f MB of vertices), %zu objects + %zu panes, %zu ground chunks, %d frames "
                 "(window from %d)\n", nextId - 1, double(vertexBytes) / 1048576.0, objects.size(), panes.size(),
                 chunks.size(), frames, g_cityWarm);
@@ -1712,8 +1730,16 @@ void RunCityBench(D& dev, int frames, const std::string& shot, const std::string
         dev.SetViewport({0, 0, g_width, g_height, 0.0f, 1.0f});
         dev.Clear(CLEAR_TARGET | CLEAR_ZBUFFER, 0xFF6080A0, 1.0f);
         const float a = 0.6f + 0.0015f * float(frame);
-        const Vector eye{70.0f * std::sin(a), 14.0f, -70.0f * std::cos(a)};
+        const Vector eye{ox + 70.0f * std::sin(a), 14.0f, oz - 70.0f * std::cos(a)};
         dev.SetTransform(View, LookAtLH(eye, {eye.x - 40.0f * std::sin(a), 2.0f, eye.z + 40.0f * std::cos(a)}, {0, 1, 0}));
+        // What the game would draw: in front of the camera, within its view sideways (a margin for big things).
+        const float fx = -std::sin(a), fz = std::cos(a), tanHalf = std::tan(kPi / 6) * float(g_width) / float(g_height);
+        auto inView = [&](const Object& o) {
+            if (g_cityNoCull) return true;
+            const float dx = o.x - eye.x, dz = o.z - eye.z;
+            const float depth = dx * fx + dz * fz, side = dx * fz - dz * fx;
+            return depth > -6.0f && std::fabs(side) < std::max(depth, 0.0f) * tanHalf + 8.0f;
+        };
         dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.5f, 300.0f));
         dev.SetTransform(World, Identity());
         dev.SetRenderState(RS_ZENABLE, 1);
@@ -1732,7 +1758,7 @@ void RunCityBench(D& dev, int frames, const std::string& shot, const std::string
             Light l{};
             l.type = LIGHT_POINT;
             l.diffuse = {1.0f, 0.85f, 0.6f, 1};
-            l.position = {(Rand(i, 40) - 0.5f) * 120.0f, 3.0f, (Rand(i, 41) - 0.5f) * 120.0f};
+            l.position = {ox + (Rand(i, 40) - 0.5f) * 120.0f, 3.0f, oz + (Rand(i, 41) - 0.5f) * 120.0f};
             l.range = 20.0f;
             l.attenuation0 = 1.0f;
             l.attenuation1 = 0.1f;
@@ -1803,8 +1829,8 @@ void RunCityBench(D& dev, int frames, const std::string& shot, const std::string
                 ++draws;
             }
         };
-        for (const Object& o : objects) drawObject(o);
-        for (const Object& o : panes) drawObject(o);
+        for (const Object& o : objects) if (inView(o)) drawObject(o);
+        for (const Object& o : panes) if (inView(o)) drawObject(o);
         dev.SetRenderState(RS_ZWRITEENABLE, 1);
         dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
         dev.SetDrawVisual(0, nullptr);
@@ -3573,6 +3599,8 @@ int main(int argc, char** argv)
         else if (a == "--city-bench") { cityBench = true; hdr = shadows = g_grassFieldOn = true; }
         else if (a == "--city-warm" && i + 1 < argc) g_cityWarm = std::atoi(argv[++i]);
         else if (a == "--city-no-grass") g_cityNoGrass = true;
+        else if (a == "--city-no-cull") g_cityNoCull = true;
+        else if (a == "--city-statels" && i + 1 < argc) g_cityStatels = argv[++i];
         else if (a == "--game-ms" && i + 1 < argc) g_benchGameMs = std::atof(argv[++i]);
         else if (a == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
         else if (a == "--hdr") hdr = true;

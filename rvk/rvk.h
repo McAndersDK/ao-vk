@@ -1622,18 +1622,16 @@ private:
         uint8_t statelKinds = 0;
         float boxCentre[3], boxExtent[3];        // DrawWorldBox's box
         float lightMin[3], lightMax[3];          // FrameLightMask's (its own sums: the same bits)
+        uint32_t next = ~0u;                     // the entry found after it last time (FindObject's prediction)
     };
     std::vector<ObjectEntry> m_objects;          // open addressing (linear probing), a power of two long
     std::vector<uint64_t> m_objectKeys;          // their keys alone (probed: an entry is a few cache lines)
-    // The entries in the order the last frame's draws found them (the game draws its scene in the same order frame
-    // after frame): this frame's n-th lookup tries the last frame's n-th entry first, and the next one is prefetched.
-    std::vector<uint32_t> m_objectOrder, m_objectOrderNext;
+    uint32_t m_objectPrev = ~0u;                 // the entry the frame's last lookup found (its `next` is predicted)
     // Objects seen at a matrix once, not yet given an entry (direct-mapped: key, frame): an entry is made when one is
     // seen there again the next frame - a moving thing (a new matrix every frame) never gets one.
     struct ObjectCandidate { uint64_t key = 0, frame = 0; };
     std::vector<ObjectCandidate> m_objectCandidates;
     uint64_t m_objectPassing = 0;                // (lookups of objects not still: logged)
-    uint32_t m_objectOrderPos = 0;
     uint64_t m_objectPredicted = 0;              // (lookups the order answered: logged)
     size_t m_objectCount = 0;
     ObjectEntry* m_drawObject = nullptr;         // the current draw's, when it is a static mesh

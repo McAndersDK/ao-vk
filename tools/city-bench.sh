@@ -16,8 +16,8 @@ run() {
     echo "$name: exit $?"
 }
 run city --city-bench --pixel-lighting --frames 120 --city-warm 20 --shot city.bmp --dump city-dump.txt
-run city-time1 --city-bench --pixel-lighting --size 2560 1440 --frames 700 --shot city-time.bmp
-run city-time2 --city-bench --pixel-lighting --size 2560 1440 --frames 700 --shot city-time2.bmp
+run city-time1 --city-bench --pixel-lighting --size 2560 1440 --frames 700 --city-statels 'C:\linux\client\randy-vk\statels\790.bin' --shot city-time.bmp
+run city-time2 --city-bench --pixel-lighting --size 2560 1440 --frames 700 --city-statels 'C:\linux\client\randy-vk\statels\790.bin' --shot city-time2.bmp
 run shadow-hdr --shadow-test --hdr --frames 30 --shot shadow-hdr.bmp
 run cache --cache-test 100 --frames 300 --shot cache.bmp
 run statel --statel-test 'C:\linux\client\randy-vk\statels\790.bin' 790 1380 0 2950 --frames 60 --shot statel.bmp
