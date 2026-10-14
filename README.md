@@ -458,6 +458,7 @@ powershell -ExecutionPolicy Bypass -File tools\update-client.ps1 [-NoBuild] [-Cl
 - `proxy/`: the `randy31.dll` proxy, the DirectDraw / Direct3D 7 implementation on rvk (`proxy/ddraw/`), the
   settings (`proxy/ddraw/rvk_settings.cpp`) and the exported settings interface AOReloaded uses
 - `proxy/native/`: the native replacements of the original's functions
+- `aoplugin/`: `ao-vk.dll`, the Renderer settings tab as an [AOPlugins](aoplugin/README.md) plugin (a build of its own)
 - `interface/`: tables generated from the original DLL and its importers (`tools/gen_interface.py`)
 - `ghidra-scripts/`, `tools/`: the analysis scripts used along the way
 

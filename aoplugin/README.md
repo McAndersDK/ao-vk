@@ -1,0 +1,29 @@
+# ao-vk.dll - ao-vk's AOPlugins plugin
+
+The renderer's settings in the game's options window (F10, **Renderer** tab), for clients running
+[AOPlugins](../../AOPlugins) as their `version.dll`. randy31.dll itself knows nothing about AOPlugins: it exports its
+settings table (`RvkSettings_*`, `RvkPresets_*` - `proxy/ddraw/rvk_settings.h`) and keeps its settings in
+`randy-vk.ini`; this plugin turns that table into the tab.
+
+- every renderer setting a DValue bound to a widget (on / off switches, sliders, choices), changes passed to the
+  renderer, which applies and saves them; the preset buttons follow (Custom after a change by hand)
+- the client's frame rate cap (AFCM.dll's `Timer_t::m_vMaximumFramerate`, stock 100): `AOVK_FpsCap`, kept by AOPlugins
+  in `AOPlugins.ini` `[ao-vk]`; the first time it takes over the AOReloaded fork's `AOR_FpsCap`
+- without ao-vk's randy31.dll (the game's own renderer in place) the tab says so and has only the frame rate cap
+- an exclusive plugin (a "project" in AOPlugins' terms), id `ao-vk`
+
+It replaces the Renderer tab of the AOReloaded fork's `version.dll`; a GUI skin's static copy of the tab (PRK-VK's
+`OptionPanel/Root.xml` has one) is replaced by it in memory.
+
+## Build, test, install
+
+```sh
+cmake --preset linux-release && cmake --build --preset linux-release     # in aoplugin/, WSL / Linux: ../build/aoplugin/ao-vk.dll
+```
+
+`powershell -ExecutionPolicy Bypass -File aoplugin\test-fake-client.ps1` runs it in AOPlugins' fake client with
+ao-vk's real randy31.dll (and once without it); it needs AOPlugins built with its tests.
+
+Install: `ao-vk.dll` into the client's `AOPlugins\` folder (AOPlugins' `version.dll` in the client folder).
+
+`include/aop_plugin.h` is AOPlugins' plugin API header, copied from AOPlugins (API version 1); update it from there.
