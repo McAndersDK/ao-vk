@@ -444,6 +444,12 @@ void Device::RecordShadowCaster(uint32_t primitive, uint32_t fvf, uint32_t strid
 {
     if (!IsShadowCaster(primitive, fvf))
         return;
+    // (Profiling: its share of "draw: geometry + casters", sampled as the per-draw sections are.)
+    struct Timed {
+        Device* d;
+        double since;
+        ~Timed() { if (since > 0.0) d->ProfileCpuAddMs("draw: shadow casters (of geometry + casters)", (d->ProfileCpu() - since) * 16.0); }
+    } timed{this, (m_frameNumber & 15) == 0 ? ProfileCpu() : 0.0};
     UpdateFrameEye();
     // Most casters (a whole frame's worth) share one camera, the world's: try the last match first, not the scan.
     uint32_t view = m_casterViewLast;

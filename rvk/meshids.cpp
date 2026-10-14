@@ -125,13 +125,20 @@ void Device::NoteMeshPiece()
 {
     if (m_meshIds.empty())
         return;
-    if (m_drawVisual != m_idObject.visual || m_frameNumber != m_idObject.frame)
+    // An object (visual) once: its result kept, its draws on later frames skip the work - the candidate lists built,
+    // sorted and intersected per piece, every frame, cost the render thread ~2 ms over a city (4500 draws; user
+    // 2026-10-14). (The results feed only the statistics and the log.)
+    if (m_drawVisual != m_idObject.visual || m_frameNumber != m_idObject.frame) {
         SettleMeshObject();
+        m_idObject.visual = m_drawVisual;
+        m_idObject.frame = m_frameNumber;
+        m_idObject.known = m_drawVisual && m_meshIdObjects.count(m_drawVisual) != 0;
+    }
+    if (m_idObject.known)
+        return;
     const MeshInfo* info = m_drawMesh;
     if (!info || !info->geo || !m_drawVisual)
         return;
-    m_idObject.visual = m_drawVisual;
-    m_idObject.frame = m_frameNumber;
     ++m_idObject.pieces;
     auto [first, last] = MeshIdsOf(info->geo);
     std::vector<uint64_t> meshes;

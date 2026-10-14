@@ -2249,6 +2249,7 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
         DrawMeshInfo(fvf, layout.stride, vertices, vertexCount, indices, indexCount);
     ProfileDrawSection("draw: setup (mesh info)", since);
     NoteMeshPiece();                             // (mesh ids: which mesh the object drawing is)
+    ProfileDrawSection("draw: setup (mesh ids)", since);
     // (A GPU-skinned character has no vertices here: DrawSkinned hands the pick its CPU-skinned ones.)
     if (m_pickActive && !m_shadowOnlyDraw && !m_external && (vertices || m_pickSkinned) && (m_textures[0] || m_drawVisual) &&
         (m_target == m_scene || m_target == m_main) && (fvf & d3d::FVF_POSITION_MASK) == d3d::FVF_XYZ &&
@@ -2266,7 +2267,7 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
             CaptureCover(primitive, layout, vertices, vertexCount, indices, indexCount);
     }
     PushCandidateDraw(fvf);
-    ProfileDrawSection("draw: setup (mesh ids, pick, grass cover)", since);
+    ProfileDrawSection("draw: setup (pick, grass cover)", since);
     // A canopy (leaves.cpp): its leaves, baked the first time it is seen, drawn just before it (DrawLeaves). A solid
     // draw may be a tree's trunk (where its fallen leaves lie).
     CanopyParams(primitive, fvf, layout, vertices, vertexCount, indices, indexCount);

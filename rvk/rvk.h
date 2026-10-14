@@ -1388,6 +1388,7 @@ private:
         uint32_t visual = 0;
         uint64_t frame = 0;
         uint32_t pieces = 0;
+        bool known = false;                      // settled on an earlier frame: nothing to do
         std::vector<uint64_t> candidates;        // type << 32 | id, sorted
     };
     MeshIdObject m_idObject;
