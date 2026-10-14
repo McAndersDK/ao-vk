@@ -606,6 +606,11 @@ void Load()
         // (RVK_SmokeThick was RVK_SmokeDensity - 16 characters, one too many for the game's option variables.)
         if (!buf[0] && std::strcmp(s.name, "RVK_SmokeThick") == 0)
             GetPrivateProfileStringA("Renderer", "RVK_SmokeDensity", "", buf, sizeof(buf), g_iniPath);
+        if (buf[0] && !std::isfinite(std::atof(buf))) {   // (a NaN a broken slider saved - user, 2026-10-14)
+            RvkLog("settings: %s = %s in randy-vk.ini is not a number - its default instead", s.name, buf);
+            buf[0] = 0;
+        }
+        inIni.back() = buf[0] != 0;
         if (buf[0]) {
             s.value = float(std::atof(buf));
         } else if (s.legacyEnv && GetEnvironmentVariableA(s.legacyEnv, buf, sizeof(buf)) && buf[0]) {
