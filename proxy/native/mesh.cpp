@@ -21,6 +21,7 @@
 #include "native/xmath.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <vector>
@@ -28,6 +29,9 @@
 namespace rnative::mesh {
 
 namespace {
+
+std::atomic<float> g_shadowOnlyRange{0.0f}, g_shadowOnlyMinRadius{1.0f};   // (SetShadowOnlyRange)
+bool g_shadowOnly = false;                       // a culled mesh being drawn for its shadow (the game's thread)
 
 HMODULE g_orig;
 void* const* g_randy;
@@ -505,9 +509,39 @@ void __fastcall TriMeshProcess(Visual* v)
     orig::RVisual_t_Process(v);
 }
 
+// Culled, but within the shadows' reach (SetShadowOnlyRange): its bounding sphere's nearest point that close to
+// the camera, and not too small to matter.
+bool CastsWhileCulled(Visual* v, void* vp)
+{
+    const float range = g_shadowOnlyRange.load(std::memory_order_relaxed);
+    if (range <= 0.0f) return false;
+    uint8_t* data = Field<uint8_t*>(v, kData);
+    void* volumePtr = data ? Field<void*>(data, kDataVolume) : nullptr;
+    void* camera = vp ? Field<void*>(vp, kVpCamera) : nullptr;
+    if (!volumePtr || !camera) return false;
+    const float* volume = &Field<float>(volumePtr, 0);
+    const float radius = volume[5] * WorldScale(v);
+    if (radius < g_shadowOnlyMinRadius.load(std::memory_order_relaxed)) return false;
+    float c[3];
+    xm::Transform(volume + 2, World(v), c);
+    const float* eye = World(camera) + 12;
+    const float dx = c[0] - eye[0], dy = c[1] - eye[1], dz = c[2] - eye[2];
+    const float reach = range + radius;
+    return dx * dx + dy * dy + dz * dz < reach * reach;
+}
+
 void __fastcall TriMeshRender(Visual* v, void*, void* vp)
 {
-    if (!v[kVisibleNow]) return;
+    if (!v[kVisibleNow]) {
+        // Shadow-only: drawn for the sun's shadows alone (the renderer records, draws nothing) - no lights, no
+        // colours, no render priority change.
+        if (!CastsWhileCulled(v, vp)) return;
+        orig::render_t_SetTransformMatrix(Render(), kWorld, const_cast<float*>(World(v)));
+        g_shadowOnly = true;
+        Rasterize(v, nullptr, vp, Field<uint8_t*>(v, kData), true, v[kSorted] != 0);
+        g_shadowOnly = false;
+        return;
+    }
     if (const uint16_t* colours = Field<const uint16_t*>(v, kColours)) CopyColours(v, nullptr, colours);
     uint8_t* data = Field<uint8_t*>(v, kData);
     Field<uint32_t>(v, kLitBy) =
@@ -804,5 +838,13 @@ void Install(HMODULE orig)
     for (const Entry& e : entries) installed += Replace(orig, e.rva, e.target, e.what) ? 1 : 0;
     Log("meshes: %d of %d functions native", installed, int(sizeof(entries) / sizeof(entries[0])));
 }
+
+void SetShadowOnlyRange(float range, float minRadius)
+{
+    g_shadowOnlyRange.store(range, std::memory_order_relaxed);
+    g_shadowOnlyMinRadius.store(minRadius, std::memory_order_relaxed);
+}
+
+bool ShadowOnly() { return g_shadowOnly; }
 
 }  // namespace rnative::mesh

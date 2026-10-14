@@ -2167,7 +2167,7 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     // away it is. Before their pass, their fragments depth-test against ours and blend over us only where they are
     // nearer - the right order. (Not at the sky's blended draws - its stars, layers: the sky is drawn first, and what
     // is drawn where it ends, RVK_CloudsOn's clouds, would cover the blades.)
-    if (m_grassOn && !m_grassDrawnThisFrame && m_scenePhase && m_target == m_scene && !m_external && vertexCount &&
+    if (m_grassOn && !m_grassDrawnThisFrame && !m_shadowOnlyDraw && m_scenePhase && m_target == m_scene && !m_external && vertexCount &&
         (fvf & d3d::FVF_POSITION_MASK) == d3d::FVF_XYZ && m_rs[d3d::RS_ALPHABLENDENABLE] && !IsTerrain(fvf) &&
         VisualKind(m_drawVisualKind) != VisualKind::Sky)
         DrawGrassTiles(cmd);
@@ -2175,16 +2175,17 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     // RVK_GrassOn: the terrain's ground heights feed the procedural grass (grass.cpp CaptureTerrain / RenderGrassField).
     if (m_grassOn && !m_external && vertices && IsTerrain(fvf))
         CaptureTerrain(primitive, layout, vertices, vertexCount, indices, indexCount);
-    DrawMeshInfo(fvf, layout.stride, vertices, vertexCount, indices, indexCount);
+    if (!m_shadowOnlyDraw)
+        DrawMeshInfo(fvf, layout.stride, vertices, vertexCount, indices, indexCount);
     NoteMeshPiece();                             // (mesh ids: which mesh the object drawing is)
     // (A GPU-skinned character has no vertices here: DrawSkinned hands the pick its CPU-skinned ones.)
-    if (m_pickActive && !m_external && (vertices || m_pickSkinned) && (m_textures[0] || m_drawVisual) &&
+    if (m_pickActive && !m_shadowOnlyDraw && !m_external && (vertices || m_pickSkinned) && (m_textures[0] || m_drawVisual) &&
         (m_target == m_scene || m_target == m_main) && (fvf & d3d::FVF_POSITION_MASK) == d3d::FVF_XYZ &&
         m_rs[d3d::RS_ZENABLE])
         PickDraw(primitive, layout, vertices ? vertices : m_pickSkinned, vertexCount, indices, indexCount);
     // ... and solid objects lying on the ground keep it off where they are (not characters, effects, the sky, plants
     // or anything see-through; grass.cpp CaptureCover).
-    if (m_grassOn && !m_external && vertices && !IsTerrain(fvf) && m_target == m_scene &&
+    if (m_grassOn && !m_shadowOnlyDraw && !m_external && vertices && !IsTerrain(fvf) && m_target == m_scene &&
         (fvf & d3d::FVF_POSITION_MASK) == d3d::FVF_XYZ && m_rs[d3d::RS_ZENABLE] && m_rs[d3d::RS_ZWRITEENABLE] &&
         m_rs[d3d::RS_ZFUNC] != d3d::CMP_ALWAYS && !IsMultiplyPass() && !m_drawSkin && !m_drawIsLabel &&
         (!m_textures[0] || m_textures[0]->m_opaque) && !m_rs[d3d::RS_ALPHATESTENABLE]) {
@@ -2213,6 +2214,51 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     }
     // Retained indices only with the retained vertices (one static draw path).
     const VkBuffer staticIb = m_drawStaticBuffer && indices ? m_drawStaticIndexBuffer : VK_NULL_HANDLE;
+    // Shadow-only (native mesh.cpp: a static mesh the game culled - out of view, behind a hill - within the shadows'
+    // reach): its geometry placed and recorded as a sun shadow caster, nothing drawn. The shadows then hold all that
+    // stands near, whichever way the camera looks (user, 2026-10-14).
+    if (m_shadowOnlyDraw) {
+        if (m_external || m_drawGpu || !(m_scenePhase && m_target == m_scene))
+            return;
+        std::memcpy(m_drawSway, sway, sizeof(m_drawSway));   // (as a drawn plant's: its shadow sways)
+        Frame& sf = m_frames[m_frameIndex];
+        const bool reserve = m_arenaGeneration != m_ringGeneration;
+        const VkDeviceSize arenas = reserve ? VkDeviceSize(m_constWanted) * sizeof(DrawConstants) +
+                                                  VkDeviceSize(m_recordWanted) * sizeof(DrawRecord) +
+                                                  VkDeviceSize(m_recordWanted) * sizeof(VkDrawIndexedIndirectCommand) +
+                                                  ((m_shadows || m_pointShadows)
+                                                       ? VkDeviceSize(kShadowRecordCapacity) *
+                                                             (sizeof(ShadowRecord) + sizeof(VkDrawIndexedIndirectCommand))
+                                                       : 0) + 64
+                                            : 0;
+        EnsureRingSpace(arenas + (m_drawStaticBuffer ? 0 : VkDeviceSize(layout.stride) * vertexCount) +
+                        VkDeviceSize(indexCount) * 2 + layout.stride + 64);
+        PrepareDrawArenas();
+        void* cpu = nullptr;
+        VkDeviceSize vbOffset = 0, ibOffset = 0;
+        if (m_drawStaticBuffer) {
+            vbOffset = m_drawStaticOffset;
+            if (staticIb) {
+                ibOffset = m_drawStaticIndexOffset;
+            } else if (indices) {
+                ibOffset = Allocate(VkDeviceSize(indexCount) * 2, 2, &cpu);
+                std::memcpy(cpu, indices, size_t(indexCount) * 2);
+            }
+            RecordShadowCaster(primitive, fvf, layout.stride, vertices, vertexCount, vbOffset, indices,
+                               indices ? indexCount : 0, ibOffset, m_drawStaticBuffer, staticIb ? staticIb : sf.ring);
+        } else if (vertices) {
+            vbOffset = Allocate(VkDeviceSize(layout.stride) * vertexCount, layout.stride, &cpu);
+            std::memcpy(cpu, vertices, size_t(layout.stride) * vertexCount);
+            if (indices) {
+                ibOffset = Allocate(VkDeviceSize(indexCount) * 2, 2, &cpu);
+                std::memcpy(cpu, indices, size_t(indexCount) * 2);
+            }
+            RecordShadowCaster(primitive, fvf, layout.stride, vertices, vertexCount, vbOffset, indices,
+                               indices ? indexCount : 0, ibOffset);
+        }
+        ++m_shadowOnlyDraws;
+        return;
+    }
 
     // Two-pass foliage: the queued edges go before a draw that writes no depth (the effects drawn over the scene came
     // after the foliage, edges included, before).

@@ -1,5 +1,6 @@
 // rvk backend: IDirect3DDevice7 and IDirect3DVertexBuffer7.
 #include "rvk_backend.h"
+#include "native/mesh.h"
 #include "native/scene.h"
 #include "native/device.h"
 
@@ -694,6 +695,12 @@ HRESULT RDevice::DoGetTexture(DWORD stage, LPDIRECTDRAWSURFACE7* out)
 // The game's visual behind the next draws (native scene tracking, [Native] Visuals), when it changes.
 void NoteVisual(rvk::ThreadedDevice* dev)
 {
+    // (A static mesh the game culled, drawn for its shadow alone - native mesh.cpp: the renderer only records it.)
+    static bool shadowOnly = false;
+    if (rnative::mesh::ShadowOnly() != shadowOnly) {
+        shadowOnly = !shadowOnly;
+        dev->SetShadowOnlyDraw(shadowOnly);
+    }
     if (!rnative::scene::Installed())
         return;
     static const void* last = reinterpret_cast<const void*>(1);

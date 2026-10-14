@@ -762,11 +762,12 @@ void Device::UpdateCasterCache()
     if (m_frameNumber % 300 == 0) {
         Log("caster cache: %zu remembered, %zu streaks; this frame %u streaks started, refused %u far (last %.0f from the "
             "eye (%.1f %.1f %.1f)), %u full, %u without vertices, %u moving or a character's; %u kept "
-            "solid when the game let their texture go",
+            "solid when the game let their texture go; %u shadow-only draws (culled, casting)",
             m_casterCache.size(), m_casterStreaks.size(), m_cacheStreakStarts, m_cacheRefusedFar,
             double(m_cacheRefusedFarD), double(m_frameEye[0]), double(m_frameEye[1]), double(m_frameEye[2]),
-            m_cacheRefusedFull, m_cacheRefusedNoVertices, m_cacheRefusedMoving, m_cacheKeptSolid);
+            m_cacheRefusedFull, m_cacheRefusedNoVertices, m_cacheRefusedMoving, m_cacheKeptSolid, m_shadowOnlyDraws);
     }
+    m_shadowOnlyDraws = 0;
     m_cacheStreakStarts = m_cacheRefusedFar = m_cacheRefusedFull = m_cacheRefusedNoVertices = m_cacheRefusedMoving = 0;
     for (auto it = m_casterStreaks.begin(); it != m_casterStreaks.end();)
         it = it->second.lastFrame == m_frameNumber ? std::next(it) : m_casterStreaks.erase(it);

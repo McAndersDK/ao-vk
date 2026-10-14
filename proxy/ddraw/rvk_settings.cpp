@@ -2,6 +2,7 @@
 #include "rvk_settings.h"
 
 #include "rvk_backend.h"
+#include "native/mesh.h"
 #include "native/occluder.h"
 
 #include <windows.h>
@@ -150,6 +151,7 @@ Setting g_settings[] = {
     {"RVK_CloudThick", "Clouds: how thick",                                        "Experimental",     Float, 0.1f, 4, 0.1f, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudBright", "Clouds: how light",                                       "Experimental",     Float, 0.25f, 3, 0.05f, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudNight",  "Clouds: how light at night (x the above)",                 "Experimental",     Float, 0.25f, 2, 0.05f, 0.8f, nullptr, 0, "RVK_CloudsOn"},
+    {"RVK_ShadowAll",   "Shadows of everything near, seen or not (things the game leaves undrawn still cast)", "Shadows", Bool, 0, 1, 1, 1, nullptr, 0, "RVK_SunShadow"},
     {"RVK_ShadowView",  "Debug: show the sun shadow map's light (white lit, dark shadowed; tint = cascade)", "Experimental", Bool, 0, 1, 1, 0, nullptr, 0},
     {"RVK_Occlusion",   "The game's culling of what hills hide (off: all in view drawn - whole shadows, more draws)", "Experimental", Bool, 0, 1, 1, 1, nullptr, 0},
     {"RVK_ShadowMem",   "Shadows of things out of view: 0 off (only what's drawn), 1 on, 2 on without sway, 3 only big things, 4 solid", "Experimental", Int, 0, 4, 1, 1, nullptr, 0},
@@ -375,6 +377,11 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
     if (!d) return;
     const char* n = s.name;
     auto is = [n](const char* a) { return std::strcmp(n, a) == 0; };
+    // Static meshes the game culls cast anyway within the shadows' reach (native mesh.cpp; as the renderer's memory of
+    // casters: 1.4 x the shadow distance), meshes under a unit across left out.
+    if (is("RVK_ShadowAll") || is("RVK_SunDist") || is("RVK_SunShadow"))
+        rnative::mesh::SetShadowOnlyRange(V("RVK_ShadowAll") != 0.0f && V("RVK_SunShadow") != 0.0f ? 1.4f * V("RVK_SunDist")
+                                                                                                    : 0.0f, 1.0f);
     if (is("RVK_Enhance")) {                     // every enhancement at its own value or the game's
         for (const Setting& other : g_settings)
             if (&other != &s) Apply(other, d);
