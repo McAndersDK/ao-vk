@@ -165,5 +165,8 @@ bool OnePlane(uint32_t primitive, uint32_t stride, const void* vertices, uint32_
 // Clip-space test of a world-space box's corners against a view-projection: +1 all inside, -1 all outside one
 // plane, 0 otherwise. depth: also test the near and far planes.
 int BoxInClip(const float mn[3], const float mx[3], const d3d::Matrix& vp, bool depth);
+// BoxInClip(mn, mx, vp, false) == -1 for an affine view-projection (orthographic: every point's w is 1) - the box's
+// centre and half extents through the matrix, not its eight corners (the sun cascades' cull, every caster each).
+bool BoxOutsideAffine(const float mn[3], const float mx[3], const d3d::Matrix& vp);
 
 }  // namespace rvk::detail

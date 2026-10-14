@@ -66,6 +66,20 @@ int detail::BoxInClip(const float mn[3], const float mx[3], const d3d::Matrix& v
     return 0;
 }
 
+bool detail::BoxOutsideAffine(const float mn[3], const float mx[3], const d3d::Matrix& vp)
+{
+    for (int j = 0; j < 2; ++j) {
+        float c = vp.m[3][j], e = 0.0f;
+        for (int i = 0; i < 3; ++i) {
+            c += 0.5f * (mn[i] + mx[i]) * vp.m[i][j];
+            e += 0.5f * (mx[i] - mn[i]) * std::fabs(vp.m[i][j]);
+        }
+        if (c + e < -1.0f || c - e > 1.0f)
+            return true;
+    }
+    return false;
+}
+
 namespace {
 
 void Normalize(float v[3])
@@ -1531,10 +1545,14 @@ void Device::RenderShadowMap(VkCommandBuffer cmd)
         bool last = c == count - 1;
         double cullStart = ProfileCpu();
         m_cascadeVisible.clear();
+        const bool affine = lightViewProj.m[0][3] == 0.0f && lightViewProj.m[1][3] == 0.0f &&
+                            lightViewProj.m[2][3] == 0.0f && lightViewProj.m[3][3] == 1.0f;
         for (uint32_t i : m_shadowOrder) {       // batch-key order (CollectShadowItems)
             const ShadowItem& item = m_shadowItems[i];
             // Only casters reaching into this cascade's square (the widest takes every one the game drew).
-            if ((item.cached || !last) && BoxInClip(item.boundsMin, item.boundsMax, lightViewProj, false) == -1) {
+            if ((item.cached || !last) &&
+                (affine ? BoxOutsideAffine(item.boundsMin, item.boundsMax, lightViewProj)
+                        : BoxInClip(item.boundsMin, item.boundsMax, lightViewProj, false) == -1)) {
                 ++m_shadowCulled;
                 continue;
             }
