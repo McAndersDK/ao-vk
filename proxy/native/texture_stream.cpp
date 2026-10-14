@@ -13,6 +13,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 #include <list>
 #include <mutex>
 #include <unordered_map>
@@ -43,11 +44,11 @@ constexpr uint32_t kCompressionSupported = 0x416F6, kFormatSupport = 0x41E93;
 
 void SetVtable(Creator* self) { self->vtable = reinterpret_cast<uint8_t*>(g_orig) + kVtable; }
 
-// D3DX's output, remembered. Loading a bitmap into a texture (render_t::D3DXLoadTextureFromMemory) goes through D3DX's
-// conversion core, a filtered resample with a call per source pixel, for level 0 and again for every mip level: about
+// D3DX's output, remembered (LoadTextureFromMemory, below). Loading pixels into a texture
+// (render_t::D3DXLoadTextureFromMemory) goes through D3DX's conversion core, a filtered resample with a call per source pixel, for level 0 and again for every mip level: about
 // 0.4 ms for a 128 x 128 tile here, and the planet map makes ~110 of them each time it opens (a 45-70 ms hitch).
-// The same bitmap converted the same way gives the same levels, so a texture's levels are kept (by a hash of the
-// bitmap's pixels and everything else that goes into the conversion) and copied in when that bitmap comes again.
+// The same pixels converted the same way give the same levels, so a texture's levels are kept (by a hash of the
+// source's pixels and everything else that goes into the conversion) and copied in when those pixels come again.
 // Exact by construction: what is copied is what D3DX made. Uncompressed formats only; 64 MB, least recently used out.
 // Textures up to 128 x 128 (the map's tiles, interface pieces) are kept the first time; bigger ones up to 512 x 512
 // only when converted a second time (the options window's, opened again and again) - a zone's textures, made once,
@@ -82,24 +83,26 @@ bool Enabled()
     return on;
 }
 
-uint64_t Key(const lbitmap::Bitmap* b, int32_t format, uint32_t levels, uint32_t w, uint32_t h, int32_t filter)
+// The source's rows (w x h of `bpp` bytes, `pitch` apart) and every parameter of the conversion.
+uint64_t Key(const uint8_t* data, uint32_t w, uint32_t h, uint32_t bpp, uint32_t pitch,
+             std::initializer_list<uint64_t> params)
 {
-    const size_t bytes = size_t(b->width) * b->height * size_t(b->bitsPerPixel / 8);
     uint64_t k = 0xcbf29ce484222325ull;
     auto mix = [&k](uint64_t v) { k = (k ^ v) * 0x9E3779B97F4A7C15ull; k ^= k >> 29; };
-    for (uint64_t v : {uint64_t(b->width), uint64_t(b->height), uint64_t(b->bitsPerPixel), uint64_t(uint32_t(format)),
-                       uint64_t(levels), uint64_t(w), uint64_t(h), uint64_t(uint32_t(filter))})
-        mix(v);
-    const uint8_t* p = b->data;
-    size_t i = 0;
-    for (; i + 8 <= bytes; i += 8) {
-        uint64_t v;
-        std::memcpy(&v, p + i, 8);
-        mix(v);
+    for (uint64_t v : params) mix(v);
+    const size_t rowBytes = size_t(w) * bpp;
+    for (uint32_t y = 0; y < h; ++y) {
+        const uint8_t* p = data + size_t(y) * pitch;
+        size_t i = 0;
+        for (; i + 8 <= rowBytes; i += 8) {
+            uint64_t v;
+            std::memcpy(&v, p + i, 8);
+            mix(v);
+        }
+        uint64_t tail = 0;
+        std::memcpy(&tail, p + i, rowBytes - i);
+        mix(tail ^ (uint64_t(y) << 40));
     }
-    uint64_t tail = 0;
-    std::memcpy(&tail, p + i, bytes - i);
-    mix(tail ^ (uint64_t(bytes) << 32));
     return k;
 }
 
@@ -263,46 +266,8 @@ void* __fastcall CreateTexture(Creator* self, void*, void* bitmapRaw, const char
         self->flag38 = 1;
         self->format = 2;
     }
-    // (A bitmap converted before: its levels from the cache, else D3DX's conversion, then kept - see cache above.)
-    auto** dds = surface ? static_cast<IDirectDrawSurface7**>(orig::surface_t_GetSurfacePointer(surface)) : nullptr;
-    const uint32_t area = surfaceWidth * surfaceHeight;
-    IDirectDrawSurface7* top = cache::Enabled() && dds && bitmap->data && area <= 512 * 512 ? *dds : nullptr;
-    const uint64_t key = top ? cache::Key(bitmap, format, levels, surfaceWidth, surfaceHeight, self->filter) : 0;
-    bool done = false;
-    if (top) {
-        std::lock_guard<std::mutex> lock(cache::g_mutex);
-        auto it = cache::g_index.find(key);
-        if (it != cache::g_index.end() && cache::Write(top, *it->second)) {
-            cache::g_lru.splice(cache::g_lru.begin(), cache::g_lru, it->second);
-            cache::Count(true);
-            done = true;
-        }
-    }
-    if (!done) {
-        orig::render_t_D3DXLoadTextureFromMemory(render, surface, 0xFFFFFFFF, bitmap->data, nullptr,
-                                                 (bitmap->bitsPerPixel == 0x20) + 1, 0xFFFFFFFF, nullptr, self->filter);
-        bool keep = top && area <= 128 * 128;
-        if (top && !keep) {
-            std::lock_guard<std::mutex> lock(cache::g_mutex);
-            if (cache::g_seen.size() >= 65536) cache::g_seen.clear();
-            keep = !cache::g_seen.emplace(key, 1).second;
-        }
-        cache::Entry entry{key, {}, 0};
-        if (keep && cache::Read(top, &entry)) {
-            std::lock_guard<std::mutex> lock(cache::g_mutex);
-            if (!cache::g_index.count(key)) {
-                cache::g_bytes += entry.bytes;
-                cache::g_lru.push_front(std::move(entry));
-                cache::g_index[key] = cache::g_lru.begin();
-                while (cache::g_bytes > cache::kBytes && cache::g_lru.size() > 1) {
-                    cache::g_bytes -= cache::g_lru.back().bytes;
-                    cache::g_index.erase(cache::g_lru.back().key);
-                    cache::g_lru.pop_back();
-                }
-            }
-            cache::Count(false);
-        }
-    }
+    orig::render_t_D3DXLoadTextureFromMemory(render, surface, 0xFFFFFFFF, bitmap->data, nullptr,
+                                             (bitmap->bitsPerPixel == 0x20) + 1, 0xFFFFFFFF, nullptr, self->filter);
     EnableCompression(wasCompressed);
     Tidy(convertError);
     Tidy(createError);
@@ -471,6 +436,93 @@ void __cdecl Format(void* out, const char* format, ...)
     va_end(ap);
 }
 
+namespace {
+
+// render_t::D3DXLoadTextureFromMemory (0x24908), every caller's (TextureStreamCreator, the interface's sprites, the
+// planet map's pieces): through the cache above when the whole chain is loaded from plain source pixels.
+using LoadFn = void(__fastcall*)(void* self, void*, void* surface, uint32_t level, void* data, void* palette,
+                                 int32_t format, uint32_t pitch, void* rect, int32_t filter);
+LoadFn g_load;
+
+uint32_t SourceBytesPerPixel(int32_t format)   // D3DX_SURFACEFORMAT; 0: not cached (palettes, YUV, compressed)
+{
+    switch (format) {
+    case 1: return 3;                                     // R8G8B8
+    case 2: case 3: return 4;                             // A8R8G8B8, X8R8G8B8
+    case 4: case 5: case 8: case 9: case 10: case 12: return 2;   // R5G6B5, X1R5G5B5, A1R5G5B5, X4R4G4B4, A4R4G4B4, A8L8
+    case 11: case 21: case 22: return 1;                  // L8, R3G3B2, A8
+    default: return 0;
+    }
+}
+
+void __fastcall LoadTextureFromMemory(void* self, void*, void* surface, uint32_t level, void* data, void* palette,
+                                      int32_t format, uint32_t pitch, void* rect, int32_t filter)
+{
+    auto** dds = surface ? static_cast<IDirectDrawSurface7**>(orig::surface_t_GetSurfacePointer(surface)) : nullptr;
+    IDirectDrawSurface7* top = dds ? *dds : nullptr;
+    const uint32_t bpp = SourceBytesPerPixel(format);
+    DDSURFACEDESC2 sd{};
+    sd.dwSize = sizeof(sd);
+    // (The whole chain from plain pixels, no palette, no rectangle: what can be remembered whole.)
+    if (!cache::Enabled() || !top || !data || palette || rect || level != 0xFFFFFFFF || !bpp ||
+        FAILED(top->GetSurfaceDesc(&sd)) || !cache::Uncompressed(sd) || sd.dwWidth * sd.dwHeight > 512 * 512) {
+        g_load(self, nullptr, surface, level, data, palette, format, pitch, rect, filter);
+        return;
+    }
+    // The source's size: the content size D3DXCreateTexture hung on the surface (before it padded it), which the
+    // loader reads too; without that image info, not cached.
+    struct { uint32_t size, flags, width, height, mips; } info{};
+    DWORD infoSize = sizeof(info);
+    const auto* infoGuid = reinterpret_cast<const GUID*>(reinterpret_cast<uint8_t*>(g_orig) + 0x99EE4);
+    if (FAILED(top->GetPrivateData(*infoGuid, &info, &infoSize)) || infoSize != sizeof(info) || !info.width ||
+        !info.height || info.width > 4096 || info.height > 4096) {
+        g_load(self, nullptr, surface, level, data, palette, format, pitch, rect, filter);
+        return;
+    }
+    const uint32_t w = info.width, h = info.height, area = sd.dwWidth * sd.dwHeight;
+    const uint32_t rowPitch = (pitch == 0xFFFFFFFF || pitch == 0) ? w * bpp : pitch;
+    const DDPIXELFORMAT& pf = sd.ddpfPixelFormat;
+    const uint64_t key = cache::Key(static_cast<const uint8_t*>(data), w, h, bpp, rowPitch,
+                                    {uint64_t(w) << 32 | h, uint64_t(sd.dwWidth) << 32 | sd.dwHeight,
+                                     uint64_t(info.flags), uint64_t(uint32_t(format)), uint64_t(rowPitch),
+                                     uint64_t(uint32_t(filter)), uint64_t(sd.dwMipMapCount), uint64_t(pf.dwRGBBitCount),
+                                     uint64_t(pf.dwRBitMask) << 32 | pf.dwGBitMask,
+                                     uint64_t(pf.dwBBitMask) << 32 | pf.dwRGBAlphaBitMask, uint64_t(pf.dwFlags)});
+    {
+        std::lock_guard<std::mutex> lock(cache::g_mutex);
+        auto it = cache::g_index.find(key);
+        if (it != cache::g_index.end() && cache::Write(top, *it->second)) {
+            cache::g_lru.splice(cache::g_lru.begin(), cache::g_lru, it->second);
+            cache::Count(true);
+            return;
+        }
+    }
+    g_load(self, nullptr, surface, level, data, palette, format, pitch, rect, filter);
+    bool keep = area <= 128 * 128;
+    if (!keep) {
+        std::lock_guard<std::mutex> lock(cache::g_mutex);
+        if (cache::g_seen.size() >= 65536) cache::g_seen.clear();
+        keep = !cache::g_seen.emplace(key, 1).second;
+    }
+    cache::Entry entry{key, {}, 0};
+    if (keep && cache::Read(top, &entry)) {
+        std::lock_guard<std::mutex> lock(cache::g_mutex);
+        if (!cache::g_index.count(key)) {
+            cache::g_bytes += entry.bytes;
+            cache::g_lru.push_front(std::move(entry));
+            cache::g_index[key] = cache::g_lru.begin();
+            while (cache::g_bytes > cache::kBytes && cache::g_lru.size() > 1) {
+                cache::g_bytes -= cache::g_lru.back().bytes;
+                cache::g_index.erase(cache::g_lru.back().key);
+                cache::g_lru.pop_back();
+            }
+        }
+        cache::Count(false);
+    }
+}
+
+}  // namespace
+
 void Install(HMODULE orig)
 {
     if (GetMode("Device", Mode::On) != Mode::On) return;
@@ -506,6 +558,17 @@ void Install(HMODULE orig)
     int installed = 0;
     for (const Entry& e : entries) installed += Replace(orig, e.rva, e.target, e.what) ? 1 : 0;
     Log("texture_stream: %d of %d functions native", installed, int(sizeof(entries) / sizeof(entries[0])));
+    // render_t::D3DXLoadTextureFromMemory: mov eax, <handler> (absolute); call _EH_prolog (relative).
+    static const uint8_t kLoad[] = {0xB8, 0x01, 0x6B, 0x08, 0x10, 0xE8, 0xAE, 0x3E, 0x05, 0x00};
+    static const size_t kLoadAbs[] = {1}, kLoadRel[] = {6};
+    HookFixups fixups;
+    fixups.abs32 = kLoadAbs;
+    fixups.abs32Count = 1;
+    fixups.rel32 = kLoadRel;
+    fixups.rel32Count = 1;
+    g_load = reinterpret_cast<LoadFn>(HookEntry(orig, 0x24908, kLoad, sizeof(kLoad),
+                                                reinterpret_cast<void*>(&LoadTextureFromMemory),
+                                                "render_t::D3DXLoadTextureFromMemory (texture cache)", fixups));
 }
 
 }  // namespace rnative::texturestream
