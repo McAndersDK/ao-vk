@@ -1304,7 +1304,12 @@ private:
         VkDeviceSize frameLights = ~0ull, prevOffset = ~0ull, smoothOffset = ~0ull;
         VkBuffer prevBuffer = VK_NULL_HANDLE, smoothBuffer = VK_NULL_HANDLE;
         VkImage depth = VK_NULL_HANDLE;          // the depth buffer it draws into (armed)
+        uint32_t groupFirst = 0, groupCount = 0; // pending indexed draws: one indirect call (FlushPrepassGroup)
     } m_pre;
+    VkDeviceSize m_prepassIndirectBase = 0;      // its indirect commands (the frame's arenas: as many as records)
+    uint32_t m_prepassIndirectCount = 0;
+    uint64_t m_prepassCalls = 0;                 // (draw calls it issued: logged with its draws)
+    void FlushPrepassGroup();
     bool CreatePrepassPipeline(VkShaderModule vert);   // false: the pre-pass stays off
     uint64_t m_prepassDraws = 0, m_prepassSegments = 0;   // logged every 600 frames (PrepassLog)
     // Why a scene draw isn't in the pre-pass (PrepassCheck; counted for the log), and why segments end.
@@ -2493,6 +2498,7 @@ private:
         bool cloudsTimed = false;                 // the clouds' own commands (Frame::clouds) timed: the pool's last two
     };
     bool m_shadeQueries = false;                  // pipelineStatisticsQuery enabled
+    bool m_sceneProfile = false;                  // RANDYVK_SCENE_PROFILE=1: the scene timed and counted by class
     uint64_t m_shadeSum[kSceneClasses] = {};      // fragment shader invocations by class since the last log
     uint64_t m_shadePixels = 0;                   // the frames' scene pixels, summed alike
     uint32_t m_shadeOverflowFrames = 0;           // of those frames, how many ran out of queries (undercounted)

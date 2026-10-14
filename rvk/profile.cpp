@@ -149,7 +149,7 @@ void Device::ProfileMark(const char* name)
 // isn't exhausted mid-frame; what comes after the last mark stays in "scene".
 void Device::ProfileSceneClass(int cls)
 {
-    if (cls == m_sceneClass)
+    if (cls == m_sceneClass || !m_sceneProfile)
         return;
     // The closing class's batched draws (M3) are still pending: issue them first, or the timestamp lands before them
     // and they are counted in the next class. Only while profiling (it can split a group).
@@ -165,7 +165,7 @@ void Device::ProfileSceneClass(int cls)
 // The shading count's class for the draws from here on (Draw, once it knows whether the draw is pre-passed).
 void Device::ShadeClass(int cls)
 {
-    if (cls == m_shadeClass)
+    if (cls == m_shadeClass || !m_shadeQueries)
         return;
     if (m_profile[m_frameIndex].pool)
         FlushGroup();                            // the closing class's batched draws, counted in it

@@ -1779,10 +1779,12 @@ void Device::ApplyDynamicState(uint32_t primitive, uint32_t fvf, uint32_t stride
         }
     }
 
+    // The attachments' blend enables changed here are set together below (one call for the range, not one each: the
+    // statics' blend toggling set three of them ~900 times a frame over a city).
+    uint32_t blendDirty = 0;
     if (hdrTarget && !c.glowBlendSet) {
         // The glow attachment always adds: what each additive effect contributes (others write 0).
-        VkBool32 on = VK_TRUE;
-        vkCmdSetColorBlendEnableEXT(cmd, 1, 1, &on);
+        blendDirty |= 2u;
         VkColorBlendEquationEXT eq{VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD,
                                    VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD};
         vkCmdSetColorBlendEquationEXT(cmd, 1, 1, &eq);
@@ -1793,7 +1795,7 @@ void Device::ApplyDynamicState(uint32_t primitive, uint32_t fvf, uint32_t stride
     const bool uiLayer = m_uiLayerActive && m_target == m_uiLayer;
     VkBool32 blend = m_rs[d3d::RS_ALPHABLENDENABLE] != 0 || uiLayer;
     if (c.blendEnable != blend) {
-        vkCmdSetColorBlendEnableEXT(cmd, 0, 1, &blend);
+        blendDirty |= 1u;
         c.blendEnable = blend;
     }
     uint32_t src = m_rs[d3d::RS_SRCBLEND], dst = m_rs[d3d::RS_DESTBLEND];
@@ -1832,8 +1834,7 @@ void Device::ApplyDynamicState(uint32_t primitive, uint32_t fvf, uint32_t stride
         // Attachment 3, the motion vectors: written by solid (depth-writing) geometry, kept by everything else.
         uint32_t keep = m_rs[d3d::RS_ZENABLE] && m_rs[d3d::RS_ZWRITEENABLE] ? 0u : 1u;
         if (c.motionKeep != keep) {
-            VkBool32 e = keep;
-            vkCmdSetColorBlendEnableEXT(cmd, 3, 1, &e);
+            blendDirty |= 8u;
             VkColorBlendEquationEXT eq{VK_BLEND_FACTOR_ZERO, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD,
                                        VK_BLEND_FACTOR_ZERO, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD};
             vkCmdSetColorBlendEquationEXT(cmd, 3, 1, &eq);
@@ -1846,8 +1847,7 @@ void Device::ApplyDynamicState(uint32_t primitive, uint32_t fvf, uint32_t stride
         if (blend && IsMultiplyPass()) { fSrc = d3d::BLEND_ONE; fDst = d3d::BLEND_ZERO; }
         else if (blend && dst == d3d::BLEND_ONE) { fSrc = d3d::BLEND_ZERO; fDst = d3d::BLEND_ONE; }
         if (c.fractionEnable != fEnable) {
-            VkBool32 e = fEnable;
-            vkCmdSetColorBlendEnableEXT(cmd, 2, 1, &e);
+            blendDirty |= 4u;
             c.fractionEnable = fEnable;
         }
         if (c.fractionSrc == ~0u || (fEnable && (c.fractionSrc != fSrc || c.fractionDst != fDst))) {
@@ -1865,7 +1865,7 @@ void Device::ApplyDynamicState(uint32_t primitive, uint32_t fvf, uint32_t stride
                         dst == d3d::BLEND_SRCCOLOR || dst == d3d::BLEND_INVSRCCOLOR;
         if (blend && (IsMultiplyPass() || byTarget || dst == d3d::BLEND_ONE)) { aSrc = d3d::BLEND_ZERO; aDst = d3d::BLEND_ONE; }
         if (c.albedoEnable != blend) {
-            vkCmdSetColorBlendEnableEXT(cmd, 4, 1, &blend);
+            blendDirty |= 16u;
             c.albedoEnable = blend;
         }
         if (c.albedoSrc == ~0u || (blend && (c.albedoSrc != aSrc || c.albedoDst != aDst))) {
@@ -1902,6 +1902,26 @@ void Device::ApplyDynamicState(uint32_t primitive, uint32_t fvf, uint32_t stride
                                     VK_COLOR_COMPONENT_A_BIT;
         vkCmdSetColorWriteMaskEXT(cmd, 0, 1, &all);          // 8-bit targets: their one attachment
         c.writeMask[0] = all;
+    }
+    if (blendDirty) {
+        // From the first changed attachment to the last, when every one between is known; else each run of changed.
+        const uint32_t now[5] = {c.blendEnable, c.glowBlendSet ? 1u : ~0u, c.fractionEnable, c.motionKeep, c.albedoEnable};
+        const int lo = std::countr_zero(blendDirty), hi = 31 - std::countl_zero(blendDirty);
+        bool known = true;
+        for (int i = lo; i <= hi; ++i) known = known && now[i] != ~0u;
+        VkBool32 e[5];
+        for (int i = 0; i < 5; ++i) e[i] = now[i] == 1u ? VK_TRUE : VK_FALSE;
+        if (known) {
+            vkCmdSetColorBlendEnableEXT(cmd, uint32_t(lo), uint32_t(hi - lo + 1), e + lo);
+        } else {
+            for (int i = lo; i <= hi;) {
+                if (!(blendDirty >> i & 1u)) { ++i; continue; }
+                int j = i;
+                while (j + 1 <= hi && (blendDirty >> (j + 1) & 1u)) ++j;
+                vkCmdSetColorBlendEnableEXT(cmd, uint32_t(i), uint32_t(j - i + 1), e + i);
+                i = j + 1;
+            }
+        }
     }
 
     if (c.fvf != fvf) {
@@ -2088,7 +2108,7 @@ void Device::DrawShadowOnly(uint32_t primitive, uint32_t fvf, const void* vertic
     const bool reserve = m_arenaGeneration != m_ringGeneration;
     const VkDeviceSize arenas = reserve ? VkDeviceSize(m_constWanted) * sizeof(DrawConstants) +
                                               VkDeviceSize(m_recordWanted) * sizeof(DrawRecord) +
-                                              VkDeviceSize(m_recordWanted) * sizeof(VkDrawIndexedIndirectCommand) +
+                                              2 * VkDeviceSize(m_recordWanted) * sizeof(VkDrawIndexedIndirectCommand) +
                                               ((m_shadows || m_pointShadows)
                                                    ? VkDeviceSize(kShadowRecordCapacity) *
                                                          (sizeof(ShadowRecord) + sizeof(VkDrawIndexedIndirectCommand))
@@ -2364,7 +2384,7 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     bool reserveArenas = m_arenaGeneration != m_ringGeneration;
     VkDeviceSize arenaBytes = reserveArenas ? VkDeviceSize(m_constWanted) * sizeof(DrawConstants) +
                                                   VkDeviceSize(m_recordWanted) * sizeof(DrawRecord) +
-                                                  VkDeviceSize(m_recordWanted) * sizeof(VkDrawIndexedIndirectCommand) +
+                                                  2 * VkDeviceSize(m_recordWanted) * sizeof(VkDrawIndexedIndirectCommand) +
                                                   ((m_shadows || m_pointShadows) ? VkDeviceSize(kShadowRecordCapacity) *
                                                                    (sizeof(ShadowRecord) +
                                                                     sizeof(VkDrawIndexedIndirectCommand))

@@ -237,8 +237,9 @@ void Device::PrepassLog()
         }
     if (!out.empty()) out.pop_back();
     if (!ends.empty()) ends.pop_back();
-    Log("depth pre-pass: %.0f draws a frame in %llu segments (last 600 frames)%s", double(m_prepassDraws) / 600.0,
-        (unsigned long long)m_prepassSegments, m_prepassPipeline ? "" : " - no pipeline");
+    Log("depth pre-pass: %.0f draws a frame in %.0f calls, %llu segments (last 600 frames)%s",
+        double(m_prepassDraws) / 600.0, double(m_prepassCalls) / 600.0, (unsigned long long)m_prepassSegments,
+        m_prepassPipeline ? "" : " - no pipeline");
     Log("depth pre-pass: draws ignoring depth, a frame: %.1f culled as backdrops | %.1f before the depth clear | %.1f "
         "after the segment | %.1f after depth was written | %.1f other%s",
         double(m_backdropDraws[0]) / 600.0, double(m_backdropDraws[1]) / 600.0, double(m_backdropDraws[2]) / 600.0,
@@ -248,7 +249,7 @@ void Device::PrepassLog()
     Log("two-pass foliage: %.0f edge draws a frame in %.1f batches%s", double(m_edgeDraws) / 600.0,
         double(m_edgeFlushes) / 600.0, m_foliageEdges ? "" : " (off: RVK_FolEdges)");
     m_edgeDraws = m_edgeFlushes = 0;
-    m_prepassDraws = m_prepassSegments = 0;
+    m_prepassDraws = m_prepassSegments = m_prepassCalls = 0;
     std::memset(m_backdropDraws, 0, sizeof(m_backdropDraws));
     std::memset(m_prepassWhy, 0, sizeof(m_prepassWhy));
     std::memset(m_prepassEndCause, 0, sizeof(m_prepassEndCause));
@@ -319,6 +320,7 @@ void Device::PrepassEnd(uint32_t cause)
     m_prepassArmed = false;
     m_prepassEndedThisFrame = true;
     ++m_prepassEndCause[cause < kEndCount ? cause : kEndOther];
+    FlushPrepassGroup();
     VkCommandBuffer cmd = m_frames[m_frameIndex].prepass;
     vkCmdEndRendering(cmd);
     const VkPipelineStageFlags2 tests =
@@ -365,10 +367,12 @@ void Device::PrepassDraw(uint32_t primitive, uint32_t fvf, uint32_t stride, uint
     }
     int pipeline = cutout ? 1 : 0;               // (same layout: the dynamic state and the descriptors stay)
     if (c.pipeline != pipeline) {
+        FlushPrepassGroup();
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, cutout ? m_prepassCutoutPipeline : m_prepassPipeline);
         c.pipeline = pipeline;
     }
     if (c.topology != primitive) {
+        FlushPrepassGroup();
         vkCmdSetPrimitiveTopology(cmd, TopologyOf(primitive));
         c.topology = primitive;
     }
@@ -376,30 +380,36 @@ void Device::PrepassDraw(uint32_t primitive, uint32_t fvf, uint32_t stride, uint
     VkRect2D scissor;
     ViewportState(&vp, &scissor);
     if (std::memcmp(&vp, &c.viewport, sizeof(vp)) != 0) {
+        FlushPrepassGroup();
         vkCmdSetViewport(cmd, 0, 1, &vp);
         c.viewport = vp;
     }
     if (std::memcmp(&scissor, &c.scissor, sizeof(scissor)) != 0) {
+        FlushPrepassGroup();
         vkCmdSetScissor(cmd, 0, 1, &scissor);
         c.scissor = scissor;
     }
     uint32_t cull = m_rs[d3d::RS_CULLMODE];
     if (c.cull != cull) {
+        FlushPrepassGroup();
         vkCmdSetCullMode(cmd, cull == d3d::CULL_CCW ? VK_CULL_MODE_BACK_BIT
                               : cull == d3d::CULL_CW ? VK_CULL_MODE_FRONT_BIT : VK_CULL_MODE_NONE);
         c.cull = cull;
     }
     if (c.fvf != fvf) {
+        FlushPrepassGroup();
         SetVertexInput(cmd, fvf, stride);
         c.fvf = fvf;
     }
     if (c.vb != vb) {
+        FlushPrepassGroup();
         VkBuffer buffers[2] = {vb, m_nullBuffer};
         VkDeviceSize offsets[2] = {0, 0};
         vkCmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);
         c.vb = vb;
     }
     if (indexCount && c.ib != ib) {
+        FlushPrepassGroup();
         vkCmdBindIndexBuffer(cmd, ib, 0, VK_INDEX_TYPE_UINT16);
         c.ib = ib;
     }
@@ -407,6 +417,7 @@ void Device::PrepassDraw(uint32_t primitive, uint32_t fvf, uint32_t stride, uint
     // pushes them; for most static draws they don't change from one to the next.
     if (c.frameLights != frameLightsOffset || c.prevBuffer != prevBuffer || c.prevOffset != prevOffset ||
         c.smoothBuffer != smoothBuffer || c.smoothOffset != smoothOffset) {
+        FlushPrepassGroup();
         VkDescriptorBufferInfo frameLights{f.ring, frameLightsOffset, sizeof(FrameLights)};
         VkDescriptorBufferInfo prev{prevBuffer, prevOffset, prevBytes ? prevBytes : 16};
         VkDescriptorBufferInfo smooth{smoothBuffer, smoothOffset, smoothBytes ? smoothBytes : 16};
@@ -431,11 +442,40 @@ void Device::PrepassDraw(uint32_t primitive, uint32_t fvf, uint32_t stride, uint
         c.smoothBuffer = smoothBuffer;
         c.smoothOffset = smoothOffset;
     }
-    if (indexCount)
-        vkCmdDrawIndexed(cmd, indexCount, 1, uint32_t(ibOffset / 2), int32_t(vbOffset / stride), recordIndex);
-    else
-        vkCmdDraw(cmd, vertexCount, 1, uint32_t(vbOffset / stride), recordIndex);
+    // Indexed: into the pending run of the same state, issued as one indirect call (the record in firstInstance, as
+    // the main pass's groups); it was a call a draw - ~3,500 a frame over a city.
+    if (indexCount && m_groupIndirect && m_prepassIndirectCount < m_recordCapacity) {
+        auto* cmds = reinterpret_cast<VkDrawIndexedIndirectCommand*>(f.ringData + m_prepassIndirectBase);
+        VkDrawIndexedIndirectCommand& d = cmds[m_prepassIndirectCount];
+        d.indexCount = indexCount;
+        d.instanceCount = 1;
+        d.firstIndex = uint32_t(ibOffset / 2);
+        d.vertexOffset = int32_t(vbOffset / stride);
+        d.firstInstance = recordIndex;
+        if (!c.groupCount) c.groupFirst = m_prepassIndirectCount;
+        ++c.groupCount;
+        ++m_prepassIndirectCount;
+    } else {
+        FlushPrepassGroup();
+        if (indexCount)
+            vkCmdDrawIndexed(cmd, indexCount, 1, uint32_t(ibOffset / 2), int32_t(vbOffset / stride), recordIndex);
+        else
+            vkCmdDraw(cmd, vertexCount, 1, uint32_t(vbOffset / stride), recordIndex);
+        ++m_prepassCalls;
+    }
     ++m_prepassDraws;
+}
+
+void Device::FlushPrepassGroup()
+{
+    if (!m_pre.groupCount)
+        return;
+    Frame& f = m_frames[m_frameIndex];
+    vkCmdDrawIndexedIndirect(f.prepass, f.ring,
+                             m_prepassIndirectBase + VkDeviceSize(m_pre.groupFirst) * sizeof(VkDrawIndexedIndirectCommand),
+                             m_pre.groupCount, sizeof(VkDrawIndexedIndirectCommand));
+    m_pre.groupCount = 0;
+    ++m_prepassCalls;
 }
 
 // What a submission of this frame slot runs after its uploads: the main commands, or, split, mainA, the pre-pass and

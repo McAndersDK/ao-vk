@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace rvk {
@@ -554,7 +555,13 @@ bool Device::CreateLogicalDevice(std::string* error)
     m_depthBounds = features.features.depthBounds;
     enabled.features.depthBounds = features.features.depthBounds;
     // Profiling: fragment shader invocations per scene class (profile.cpp, "scene shading" - the overdraw).
-    m_shadeQueries = features.features.pipelineStatisticsQuery;
+    // Only with RANDYVK_SCENE_PROFILE=1, as the scene's split by class (ProfileSceneClass): every class change ended
+    // the pending indirect batch and began a query - ~350 a frame over a city.
+    {
+        const char* v = std::getenv("RANDYVK_SCENE_PROFILE");
+        m_sceneProfile = v && *v == '1';
+    }
+    m_shadeQueries = features.features.pipelineStatisticsQuery && m_sceneProfile;
     enabled.features.pipelineStatisticsQuery = features.features.pipelineStatisticsQuery;
     Log("draw grouping (indirect firstInstance + multiDrawIndirect): %s", m_groupIndirect ? "yes" : "no");
 
@@ -1271,12 +1278,15 @@ void Device::PrepareDrawArenas()
                                          : 0;
     VkDeviceSize bytes = VkDeviceSize(m_constCapacity) * sizeof(DrawConstants) +
                          VkDeviceSize(m_recordCapacity) * sizeof(DrawRecord) +
-                         VkDeviceSize(m_recordCapacity) * sizeof(VkDrawIndexedIndirectCommand) + shadowBytes + 64;
+                         2 * VkDeviceSize(m_recordCapacity) * sizeof(VkDrawIndexedIndirectCommand) + shadowBytes + 64;
     EnsureRingSpace(bytes);          // the caller reserved for it, but a flush may have restarted the ring since
     void* cpu;
     m_constsBase = Allocate(VkDeviceSize(m_constCapacity) * sizeof(DrawConstants), align, &cpu);
     m_recordsBase = Allocate(VkDeviceSize(m_recordCapacity) * sizeof(DrawRecord), align, &cpu);
     m_indirectBase = Allocate(VkDeviceSize(m_recordCapacity) * sizeof(VkDrawIndexedIndirectCommand), 4, &cpu);
+    m_prepassIndirectBase = Allocate(VkDeviceSize(m_recordCapacity) * sizeof(VkDrawIndexedIndirectCommand), 4, &cpu);
+    m_prepassIndirectCount = 0;
+    m_pre.groupCount = 0;                        // (flushed with the pre-pass before the ring restarted)
     m_shadowArenaCapacity = (m_shadows || m_pointShadows) ? kShadowRecordCapacity : 0;
     if (m_shadowArenaCapacity) {
         m_shadowRecordBase = Allocate(VkDeviceSize(m_shadowArenaCapacity) * sizeof(ShadowRecord), align, &cpu);
