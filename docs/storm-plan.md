@@ -58,3 +58,12 @@ In a storm the rain slants one way while the grass waves gently another.
 - Smoke and fire torn sideways and broken up by gusts (smoke.cpp's wind cap lifted with the storm).
 
 Each phase playable on its own; demo scenes for each (the grass bench with a storm, a desert terrain for sand).
+
+## Status (2026-10-14)
+
+- Phase 1 done (524e014): wind.cpp shared wind; grass/plants/leaves/water/rain/clouds follow it; RVK_WindStorm; the
+  game's storm tint left out with the new weather (RVK_StormTint).
+- Phase 2a done: the sand/ash storm's air from the game's tint (its colour, alpha = strength): tone mapping dust haze,
+  RVK_SandHaze. Staged randy31-storms1.dll (not in ao-wine.sh: 0.5.0's candidate is under test).
+- Next (phase 2b): the near simulated sand volume around the camera (smoke solver), dust devils, ground streaks
+  (GPU particles). Needs an in-game look at 2a first (the game's real tint colour / alpha in its sandstorms).
