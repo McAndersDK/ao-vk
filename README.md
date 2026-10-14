@@ -133,6 +133,13 @@ Spell effects with GPU particles, and depth of field.
 - Point light shadows: lamps and character lights cast real shadows (up to 16 at once, resolution 256-2048),
   fading in and out smoothly as lights come and go.
 - The game's round blob shadows are replaced while sun shadows are on.
+- Shadows of things out of view: what stood in view and stands still is remembered as a shadow caster, so walls,
+  trees and rocks behind you still cast. With a placed-objects pack for the playfield (`randy-vk\statels\`, made by
+  the ao-assets tools, not yet published), every placed object casts, seen or not; without one, objects cast as
+  they are drawn.
+- Moonlight at night lights the land and casts shadows.
+- Shadows fade out as the sun nears the horizon, and a low sun no longer lights what the hills hide from it (valleys
+  under mountains stay in shade; Experimental section, on by default).
 
 **HDR and effects**
 - HDR rendering with tone mapping and exposure control.
@@ -145,6 +152,24 @@ Spell effects with GPU particles, and depth of field.
 - Depth of field with bokeh, focused on your character by default.
 - Colour grading: saturation, contrast, warmth, a cooler night tint, vignette, and your own `.cube` look-up tables
   (`randy-vk-day.cube`, `randy-vk-night.cube` next to `randy-vk.ini`).
+
+**Sky, air and night** (on by default, needs HDR)
+- The air: haze that thickens with height and turns bluer far off, the sun's glow around it, haze over the distant
+  land, and light rays through gaps in the clouds.
+- Valley mist at night and at dawn, burning off as the sun climbs.
+- The suns drawn anew in the game's style (a white-hot core, a soft glow, rays), dimmed by cloud in front of them;
+  low suns bigger and spread along the horizon. Dawn and dusk in the game's colours.
+- Darker nights, lit by the moon, with lamps and windows glowing (`RVK_NightDark`: 0 as the game, 1 moonlit, 2 dark).
+- The ships over the cities hazed into the distance instead of cut off.
+
+**Clouds, rain and smoke** (Experimental section, off by default; need HDR)
+- Volumetric clouds: a cloud layer over the sky that follows the game's own clouds and weather, from scattered
+  clouds on dry days to overcast and a low grey deck in rain, each zone with its own climate (deserts clearer,
+  coasts and forests cloudier), lit by the sun and the moon, sunset-coloured, casting drifting shadows on the
+  ground, the grass and the water.
+- Rain drawn anew: streaks, splashes where it lands and rings on the water.
+- Smoke as a simulated fluid: the game's smoke effects become rising plumes with puffs and wisps, carried by the
+  wind and stirred by characters walking through them.
 
 **Plants**
 - Real grass on the ground: fields of individual blades grow wherever the ground's texture is grass, as bright as
@@ -174,6 +199,8 @@ Spell effects with GPU particles, and depth of field.
   duration, speed, treading water and splash each have a slider.
 - One slider from "the game's water made richer" (its own colour and texture) to realistic water; halfway by
   default. Needs HDR.
+- Waterfalls: our own falling sheet over each of the game's falls, with strands, sparkles of sun and lamplight, spray
+  and mist at the foot, and churn and foam where they land.
 
 **Presets**
 - One click in the Renderer tab: **Original** (every enhancement off), **Classic+** (the game's look, lit and
@@ -193,7 +220,18 @@ Spell effects with GPU particles, and depth of field.
   100-character test crowd the game thread's renderer work drops from 8.4 to about 0.9 ms a frame.
 - Caches (mesh fingerprints, shadow casters, shared vertex buffers) keep the per-frame cost down; in big crowds the
   game's own CPU work, not the renderer, is usually the limit.
+- Per-object caches and batched drawing on the render thread: in West Bank's city the frame rate went from about 95
+  to about 139 FPS here (4,000 draws a frame).
+- Decoded images and converted textures are kept, so the planet map opens quickly after the first time.
 - A built-in profiler that measures what each enhancement costs where you stand (Ctrl+Shift+O, see below).
+
+**Stability and diagnostics**
+- Crash reports: a fault in any module is written to `randy-vk.log` with where it happened and the stack, even when
+  it happens inside Windows' own memory manager.
+- Hang reports: if no frame comes for 20 seconds, every thread's place is written to the log (wait that long before
+  closing a frozen game, then send the log).
+- Slow frames (over 50 ms) are logged with the time of day, so a stutter can be matched to what you were doing.
+- Two clients running from one folder each get their own log.
 
 ## Performance
 
