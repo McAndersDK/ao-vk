@@ -55,6 +55,13 @@ void FillGpu(RSurface* s, const RECT* rect, uint32_t flags, uint32_t argb, float
 
 }  // namespace
 
+namespace {
+int g_gameTextures;                              // texture surfaces (top levels) holding a GPU texture
+}  // namespace
+
+// (Logged with the renderer's own texture count: the game holding them, or textures outliving their surfaces.)
+int GameTexturesAlive() { return g_gameTextures; }
+
 RSurface::RSurface(Kind k, const DDSURFACEDESC2& d) : kind(k), desc(d)
 {
     top = this;
@@ -67,6 +74,8 @@ RSurface::~RSurface()
     if (palette) palette->Release();
     if (nextLevel) nextLevel->Release();
     ForgetMaterialMaps(this);
+    if (top == this && texture && kind == Kind::Texture)
+        --g_gameTextures;
     if (top == this && texture && g_rvk.device)
         g_rvk.device->DestroyTexture(texture);
     if (g_rvk.mainSurface == this)
@@ -221,6 +230,7 @@ rvk::Texture* RSurface::RvkTexture()
     RSurface* t = top;
     if (!t->texture) {
         t->texture = dev->CreateTexture(t->desc.dwWidth, t->desc.dwHeight, t->format, t->levels);
+        if (t->texture) ++g_gameTextures;
         AttachMaterialMaps(t);
         for (RSurface* l = t; l; l = l->nextLevel) {
             l->gpuWhole = false;                   // (a new image: its contents undefined until a whole upload)
@@ -285,6 +295,7 @@ void RSurface::Upload()
     if (!t->texture) {
         t->texture = dev->CreateTexture(t->desc.dwWidth, t->desc.dwHeight, t->format, t->levels);
         if (!t->texture) return;
+        ++g_gameTextures;
         AttachMaterialMaps(t);
         for (RSurface* l = t; l; l = l->nextLevel)
             l->gpuWhole = false;

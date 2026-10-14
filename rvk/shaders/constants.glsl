@@ -65,7 +65,7 @@ uint gRecord;
 
 // Bindless textures (M1): one array of every texture and one of every sampler; a draw names the four it uses by
 // index. TEX0/TEX1 are the game's two texture stages, BUMPTEX the ground's base texture, NORMALTEX its normal map.
-layout(set = 1, binding = 0) uniform texture2D texImages[16384];   // (Device::kMaxBindlessImages: a big zone has over 4,096 textures)
+layout(set = 1, binding = 0) uniform texture2D texImages[65536];   // (Device::kMaxBindlessImages: a big zone has over 4,096 textures)
 layout(set = 1, binding = 1) uniform sampler bindlessSamplers[256];
 #define TEX0 sampler2D(texImages[D.texIdx.x], bindlessSamplers[D.sampIdx.x])
 #define TEX1 sampler2D(texImages[D.texIdx.y], bindlessSamplers[D.sampIdx.y])

@@ -2613,7 +2613,7 @@ private:
     // Bindless textures (GPU-driven step M1): every texture and sampler in one descriptor set, so a draw selects
     // them by index instead of pushing descriptors. The set is created and populated now; the shaders still use the
     // per-draw bindings, so the frame is unchanged until they are switched over.
-    static constexpr uint32_t kMaxBindlessImages = 16384, kMaxBindlessSamplers = 256;   // (images: texImages[] in constants.glsl, the same)
+    static constexpr uint32_t kMaxBindlessImages = 65536, kMaxBindlessSamplers = 256;   // (images: texImages[] in constants.glsl, the same)
     bool m_bindless = false;
     VkDescriptorSetLayout m_bindlessSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool m_bindlessPool = VK_NULL_HANDLE;

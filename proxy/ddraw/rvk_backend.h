@@ -23,6 +23,7 @@ unsigned ComIndex(const char* name);              // counter index of "Interface
 const char* LogPath();
 // Texture writes through Lock on the game's thread since the last call (the 600-frame log line), then reset.
 struct TextureWrites { uint32_t locks, partial; uint64_t bytes; double ms; };
+int GameTexturesAlive();                          // the game's texture surfaces with a GPU texture now (rvk_surface.cpp)
 TextureWrites TakeTextureWrites();
 void RvkLog(const char* fmt, ...);
 void ParticleFrame();                             // each presented frame (rvk_particles.cpp)
