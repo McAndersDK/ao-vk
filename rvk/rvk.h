@@ -98,6 +98,10 @@ private:
     Texture* m_emissiveMap = nullptr;  // light the surface gives off, added to it (owned; SetEmissiveMap)
     uint32_t m_rdbId = 0;              // the game's RDB texture it holds (SetTextureRdbId; 0: not known)
     uint32_t m_bindless = ~0u;         // its slot in the bindless image array (M1)
+    // (Frame dump: its uploads, the frame of the last, and the non-zero bytes of the last whole level 0 - 256 x 256 or
+    // smaller; ~0u: not counted.)
+    uint32_t m_uploads = 0, m_level0NonZero = ~0u;
+    uint64_t m_uploadFrame = 0;
     // Layout as of the end of the commands recorded so far (main command buffer for render targets;
     // plain textures only change layout in the upload command buffer, which runs first).
     VkImageLayout m_layout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -2609,7 +2613,7 @@ private:
     // Bindless textures (GPU-driven step M1): every texture and sampler in one descriptor set, so a draw selects
     // them by index instead of pushing descriptors. The set is created and populated now; the shaders still use the
     // per-draw bindings, so the frame is unchanged until they are switched over.
-    static constexpr uint32_t kMaxBindlessImages = 4096, kMaxBindlessSamplers = 256;
+    static constexpr uint32_t kMaxBindlessImages = 16384, kMaxBindlessSamplers = 256;   // (images: texImages[] in constants.glsl, the same)
     bool m_bindless = false;
     VkDescriptorSetLayout m_bindlessSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool m_bindlessPool = VK_NULL_HANDLE;

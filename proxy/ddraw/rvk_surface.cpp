@@ -7,6 +7,7 @@
 #include "rvk_backend.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 
 namespace rvkproxy {
@@ -221,8 +222,10 @@ rvk::Texture* RSurface::RvkTexture()
     if (!t->texture) {
         t->texture = dev->CreateTexture(t->desc.dwWidth, t->desc.dwHeight, t->format, t->levels);
         AttachMaterialMaps(t);
-        for (RSurface* l = t; l; l = l->nextLevel)
+        for (RSurface* l = t; l; l = l->nextLevel) {
+            l->gpuWhole = false;                   // (a new image: its contents undefined until a whole upload)
             t->anyDirty |= (l->dirty = !l->shadow.empty());
+        }
     }
     if (t->anyDirty) {                             // SetTexture is hot: walk the chain only when needed
         t->anyDirty = false;
@@ -244,15 +247,21 @@ TextureWrites TakeTextureWrites()
     return w;
 }
 
-// The rows a Lock rectangle covered, when only they need to go: an uncompressed texture uploaded before, no CPU
-// conversion. (A text window may rewrite a few lines of its texture at a time; the whole level went each time.)
+// The rows a Lock rectangle covered, when only they need to go: an uncompressed level the GPU already has whole,
+// no CPU conversion. (A text window may rewrite a few lines of its texture at a time; the whole level went each
+// time.) A level not yet uploaded whole goes whole: the rest of a new image is undefined (a texture SetTexture made
+// before the game first wrote it). RANDYVK_PARTIAL_UPLOAD=0: always whole.
 void RSurface::UploadRows(uint32_t y0, uint32_t y1)
 {
+    static const bool partialOn = [] {
+        const char* e = std::getenv("RANDYVK_PARTIAL_UPLOAD");
+        return !(e && *e == '0');
+    }();
     rvk::ThreadedDevice* dev = g_rvk.device;
     const uint32_t h = desc.dwHeight;
     y1 = std::min(y1, h);
-    if (!dev || !top->texture || shadow.empty() || convert24 || palettized || rvk::FormatIsCompressed(format) ||
-        y0 >= y1 || (y0 == 0 && y1 == h)) {
+    if (!partialOn || !dev || !top->texture || !gpuWhole || dirty || shadow.empty() || convert24 || palettized ||
+        rvk::FormatIsCompressed(format) || y0 >= y1 || (y0 == 0 && y1 == h)) {
         Upload();
         return;
     }
@@ -277,8 +286,11 @@ void RSurface::Upload()
         t->texture = dev->CreateTexture(t->desc.dwWidth, t->desc.dwHeight, t->format, t->levels);
         if (!t->texture) return;
         AttachMaterialMaps(t);
+        for (RSurface* l = t; l; l = l->nextLevel)
+            l->gpuWhole = false;
     }
     dirty = false;
+    gpuWhole = true;
     uint32_t w = desc.dwWidth, h = desc.dwHeight;
     g_writes.bytes += uint64_t(Pitch()) * rvk::FormatRows(format, h);
     if (convert24 || palettized) {

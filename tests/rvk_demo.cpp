@@ -1925,6 +1925,7 @@ double g_skyTime = -1.0;          // --sky-time T: the sky weather's clock (seco
 float g_moonLight = 1.0f;         // --moon-light X: RVK_MoonLight
 float g_nightDark = 1.0f;         // --night-dark X: RVK_NightDark
 bool g_atmos = true;              // --atmos 0|1: RVK_Atmos
+int g_textureFlood = 0;                         // --texture-flood: textures alive before the shadow test's label
 float g_mist = 1.0f;              // --mist X: RVK_Mist
 bool g_cloudLayer = true;         // --cloud-puffs: RVK_CloudLayer off (a volume per puff)
 bool g_cloudsHalf = true;         // --clouds-full: RVK_CloudHalf off        // --clouds-game: ... drawn as the game draws them (RVK_CloudsOn off)
@@ -2489,8 +2490,19 @@ void RunShadowTest(D& dev, int frames, const std::string& shot, int cacheTest, i
     Texture* fence = dev.CreateTexture(64, 64, fencePixels.data());
     std::vector<uint32_t> blobPixels(64, 0xFFFFFFFF);
     std::vector<uint32_t> lightmapPixels(64, 0xFFC0C0C0);
-    std::vector<uint32_t> labelPixels(64 * 16, 0xFF20FF20);
-    Texture* labelTex = dev.CreateTexture(64, 16, labelPixels.data());
+    // --texture-flood N: N textures alive before the label's (a big zone has over 4,096: the label must still draw).
+    std::vector<Texture*> flood;
+    {
+        const uint32_t grey = 0xFF808080u;
+        for (int i = 0; i < g_textureFlood; ++i) flood.push_back(dev.CreateTexture(1, 1, &grey));
+    }
+    // A name as the game makes one: 128 x 32, transparent, with white strokes (text) in its middle rows.
+    std::vector<uint32_t> labelPixels(128 * 32, 0x00000000u);
+    for (uint32_t y = 10; y < 22; ++y)
+        for (uint32_t x = 8; x < 120; ++x)
+            if ((x / 3) % 3 != 0 && (y < 12 || y > 19 || (x / 3) % 3 == 1))
+                labelPixels[y * 128 + x] = 0xFFFFFFFFu;
+    Texture* labelTex = dev.CreateTexture(128, 32, labelPixels.data());
     Texture* lightmap = dev.CreateTexture(8, 8, lightmapPixels.data());
     Texture* blobTex = dev.CreateTexture(8, 8, blobPixels.data());
     Texture* puffTex[2] = {nullptr, nullptr};
@@ -2798,7 +2810,7 @@ void RunShadowTest(D& dev, int frames, const std::string& shot, int cacheTest, i
             dev.SetRenderState(RS_SRCBLEND, BLEND_SRCALPHA);
             dev.SetRenderState(RS_DESTBLEND, BLEND_INVSRCALPHA);
             dev.SetTexture(0, labelTex);
-            dev.SetTextureStageState(0, TSS_COLOROP, TOP_SELECTARG1);
+            dev.SetTextureStageState(0, TSS_COLOROP, TOP_MODULATE);   // (as the game: texture x diffuse)
             VtxDiffuseTex label[4] = {{5.5f, 2.6f, -2, 0xFFFFFFFF, 0, 1}, {5.5f, 3.4f, -2, 0xFFFFFFFF, 0, 0},
                                       {8.5f, 2.6f, -2, 0xFFFFFFFF, 1, 1}, {8.5f, 3.4f, -2, 0xFFFFFFFF, 1, 0}};
             dev.DrawPrimitive(TriangleStrip, kFvfDiffuseTex, label, 4);
@@ -2863,6 +2875,7 @@ void RunShadowTest(D& dev, int frames, const std::string& shot, int cacheTest, i
     dev.DestroyTexture(blobTex);
     dev.DestroyTexture(lightmap);
     dev.DestroyTexture(labelTex);
+    for (Texture* t : flood) dev.DestroyTexture(t);
 }
 
 bool g_slabTest = false;   // --point-shadow-slab
@@ -3577,6 +3590,7 @@ int main(int argc, char** argv)
         else if (a == "--light-override") lightOverride = true;
         else if (a == "--shadows") shadows = true;
         else if (a == "--shadow-test") shadowTest = shadows = true;
+        else if (a == "--texture-flood" && i + 1 < argc) g_textureFlood = std::atoi(argv[++i]);
         else if (a == "--statel-test" && i + 5 < argc) {
             g_statelPack = argv[++i];
             g_statelPlayfield = uint32_t(std::atoi(argv[++i]));

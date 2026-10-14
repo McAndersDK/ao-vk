@@ -455,6 +455,19 @@ void Device::UpdateTexture(Texture* t, uint32_t level, uint32_t x, uint32_t y, u
     if (!t || !t->m_image || level >= t->m_levels || !width || !height)
         return;
     uint32_t rowBytes = FormatRowBytes(t->m_format, width), rows = FormatRows(t->m_format, height);
+    ++t->m_uploads;
+    t->m_uploadFrame = m_frameNumber;
+    if (level == 0 && x == 0 && y == 0 && width >= t->m_width && height >= t->m_height) {
+        t->m_level0NonZero = ~0u;
+        if (uint64_t(rowBytes) * rows <= 256 * 256 * 4) {
+            uint32_t n = 0;
+            for (uint32_t r = 0; r < rows; ++r) {
+                const uint8_t* row = static_cast<const uint8_t*>(data) + size_t(r) * pitch;
+                for (uint32_t i = 0; i < rowBytes; ++i) n += row[i] != 0;
+            }
+            t->m_level0NonZero = n;
+        }
+    }
 
     // Whether the texture is fully opaque, for the static-draw opaque fast path (Draw): only a full level-0 upload
     // proves it; a partial update makes it unknown again.

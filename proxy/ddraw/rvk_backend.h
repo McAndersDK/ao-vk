@@ -193,6 +193,7 @@ public:
     std::vector<uint8_t> shadow;                   // CPU copy of this level (textures, plain surfaces)
     bool dirty = false;                            // shadow newer than the GPU copy
     bool anyDirty = false;                         // level 0 only: some level of the chain is dirty
+    bool gpuWhole = false;                         // this level went to the GPU whole since the texture was made
 
     uint32_t rdbType = 0, rdbId = 0;               // level 0: the RDB texture it holds (0 = unknown)
     rvk::Texture* materialsFor = nullptr;          // level 0: the rvk texture its material maps were attached to

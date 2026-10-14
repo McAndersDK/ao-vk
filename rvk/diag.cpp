@@ -346,7 +346,16 @@ void Device::DumpDraw(uint32_t primitive, uint32_t fvf, const void* vertices, ui
                  m_tss[0][d3d::TSS_COLORARG2], m_tss[1][d3d::TSS_COLOROP], m_tss[1][d3d::TSS_COLORARG1],
                  m_tss[1][d3d::TSS_COLORARG2]);
     for (int s = 0; s < 2; ++s)
-        if (m_textures[s]) std::fprintf(f, " tex%d %ux%u", s, m_textures[s]->Width(), m_textures[s]->Height());
+        if (const Texture* t = m_textures[s]) {
+            std::fprintf(f, " tex%d %ux%u", s, t->Width(), t->Height());
+            // (Which texture and what reached it: slot, uploads and the frame of the last, non-zero bytes of level 0,
+            // an image or view missing, a side-loaded albedo drawn instead.)
+            std::fprintf(f, " [%p s%d up %u@%lld nz %d%s%s%s fmt %u]", static_cast<const void*>(t),
+                         t->m_bindless == ~0u ? -1 : int(t->m_bindless), t->m_uploads,
+                         (long long)(m_frameNumber - t->m_uploadFrame),
+                         t->m_level0NonZero == ~0u ? -1 : int(t->m_level0NonZero), t->m_image ? "" : " NO-IMAGE",
+                         t->m_view ? "" : " NO-VIEW", t->m_albedoMap ? " albedo" : "", uint32_t(t->m_format));
+        }
     if (m_rs[d3d::RS_ALPHABLENDENABLE]) std::fprintf(f, " | blend %u/%u", m_rs[d3d::RS_SRCBLEND], m_rs[d3d::RS_DESTBLEND]);
     std::fprintf(f, " | z %u/%u/%u | at (%.1f %.1f %.1f)", m_rs[d3d::RS_ZENABLE], m_rs[d3d::RS_ZWRITEENABLE],
                  m_rs[d3d::RS_ZFUNC], m_world.m[3][0], m_world.m[3][1], m_world.m[3][2]);

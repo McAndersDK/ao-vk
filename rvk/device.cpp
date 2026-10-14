@@ -489,6 +489,8 @@ bool Device::CreateLogicalDevice(std::string* error)
     vkGetPhysicalDeviceFeatures2(m_physical, &features);
     // Quad operations in fragment shaders (ffp_main.glsl: a 2x2 block of cut-out pixels stops before the lighting).
     VkPhysicalDeviceVulkan11Properties p11{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES};
+    VkPhysicalDeviceVulkan12Properties p12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES};
+    p11.pNext = &p12;
     VkPhysicalDeviceProperties2 props2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
     props2.pNext = &p11;
     vkGetPhysicalDeviceProperties2(m_physical, &props2);
@@ -504,7 +506,16 @@ bool Device::CreateLogicalDevice(std::string* error)
     // Bindless textures (M1): textures and samplers in descriptor arrays, indexed per draw.
     m_bindless = descIdx.shaderSampledImageArrayNonUniformIndexing && descIdx.descriptorBindingSampledImageUpdateAfterBind &&
                  descIdx.descriptorBindingPartiallyBound && rob2.nullDescriptor;
-    Log("bindless textures: %s", m_bindless ? "yes" : "no");
+    // Its image slots (kMaxBindlessImages, every texture alive has one: a big zone's are over 4,096) within what the
+    // GPU allows - the Vulkan minimum with these features is 500,000.
+    const uint32_t imageLimit = std::min(p12.maxPerStageDescriptorUpdateAfterBindSampledImages,
+                                         p12.maxDescriptorSetUpdateAfterBindSampledImages);
+    if (m_bindless && imageLimit < kMaxBindlessImages) {
+        Log("bindless textures: the GPU allows %u images, %u needed", imageLimit, kMaxBindlessImages);
+        m_bindless = false;
+    }
+    Log("bindless textures: %s (%u image slots; the GPU allows %u)", m_bindless ? "yes" : "no", kMaxBindlessImages,
+        imageLimit);
     if (!m_bindless) {
         // The scene shaders read their textures through set 1 now; there is no non-bindless path.
         if (error) *error = "required Vulkan features missing (descriptor indexing, robustness2 nullDescriptor)";
