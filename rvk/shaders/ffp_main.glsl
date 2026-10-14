@@ -301,6 +301,8 @@ float FlatShade()
            (1.0 - kCloudSunShare * (1.0 - gCloudVisibility));
 }
 
+int gShadowCascade = -1;                         // the cascade SunVisibilityCasters read (RVK_ShadowView)
+
 float SunVisibilityCasters(vec3 posW, vec3 n)
 {
     vec3 L = -FL.sunDir.xyz;
@@ -315,6 +317,7 @@ float SunVisibilityCasters(vec3 posW, vec3 n)
         float edge;
         float v = CascadeVisibility(c, posW, n, nl, edge);
         if (edge >= 1.0) continue;
+        gShadowCascade = c;
         float blend = (C.flags.x & F_SHADOWCHEAP) != 0u ? 0.0 : smoothstep(0.8, 1.0, edge);
         if (blend <= 0.0) return v;
         float next = 1.0;
@@ -860,6 +863,14 @@ void main()
         current.rgb *= 0.5;                               // blended as dst * src * 2
     if ((C.flags.w & 256u) != 0u)
         current.a = 1.0;                                  // the interface layer: a replacing draw covers fully
+    // RVK_ShadowView (debug): the sun shadow map's say at each point - white lit, dark shadowed by things - tinted by
+    // the cascade it came from (red nearest, green, blue, yellow widest); grey where no shadow was looked up.
+    if (FL.terrainSun2.w > 0.5 && (C.flags.w & 256u) == 0u) {
+        const vec3 tints[4] = vec3[4](vec3(1.0, 0.45, 0.45), vec3(0.45, 1.0, 0.45), vec3(0.5, 0.6, 1.0), vec3(1.0, 1.0, 0.4));
+        vec3 tint = gShadowCascade >= 0 ? tints[min(gShadowCascade, 3)] : vec3(0.5);
+        float vis = gSunVisibilityValid ? gCasterVisibility : 0.6;
+        current.rgb = tint * mix(0.08, 1.0, vis);
+    }
     outColor = current;
 }
 #endif

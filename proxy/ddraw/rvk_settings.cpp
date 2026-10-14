@@ -150,6 +150,7 @@ Setting g_settings[] = {
     {"RVK_CloudThick", "Clouds: how thick",                                        "Experimental",     Float, 0.1f, 4, 0.1f, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudBright", "Clouds: how light",                                       "Experimental",     Float, 0.25f, 3, 0.05f, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudNight",  "Clouds: how light at night (x the above)",                 "Experimental",     Float, 0.25f, 2, 0.05f, 0.8f, nullptr, 0, "RVK_CloudsOn"},
+    {"RVK_ShadowView",  "Debug: show the sun shadow map's light (white lit, dark shadowed; tint = cascade)", "Experimental", Bool, 0, 1, 1, 0, nullptr, 0},
     {"RVK_Occlusion",   "The game's culling of what hills hide (off: all in view drawn - whole shadows, more draws)", "Experimental", Bool, 0, 1, 1, 1, nullptr, 0},
     {"RVK_ShadowMem",   "Shadows of things out of view: 0 off (only what's drawn), 1 on, 2 on without sway, 3 only big things, 4 solid", "Experimental", Int, 0, 4, 1, 1, nullptr, 0},
     {"RVK_HillShade",   "The terrain's shade from a low sun (valleys under mountains)", "Experimental", Bool, 0, 1, 1, 1, nullptr, 0},
@@ -472,6 +473,7 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
     else if (is("RVK_GameSun")) d->SetGameSun(V(n) != 0.0f);
     else if (is("RVK_SunSize")) d->SetSunSize(V(n));
     else if (is("RVK_SunBleed")) d->SetSunBleed(V(n));
+    else if (is("RVK_ShadowView")) d->SetShadowView(V(n) != 0.0f);
     else if (is("RVK_Occlusion")) rnative::occluder::SetHorizonCulling(V(n) != 0.0f);
     else if (is("RVK_ShadowMem")) d->SetShadowMemory(uint32_t(std::clamp(V(n), 0.0f, 4.0f) + 0.5f));
     else if (is("RVK_HillShade")) d->SetHillShade(V(n) != 0.0f);

@@ -442,6 +442,7 @@ public:
     // the shadow items' counts anew - finding a blinking shadow)
     void SetShadowMemory(uint32_t mode) { m_shadowMemory = mode; m_cacheTraceLines = 0; m_memoryTraceFrames = 240; }
     void SetHillShade(bool on) { m_hillShade = on; }
+    void SetShadowView(bool on) { m_shadowViewDebug = on; m_frameLightsDirty = true; }   // (debug: RVK_ShadowView)
     // The game's own sun sprites (its glow, VisualSunRays_t), shown or not.
     void SetGameSun(bool on) { m_gameSun = on; }
     // Tests: the sky weather's clock (seconds, as UTC; < 0 the wall clock).
@@ -1064,6 +1065,7 @@ private:
     uint32_t m_shadowMemory = 1;                 // RVK_ShadowMem: remembered casters drawn into the sun's shadows
     uint32_t m_memoryTraceFrames = 0;            // (frames left of the counts' trace)
     bool m_hillShade = true;                     // RVK_HillShade: the terrain's shade from a low sun (terrain_sun.cpp)
+    bool m_shadowViewDebug = false;              // RVK_ShadowView: the sun shadow map's say painted on the scene
     struct ArenaChunk;
     struct CachedCaster {
         // Its vertices then indices in a slot of the caster arena (shared buffers: casters batch together).

@@ -903,6 +903,11 @@ void ThreadedDevice::SetHillShade(bool on)
     Enqueue([this, on](const uint8_t*) { m_device.SetHillShade(on); });
 }
 
+void ThreadedDevice::SetShadowView(bool on)
+{
+    Enqueue([this, on](const uint8_t*) { m_device.SetShadowView(on); });
+}
+
 void ThreadedDevice::SetContactShadows(float s)
 {
     Enqueue([this, s](const uint8_t*) { m_device.SetContactShadows(s); });

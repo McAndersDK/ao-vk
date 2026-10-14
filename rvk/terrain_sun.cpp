@@ -173,6 +173,7 @@ void Device::TerrainSunLights(float out[8])
 {
     std::memset(out, 0, sizeof(float) * 8);
     out[4] = 1.0f;
+    out[7] = m_shadowViewDebug ? 1.0f : 0.0f;    // (RVK_ShadowView: ffp_main's debug view)
     if (m_tsWeight <= 0.0f || !m_terrainSunMap || m_tsMadeFrame == ~0ull ||
         m_terrainSunMap->m_layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
         return;
@@ -187,6 +188,7 @@ void Device::TerrainSunLights(float out[8])
     out[4] = m_tsEye;
     out[5] = m_tsWeight;
     out[6] = m_shadowStrength;                   // (its strength: the shadows' own, not faded low as theirs are)
+    out[7] = m_shadowViewDebug ? 1.0f : 0.0f;
 }
 
 }  // namespace rvk

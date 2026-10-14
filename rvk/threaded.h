@@ -134,6 +134,7 @@ public:
     void SetSunBleed(float s);
     void SetShadowMemory(uint32_t mode);
     void SetHillShade(bool on);
+    void SetShadowView(bool on);
     void SetContactShadows(float s);
     void SetAo(float strength, float radius);
     void SetGi(float strength, float radius);
