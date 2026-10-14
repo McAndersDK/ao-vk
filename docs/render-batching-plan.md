@@ -1,6 +1,6 @@
 # Render-thread batching: per-object caching, retained state, instanced statics
 
-Status: P0 done (2026-10-14), branch `render-batching` (from `statels` 5875a16). Continues docs/device-on-rvk.md:
+Status: P0, P1 done (2026-10-14), branch `render-batching` (from `statels` 5875a16). Continues docs/device-on-rvk.md:
 its phase 3 (retained meshes: indices, mesh handles) is done; this is its phase 4 (retained state) taken further, with
 the per-draw derivations cached and identical static meshes drawn instanced. The user wants it "all in".
 
@@ -102,6 +102,25 @@ Kept from the frame before, per object:
 - the mesh info (by handle: already).
 Invalidated by: world or state change, a settings change (`m_constantsDirty`), a new device / zone (clear).
 Check: the city bench's sections; in game the same profile lines. Expect ~2-3 ms off the render thread.
+
+**Done (2026-10-14), staged as randy31-batch1.dll.** rvk/objects.cpp: `ObjectEntry` per (m_drawMeshKey, exact world
+matrix) in an open-addressing table (keys probed in a compact array; each lookup first tries the last frame's entry
+at its place in the draw order, the next one prefetched - 3,475 of 3,481 lookups a frame in the bench). Kept per
+object: the caster key and box (while the cut-out kind / sway stay), the remembered caster (pointer, valid while no
+caster was forgotten: m_casterCacheEpoch), the placed-object lookup (m_statelLookupGen), the grass cover record, its
+world boxes (DrawWorldBox, FrameLightMask: their own sums), and whether it was drawn there last frame - then its
+motion vector is its matrix, no search, nothing pushed for the next frame's search (a still object starting to move:
+no motion vector for that first frame). `RANDYVK_OBJECT_CACHE=0` off, `RANDYVK_OBJECT_VERIFY=1` recompute + log.
+With it: camera checks by a generation (m_cameraGen: WorldCamera, AoCamera, caster views), the orthographic cascade
+cull by box centre and extents, ProfileAdd by name address.
+Fixed on the way: caster streaks starting on frame 1 never remembered; TerrainChunkKey made chunks indexing one static
+buffer with equal counts one chunk (the ground grass only under the first; one base texture) - now with the snapshot
+and an index sample; the object table's growth dropped every entry.
+Result (city bench, render thread, all test pictures identical cache on/off): 6.27 -> 5.08 ms (motion vectors
+0.58 -> 0.11, shadow casters 1.35 -> 0.73, grass cover 0.45 -> 0.27, cull 0.15 -> 0.06; the lookup costs 0.17).
+Not done (small in the bench): the light mask by a lights generation, canopy / sway analysis by mesh. Tools:
+`tools/profile-demo.sh` (perf by function, rvk_demo.map) - the per-draw sections include the profiler's own clock
+reads (the casters' nested timer especially): judge by the whole frame and perf.
 
 ### P2. Retained state blocks (device-on-rvk phase 4b)
 
