@@ -15,7 +15,7 @@ import re
 import numpy as np
 from PIL import Image
 
-PICTURES = ("city.bmp", "city-time.bmp", "shadow-hdr.bmp", "cache.bmp", "statel.bmp")
+PICTURES = ("city.bmp", "city-time.bmp", "shadow-hdr.bmp", "cache.bmp", "statel.bmp", "walker.bmp")
 
 
 def sections(directory):

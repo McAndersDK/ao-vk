@@ -11,6 +11,7 @@ import collections
 import pathlib
 import re
 import struct
+import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -24,9 +25,9 @@ def short(name):
     return m.group(1) if m else name
 
 
-def demo_functions():
+def demo_functions(build):
     funcs = []
-    for line in open(ROOT / "build/linux-release/rvk_demo.map", errors="replace"):
+    for line in open(ROOT / "build" / build / "rvk_demo.map", errors="replace"):
         m = re.match(r"\s*0001:[0-9a-f]+\s+(\S+)\s+([0-9a-f]{8,16})", line)
         if m:
             funcs.append((int(m.group(2), 16), short(m.group(1))))
@@ -64,6 +65,8 @@ def main():
     ap.add_argument("maps")
     ap.add_argument("--threads", type=int, default=2)
     ap.add_argument("--top", type=int, default=40)
+    ap.add_argument("--build", default="linux-release")
+    ap.add_argument("--lines", type=int, default=0, help="the N hottest source lines (a build with debug info)")
     args = ap.parse_args()
     samples = collections.defaultdict(list)
     for line in open(args.samples):
@@ -72,14 +75,15 @@ def main():
             samples[int(parts[0])].append(int(parts[1], 16))
     regs = regions(args.maps)
     starts = [r[0] for r in regs]
-    funcs = demo_functions()
+    funcs = demo_functions(args.build)
     fstarts = [f[0] for f in funcs]
     exe = next((r for r in regs if r[2].lower() == "rvk_demo.exe"), None)
-    for tid, ips in sorted(samples.items(), key=lambda t: -len(t[1]))[:args.threads]:
-        by_module, by_func = collections.Counter(), collections.Counter()
+    for rank, (tid, ips) in enumerate(sorted(samples.items(), key=lambda t: -len(t[1]))[:args.threads]):
+        by_module, by_func, by_ip = collections.Counter(), collections.Counter(), collections.Counter()
         for ip in ips:
             if exe and exe[0] <= ip < exe[1]:
                 by_module["rvk_demo.exe"] += 1
+                by_ip[ip - exe[0] + 0x400000] += 1
                 i = bisect.bisect_right(fstarts, ip) - 1
                 by_func[funcs[i][1] if i >= 0 else "?"] += 1
                 continue
@@ -90,6 +94,22 @@ def main():
         print("  by module: " + ", ".join(f"{m} {c * 100 / n:.1f}%" for m, c in by_module.most_common(8)))
         for f, c in by_func.most_common(args.top):
             print(f"  {c * 100 / n:5.1f}%  {f}")
+        if args.lines and rank == 0 and by_ip:
+            # Addresses to file:line (inlined code: the innermost frame), summed by line.
+            exe_path = ROOT / "build" / args.build / "rvk_demo.exe"
+            addrs = list(by_ip)
+            out = subprocess.run(["llvm-symbolizer", "--obj=" + str(exe_path), "--no-inlines", "--relative-address"] +
+                                 [hex(a - 0x400000) for a in addrs], capture_output=True, text=True).stdout
+            blocks = [b.strip().splitlines() for b in out.strip().split("\n\n")]
+            by_line = collections.Counter()
+            for a, b in zip(addrs, blocks):
+                loc = b[1] if len(b) > 1 else "?"
+                loc = re.sub(r".*/randy-vk/", "", loc)
+                loc = re.sub(r":\d+$", "", loc)      # (the column)
+                by_line[(b[0] if b else "?", loc)] += by_ip[a]
+            print(f"  hottest lines:")
+            for (fn, loc), c in by_line.most_common(args.lines):
+                print(f"  {c * 100 / n:5.1f}%  {loc}  ({short(fn)})")
 
 
 if __name__ == "__main__":

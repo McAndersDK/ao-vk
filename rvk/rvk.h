@@ -947,6 +947,9 @@ private:
     };
     static constexpr uint32_t kNoShadowRecord = ~1u;
     std::vector<ShadowItem> m_shadowItems;       // EndFrame: what the shadow passes draw
+    std::vector<std::pair<uint64_t, uint32_t>> m_carrierGrid;   // FindCarriers: drawn items by 1-unit cell
+    std::vector<std::pair<uint32_t, uint32_t>> m_carrierOwners;  // ... by owner
+    std::vector<uint32_t> m_carrierNear;                         // ... a query's items
     // What a shadow pass has bound, so unchanged state isn't re-issued.
     struct ShadowBind {
         int pipeline = -1, texOffset = -2;

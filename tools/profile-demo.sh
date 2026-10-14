@@ -3,10 +3,13 @@
 # --frames 3000), samples it for 6 seconds once it is drawing, and prints where its busiest threads spend their time,
 # by module and by function (tools/profile-demo.py; the demo's functions from build/linux-release/rvk_demo.map).
 # Usage: tools/profile-demo.sh [demo args...]
+# PROFILE_BUILD=relprof: a build dir with debug info (Release flags + /Z7, /DEBUG: see docs/render-batching-plan.md) -
+# then PROFILE_LINES=N also prints the N hottest source lines (llvm-symbolizer on its PDB).
 cd "$(dirname "$0")/.." || exit 1
 mkdir -p build/profile-demo
 out=$PWD/build/profile-demo
-exe=$PWD/build/linux-release/rvk_demo.exe
+build=${PROFILE_BUILD:-linux-release}
+exe=$PWD/build/$build/rvk_demo.exe
 (cd "$out" && WINEPREFIX=${WINEPREFIX:-$HOME/.wine-prk} WINEDEBUG=-all timeout 600 wine "$exe" "$@" > "$out/demo.txt" 2>&1) &
 runner=$!
 # The Wine process running the demo: the one with rvk_demo.exe mapped (not the wrappers around it).
@@ -25,4 +28,5 @@ perf record -q -e cycles:u -F 1999 -p "$pid" -o "$out/perf.data" -- sleep 6 2>/d
 wait "$runner"
 perf script -i "$out/perf.data" -F tid,ip 2>/dev/null > "$out/samples.txt"
 grep '^city bench: [0-9]* draws' "$out/demo.txt"
-python3 -I tools/profile-demo.py "$out/samples.txt" "$out/maps.txt" ${PROFILE_TOP:+--top $PROFILE_TOP}
+python3 -I tools/profile-demo.py "$out/samples.txt" "$out/maps.txt" --build "$build" ${PROFILE_TOP:+--top $PROFILE_TOP} \
+    ${PROFILE_LINES:+--lines $PROFILE_LINES}

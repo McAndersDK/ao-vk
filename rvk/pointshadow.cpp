@@ -245,6 +245,43 @@ void Device::FindCarriers()
         groupLowestOrigin[it.group] = std::min(groupLowestOrigin[it.group], it.world.m[3][1]);
     }
 
+    // The drawn items (this frame's casters, not remembered ones) on a grid of 1-unit cells by their origin, and by
+    // owner: every test below is within a unit of a point sideways, or of one owner - a light looked through all the
+    // frame's items four times (lights x items: ~5% of the render thread over a city at night). Candidates are taken
+    // in the items' order, so the same item wins a tie as before.
+    std::vector<std::pair<uint64_t, uint32_t>>& grid = m_carrierGrid;
+    std::vector<std::pair<uint32_t, uint32_t>>& byOwner = m_carrierOwners;
+    grid.clear();
+    byOwner.clear();
+    auto cellKey = [](int32_t x, int32_t z) { return uint64_t(uint32_t(x)) << 32 | uint32_t(z); };
+    for (uint32_t i = 0; i < m_shadowItems.size(); ++i) {
+        const ShadowItem& it = m_shadowItems[i];
+        if (it.cached) continue;
+        const float x = it.world.m[3][0], z = it.world.m[3][2];
+        if (std::fabs(x) < 1e9f && std::fabs(z) < 1e9f)
+            grid.push_back({cellKey(int32_t(std::floor(x)), int32_t(std::floor(z))), i});
+        if (it.owner) byOwner.push_back({it.owner, i});
+    }
+    std::sort(grid.begin(), grid.end());
+    std::sort(byOwner.begin(), byOwner.end());
+    std::vector<uint32_t>& nearby = m_carrierNear;
+    // The drawn items whose origin is within r sideways of (x, z) - a superset: the cells it touches - in item order.
+    auto gather = [&](float x, float z, float r, bool clear) {
+        if (clear) nearby.clear();
+        const int32_t x0 = int32_t(std::floor(x - r)), x1 = int32_t(std::floor(x + r));
+        const int32_t z0 = int32_t(std::floor(z - r)), z1 = int32_t(std::floor(z + r));
+        for (int32_t cx = x0; cx <= x1; ++cx)
+            for (int32_t cz = z0; cz <= z1; ++cz) {
+                const uint64_t k = cellKey(cx, cz);
+                auto at = std::lower_bound(grid.begin(), grid.end(), std::pair<uint64_t, uint32_t>{k, 0u});
+                for (; at != grid.end() && at->first == k; ++at) nearby.push_back(at->second);
+            }
+    };
+    auto inOrder = [&] {
+        std::sort(nearby.begin(), nearby.end());
+        nearby.erase(std::unique(nearby.begin(), nearby.end()), nearby.end());
+    };
+
     const bool exact = m_sceneLightsFrame == m_frameNumber;   // the game's own lights with their carriers
     for (CapturedLight& c : m_lightsCur) {
         c.hasCarrier = false;
@@ -267,8 +304,9 @@ void Device::FindCarriers()
             c.owner = owner;
             if (owner) {
                 std::vector<uint8_t> linked(groups, 0);
-                for (const ShadowItem& it : m_shadowItems) {
-                    if (it.cached || it.owner != owner) continue;
+                auto from = std::lower_bound(byOwner.begin(), byOwner.end(), std::pair<uint32_t, uint32_t>{owner, 0u});
+                for (auto o = from; o != byOwner.end() && o->first == owner; ++o) {
+                    const ShadowItem& it = m_shadowItems[o->second];
                     linked[it.group] = 1;
                     if (!c.hasCarrier || it.world.m[3][1] < c.carrier[1]) {   // its feet: the lowest origin
                         c.carrier[0] = it.world.m[3][0];
@@ -301,9 +339,12 @@ void Device::FindCarriers()
             }
         }
         float best = 1e30f;
-        for (const ShadowItem& it : m_shadowItems) {
-            if (it.cached)                       // remembered copies may stand where the character was
-                continue;
+        // (Only items within a unit of the light, or 0.3 of last frame's carrier, can match below.)
+        gather(p.x, p.z, 1.0f, true);
+        if (prev) gather(prev->carrier[0], prev->carrier[2], 0.3f, false);
+        inOrder();
+        for (uint32_t idx : nearby) {
+            const ShadowItem& it = m_shadowItems[idx];   // (drawn: remembered copies may stand where it was)
             float dy = it.world.m[3][1] - p.y;
             if (dy <= -2.6f || dy >= 0.3f)       // where IsCarrierPart looks for the carrier's parts
                 continue;
@@ -345,8 +386,11 @@ void Device::FindCarriers()
         // 0.6 above the body's origin; a character's body pieces have theirs at its feet, like the carrier's).
         std::vector<uint8_t> linked(groups, 0);
         linked[c.carrierGroup] = 1;
-        for (const ShadowItem& it : m_shadowItems) {
-            if (it.cached || linked[it.group]) continue;
+        gather(c.carrier[0], c.carrier[2], 0.25f, true);
+        inOrder();
+        for (uint32_t idx : nearby) {
+            const ShadowItem& it = m_shadowItems[idx];
+            if (linked[it.group]) continue;
             float extent = std::max(std::max(it.boundsMax[0] - it.boundsMin[0], it.boundsMax[1] - it.boundsMin[1]), it.boundsMax[2] - it.boundsMin[2]);
             if (extent >= 3.0f) continue;        // a floor or building whose origin happens to be there
             float dx = it.world.m[3][0] - c.carrier[0], dz = it.world.m[3][2] - c.carrier[2];
@@ -355,8 +399,9 @@ void Device::FindCarriers()
                 linked[it.group] = 1;
         }
         // The carrier's origin may be a head piece (sitting: right under the light); its feet are the lowest origin.
-        for (const ShadowItem& it : m_shadowItems) {
-            if (it.cached || !linked[it.group]) continue;
+        for (uint32_t idx : nearby) {            // (the same neighbourhood: within 0.25 of the carrier)
+            const ShadowItem& it = m_shadowItems[idx];
+            if (!linked[it.group]) continue;
             float dx = it.world.m[3][0] - c.carrier[0], dz = it.world.m[3][2] - c.carrier[2];
             if (dx * dx + dz * dz < 0.25f * 0.25f)
                 c.carrier[1] = std::min(c.carrier[1], it.world.m[3][1]);

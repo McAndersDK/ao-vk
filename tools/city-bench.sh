@@ -21,6 +21,7 @@ run city-time2 --city-bench --pixel-lighting --size 2560 1440 --frames 700 --sho
 run shadow-hdr --shadow-test --hdr --frames 30 --shot shadow-hdr.bmp
 run cache --cache-test 100 --frames 300 --shot cache.bmp
 run statel --statel-test 'C:\linux\client\randy-vk\statels\790.bin' 790 1380 0 2950 --frames 60 --shot statel.bmp
+run walker --shadow-test --walker-light --grass-walk -3 --pixel-lighting --light-override --hdr --frames 60 --fixed-clock 16 --shot walker.bmp
 run bench --bench 300 --threaded
 [ -n "$base" ] && python3 -I tools/city-compare.py "$base" "$out"
 exit 0
