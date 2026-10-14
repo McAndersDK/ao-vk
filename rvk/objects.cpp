@@ -8,6 +8,7 @@
 #include "internal.h"
 
 #include <cmath>
+#include <xmmintrin.h>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -28,6 +29,8 @@ void Device::RehashObjects(size_t size, uint64_t keep)
     old.swap(m_objects);
     m_objects.assign(size, ObjectEntry{});
     m_objectKeys.assign(size, 0);
+    m_objectOrder.clear();                       // (entries' places: moved)
+    m_objectOrderNext.clear();
     m_objectCount = 0;
     const size_t mask = size - 1;
     for (ObjectEntry& e : old) {
@@ -43,6 +46,27 @@ void Device::RehashObjects(size_t size, uint64_t keep)
 // The current draw's entry (a static mesh: m_drawMeshKey, m_world), made if new.
 Device::ObjectEntry* Device::FindObject()
 {
+    // The last frame's entry at this place in the order, if it is this object (exactly: mesh and matrix); the next
+    // place's entry fetched meanwhile - an entry is the first touch of its object's memory this frame.
+    const uint32_t pos = m_objectOrderPos++;
+    if (pos + 1 < m_objectOrder.size()) {
+        const char* next = reinterpret_cast<const char*>(&m_objects[m_objectOrder[pos + 1]]);
+        for (size_t b = 0; b < sizeof(ObjectEntry); b += 64)
+            _mm_prefetch(next + b, _MM_HINT_T0);
+    }
+    if (pos < m_objectOrder.size()) {
+        ObjectEntry& e = m_objects[m_objectOrder[pos]];
+        if (e.key && e.meshKey == m_drawMeshKey && std::memcmp(&e.world, &m_world, sizeof(m_world)) == 0) {
+            if (e.lastFrame != m_frameNumber) {
+                e.seenLastFrame = e.lastFrame + 1 == m_frameNumber;
+                e.lastFrame = m_frameNumber;
+            }
+            m_objectOrderNext.push_back(m_objectOrder[pos]);
+            ++m_objectHits;
+            ++m_objectPredicted;
+            return &e;
+        }
+    }
     uint64_t k = m_drawMeshKey ^ 0x9E3779B97F4A7C15ull;
     uint32_t w[16];
     std::memcpy(w, &m_world, sizeof(w));
@@ -86,6 +110,7 @@ Device::ObjectEntry* Device::FindObject()
             }
             ++m_objectCount;
             ++m_objectMisses;
+            m_objectOrderNext.push_back(uint32_t(i));
             return &e;
         }
         if (keys[i] != k)
@@ -97,6 +122,7 @@ Device::ObjectEntry* Device::FindObject()
                 e.lastFrame = m_frameNumber;
             }
             ++m_objectHits;
+            m_objectOrderNext.push_back(uint32_t(i));
             return &e;
         }
     }
@@ -110,12 +136,16 @@ void Device::PruneObjects()
     m_objectCache = !off;
     m_objectVerify = verify;
     m_drawObject = nullptr;
+    m_objectOrder.swap(m_objectOrderNext);       // (the last frame's order; this frame's anew)
+    m_objectOrderNext.clear();
+    m_objectOrderPos = 0;
     if (m_frameNumber % kObjectForget == 0 && (m_objectHits || m_objectMisses)) {
-        Log("object cache: %zu objects; %.0f draws a frame found theirs, %.0f new (last %llu frames)%s%s",
-            m_objectCount, double(m_objectHits) / double(kObjectForget), double(m_objectMisses) / double(kObjectForget),
-            (unsigned long long)kObjectForget, m_objectVerify ? "; verified, mismatches: " : "",
-            m_objectVerify ? std::to_string(m_objectMismatches).c_str() : "");
-        m_objectHits = m_objectMisses = 0;
+        Log("object cache: %zu objects; %.0f draws a frame found theirs (%.0f in the last frame's order), %.0f new "
+            "(last %llu frames)%s%s",
+            m_objectCount, double(m_objectHits) / double(kObjectForget), double(m_objectPredicted) / double(kObjectForget),
+            double(m_objectMisses) / double(kObjectForget), (unsigned long long)kObjectForget,
+            m_objectVerify ? "; verified, mismatches: " : "", m_objectVerify ? std::to_string(m_objectMismatches).c_str() : "");
+        m_objectHits = m_objectMisses = m_objectPredicted = 0;
     }
     const bool many = m_objectCount > kObjectMany;
     if (m_objectCount == 0 || (m_frameNumber % kObjectForget != 0 && !many))
