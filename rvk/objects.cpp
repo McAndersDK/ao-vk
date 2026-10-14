@@ -20,6 +20,7 @@ using namespace detail;
 namespace {
 constexpr uint64_t kObjectForget = 600;          // frames undrawn before an entry goes
 constexpr size_t kObjectMany = size_t(1) << 16;  // past this many, entries go after a tenth of that
+constexpr size_t kObjectCandidates = 16384;      // (a power of two)
 }  // namespace
 
 // The table rebuilt `size` long, without the entries not drawn for `keep` frames.
@@ -49,12 +50,12 @@ Device::ObjectEntry* Device::FindObject()
     // The last frame's entry at this place in the order, if it is this object (exactly: mesh and matrix); the next
     // place's entry fetched meanwhile - an entry is the first touch of its object's memory this frame.
     const uint32_t pos = m_objectOrderPos++;
-    if (pos + 1 < m_objectOrder.size()) {
+    if (pos + 1 < m_objectOrder.size() && m_objectOrder[pos + 1] != ~0u) {
         const char* next = reinterpret_cast<const char*>(&m_objects[m_objectOrder[pos + 1]]);
         for (size_t b = 0; b < sizeof(ObjectEntry); b += 64)
             _mm_prefetch(next + b, _MM_HINT_T0);
     }
-    if (pos < m_objectOrder.size()) {
+    if (pos < m_objectOrder.size() && m_objectOrder[pos] != ~0u) {
         ObjectEntry& e = m_objects[m_objectOrder[pos]];
         if (e.key && e.meshKey == m_drawMeshKey && std::memcmp(&e.world, &m_world, sizeof(m_world)) == 0) {
             if (e.lastFrame != m_frameNumber) {
@@ -81,6 +82,24 @@ Device::ObjectEntry* Device::FindObject()
     const uint64_t* keys = m_objectKeys.data();
     for (size_t i = size_t(k) & mask;; i = (i + 1) & mask) {
         if (!keys[i]) {
+            // New: an entry only for one seen at this matrix last frame too (a candidate then).
+            // (Probed a few places on: candidates live two frames, a slot older than that is free. Direct-mapped,
+            // two still objects in one slot pushed each other out every frame and never got entries.)
+            if (m_objectCandidates.empty()) m_objectCandidates.resize(kObjectCandidates);
+            ObjectCandidate* cand = nullptr;
+            ObjectCandidate* free = nullptr;
+            for (size_t c = 0; c < 16; ++c) {
+                ObjectCandidate& s = m_objectCandidates[(size_t(k) + c) & (kObjectCandidates - 1)];
+                if (s.key == k) { cand = &s; break; }
+                if (!free && (s.key == 0 || s.frame + 1 < m_frameNumber)) free = &s;
+            }
+            if (!cand || cand->frame + 1 != m_frameNumber) {
+                if (cand && cand->frame != m_frameNumber) *cand = {k, m_frameNumber};
+                else if (!cand && free) *free = {k, m_frameNumber};
+                ++m_objectPassing;
+                m_objectOrderNext.push_back(~0u);   // (its place in the order kept)
+                return nullptr;
+            }
             ObjectEntry& e = m_objects[i];
             e = ObjectEntry{};
             e.key = k;
@@ -140,12 +159,13 @@ void Device::PruneObjects()
     m_objectOrderNext.clear();
     m_objectOrderPos = 0;
     if (m_frameNumber % kObjectForget == 0 && (m_objectHits || m_objectMisses)) {
-        Log("object cache: %zu objects; %.0f draws a frame found theirs (%.0f in the last frame's order), %.0f new "
-            "(last %llu frames)%s%s",
+        Log("object cache: %zu objects; %.0f draws a frame found theirs (%.0f in the last frame's order), %.0f new, "
+            "%.0f not still (last %llu frames)%s%s",
             m_objectCount, double(m_objectHits) / double(kObjectForget), double(m_objectPredicted) / double(kObjectForget),
-            double(m_objectMisses) / double(kObjectForget), (unsigned long long)kObjectForget,
+            double(m_objectMisses) / double(kObjectForget), double(m_objectPassing) / double(kObjectForget),
+            (unsigned long long)kObjectForget,
             m_objectVerify ? "; verified, mismatches: " : "", m_objectVerify ? std::to_string(m_objectMismatches).c_str() : "");
-        m_objectHits = m_objectMisses = m_objectPredicted = 0;
+        m_objectHits = m_objectMisses = m_objectPredicted = m_objectPassing = 0;
     }
     const bool many = m_objectCount > kObjectMany;
     if (m_objectCount == 0 || (m_frameNumber % kObjectForget != 0 && !many))

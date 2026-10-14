@@ -1612,6 +1612,11 @@ private:
     // The entries in the order the last frame's draws found them (the game draws its scene in the same order frame
     // after frame): this frame's n-th lookup tries the last frame's n-th entry first, and the next one is prefetched.
     std::vector<uint32_t> m_objectOrder, m_objectOrderNext;
+    // Objects seen at a matrix once, not yet given an entry (direct-mapped: key, frame): an entry is made when one is
+    // seen there again the next frame - a moving thing (a new matrix every frame) never gets one.
+    struct ObjectCandidate { uint64_t key = 0, frame = 0; };
+    std::vector<ObjectCandidate> m_objectCandidates;
+    uint64_t m_objectPassing = 0;                // (lookups of objects not still: logged)
     uint32_t m_objectOrderPos = 0;
     uint64_t m_objectPredicted = 0;              // (lookups the order answered: logged)
     size_t m_objectCount = 0;
