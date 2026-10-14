@@ -443,7 +443,9 @@ public:
     void SetShadowMemory(uint32_t mode) { m_shadowMemory = mode; m_cacheTraceLines = 0; m_memoryTraceFrames = 240; }
     void SetHillShade(bool on) { m_hillShade = on; }
     void SetShadowView(bool on) { m_shadowViewDebug = on; m_frameLightsDirty = true; }   // (debug: RVK_ShadowView)
-    void SetShadowOnlyDraw(bool on) { m_shadowOnlyDraw = on; }   // (the next draws cast only: see Draw)
+    void SetShadowOnlyDraw(bool on) { m_shadowOnlyDraw = on; }   // (the next draws cast only: DrawShadowOnly)
+    void DrawShadowOnly(uint32_t primitive, uint32_t fvf, const void* vertices, uint32_t vertexCount,
+                        const uint16_t* indices, uint32_t indexCount);
     // The game's own sun sprites (its glow, VisualSunRays_t), shown or not.
     void SetGameSun(bool on) { m_gameSun = on; }
     // Tests: the sky weather's clock (seconds, as UTC; < 0 the wall clock).

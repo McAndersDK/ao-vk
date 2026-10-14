@@ -2040,11 +2040,76 @@ void Device::FlushGroup()
     m_group.count = 0;
 }
 
+// Shadow-only (native mesh.cpp: a static mesh the game culled - out of view, behind a hill - within the shadows'
+// reach): its geometry placed and recorded as a sun shadow caster, and nothing else - none of Draw's per-draw work
+// (terrain capture, picking, grass, leaves, the sky's triggers: fed culled meshes, the grass tiles' map was corrupted
+// and the game crashed - user, 2026-10-14). The shadows then hold all that stands near, whichever way the camera looks.
+void Device::DrawShadowOnly(uint32_t primitive, uint32_t fvf, const void* vertices, uint32_t vertexCount,
+                            const uint16_t* indices, uint32_t indexCount)
+{
+    if (m_external || m_drawGpu || !(m_scenePhase && m_target == m_scene) || IsTerrain(fvf) ||
+        (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZ)
+        return;
+    const FvfLayout layout = DecodeFvf(fvf);
+    const VkBuffer staticIb = m_drawStaticBuffer && indices ? m_drawStaticIndexBuffer : VK_NULL_HANDLE;
+    Frame& f = m_frames[m_frameIndex];
+    const bool reserve = m_arenaGeneration != m_ringGeneration;
+    const VkDeviceSize arenas = reserve ? VkDeviceSize(m_constWanted) * sizeof(DrawConstants) +
+                                              VkDeviceSize(m_recordWanted) * sizeof(DrawRecord) +
+                                              VkDeviceSize(m_recordWanted) * sizeof(VkDrawIndexedIndirectCommand) +
+                                              ((m_shadows || m_pointShadows)
+                                                   ? VkDeviceSize(kShadowRecordCapacity) *
+                                                         (sizeof(ShadowRecord) + sizeof(VkDrawIndexedIndirectCommand))
+                                                   : 0) + 64
+                                        : 0;
+    EnsureRingSpace(arenas + (m_drawStaticBuffer ? 0 : VkDeviceSize(layout.stride) * vertexCount) +
+                    VkDeviceSize(indexCount) * 2 + layout.stride + 64);
+    PrepareDrawArenas();
+    // (The caster's identity and kind from this draw alone: no mesh id, canopy or sway of the draw before it.)
+    const auto* mesh = m_drawMesh;
+    auto* leaves = m_drawLeaves;
+    float sway[4];
+    std::memcpy(sway, m_drawSway, sizeof(sway));
+    m_drawMesh = nullptr;
+    m_drawLeaves = nullptr;
+    std::memset(m_drawSway, 0, sizeof(m_drawSway));
+    void* cpu = nullptr;
+    VkDeviceSize vbOffset = 0, ibOffset = 0;
+    if (m_drawStaticBuffer) {
+        vbOffset = m_drawStaticOffset;
+        if (staticIb) {
+            ibOffset = m_drawStaticIndexOffset;
+        } else if (indices) {
+            ibOffset = Allocate(VkDeviceSize(indexCount) * 2, 2, &cpu);
+            std::memcpy(cpu, indices, size_t(indexCount) * 2);
+        }
+        RecordShadowCaster(primitive, fvf, layout.stride, vertices, vertexCount, vbOffset, indices,
+                           indices ? indexCount : 0, ibOffset, m_drawStaticBuffer, staticIb ? staticIb : f.ring);
+    } else if (vertices) {
+        vbOffset = Allocate(VkDeviceSize(layout.stride) * vertexCount, layout.stride, &cpu);
+        std::memcpy(cpu, vertices, size_t(layout.stride) * vertexCount);
+        if (indices) {
+            ibOffset = Allocate(VkDeviceSize(indexCount) * 2, 2, &cpu);
+            std::memcpy(cpu, indices, size_t(indexCount) * 2);
+        }
+        RecordShadowCaster(primitive, fvf, layout.stride, vertices, vertexCount, vbOffset, indices,
+                           indices ? indexCount : 0, ibOffset);
+    }
+    m_drawMesh = mesh;
+    m_drawLeaves = leaves;
+    std::memcpy(m_drawSway, sway, sizeof(sway));
+    ++m_shadowOnlyDraws;
+}
+
 void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32_t vertexCount,
                   const uint16_t* indices, uint32_t indexCount)
 {
     if (!m_inFrame || !vertexCount)
         return;
+    if (m_shadowOnlyDraw) {                      // (a culled static mesh, for its shadow alone: nothing else)
+        DrawShadowOnly(primitive, fvf, vertices, vertexCount, indices, indexCount);
+        return;
+    }
     ++m_frameDraw;
     // GPU profiling: which class of scene draw this is (splits the "scene" block; see ProfileSceneClass).
     m_drawSceneClass = 0;
@@ -2214,51 +2279,6 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     }
     // Retained indices only with the retained vertices (one static draw path).
     const VkBuffer staticIb = m_drawStaticBuffer && indices ? m_drawStaticIndexBuffer : VK_NULL_HANDLE;
-    // Shadow-only (native mesh.cpp: a static mesh the game culled - out of view, behind a hill - within the shadows'
-    // reach): its geometry placed and recorded as a sun shadow caster, nothing drawn. The shadows then hold all that
-    // stands near, whichever way the camera looks (user, 2026-10-14).
-    if (m_shadowOnlyDraw) {
-        if (m_external || m_drawGpu || !(m_scenePhase && m_target == m_scene))
-            return;
-        std::memcpy(m_drawSway, sway, sizeof(m_drawSway));   // (as a drawn plant's: its shadow sways)
-        Frame& sf = m_frames[m_frameIndex];
-        const bool reserve = m_arenaGeneration != m_ringGeneration;
-        const VkDeviceSize arenas = reserve ? VkDeviceSize(m_constWanted) * sizeof(DrawConstants) +
-                                                  VkDeviceSize(m_recordWanted) * sizeof(DrawRecord) +
-                                                  VkDeviceSize(m_recordWanted) * sizeof(VkDrawIndexedIndirectCommand) +
-                                                  ((m_shadows || m_pointShadows)
-                                                       ? VkDeviceSize(kShadowRecordCapacity) *
-                                                             (sizeof(ShadowRecord) + sizeof(VkDrawIndexedIndirectCommand))
-                                                       : 0) + 64
-                                            : 0;
-        EnsureRingSpace(arenas + (m_drawStaticBuffer ? 0 : VkDeviceSize(layout.stride) * vertexCount) +
-                        VkDeviceSize(indexCount) * 2 + layout.stride + 64);
-        PrepareDrawArenas();
-        void* cpu = nullptr;
-        VkDeviceSize vbOffset = 0, ibOffset = 0;
-        if (m_drawStaticBuffer) {
-            vbOffset = m_drawStaticOffset;
-            if (staticIb) {
-                ibOffset = m_drawStaticIndexOffset;
-            } else if (indices) {
-                ibOffset = Allocate(VkDeviceSize(indexCount) * 2, 2, &cpu);
-                std::memcpy(cpu, indices, size_t(indexCount) * 2);
-            }
-            RecordShadowCaster(primitive, fvf, layout.stride, vertices, vertexCount, vbOffset, indices,
-                               indices ? indexCount : 0, ibOffset, m_drawStaticBuffer, staticIb ? staticIb : sf.ring);
-        } else if (vertices) {
-            vbOffset = Allocate(VkDeviceSize(layout.stride) * vertexCount, layout.stride, &cpu);
-            std::memcpy(cpu, vertices, size_t(layout.stride) * vertexCount);
-            if (indices) {
-                ibOffset = Allocate(VkDeviceSize(indexCount) * 2, 2, &cpu);
-                std::memcpy(cpu, indices, size_t(indexCount) * 2);
-            }
-            RecordShadowCaster(primitive, fvf, layout.stride, vertices, vertexCount, vbOffset, indices,
-                               indices ? indexCount : 0, ibOffset);
-        }
-        ++m_shadowOnlyDraws;
-        return;
-    }
 
     // Two-pass foliage: the queued edges go before a draw that writes no depth (the effects drawn over the scene came
     // after the foliage, edges included, before).
