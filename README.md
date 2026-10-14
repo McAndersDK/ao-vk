@@ -178,7 +178,7 @@ Spell effects with GPU particles, and depth of field.
 - Waves of wind run through the grass, with gusts sweeping over it as lighter bands.
 - Sunlight on the blades: backlit tips when you look towards the sun, a sheen, rounded shading.
 - The blades cast sun shadows onto the ground, each other and paths, softened so that fields stay as bright as
-  before.
+  before; near lamps and the lights characters carry they cast those lights' shadows too.
 - Grass bends around characters walking through it and stays trodden for a few seconds behind them.
 - Grass, bushes and trees sway in the wind.
 - Grass and plants bend out of the way of characters walking through them, then spring back.
