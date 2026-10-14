@@ -1557,7 +1557,7 @@ void Device::BeginFrame()
             Log("ground grass: %llu frames drawn, %.0f blades a frame; tiles %llu, %llu built (%.2f ms each, %.0f%% of "
                 "their blades lit by the ground's lightmap), capture %.3f ms a frame; terrain ambient %.2f %.2f %.2f; "
                 "pushers now %llu max %u; trail cells %u; candidates left out: %llu clumps, %llu no grass ground, %llu steep, %llu "
-                "edge; %llu tiles waiting to build; %.0f blades a frame cast the sun's shadow (last 600 frames)",
+                "edge; %llu tiles waiting to build; %.0f blades a frame cast the sun's shadow, %.0f the point lights' (last 600 frames)",
                 (unsigned long long)m_grassDraws, double(m_grassBlades) / std::max<uint64_t>(m_grassDraws, 1),
                 (unsigned long long)m_grassTiles.size(), (unsigned long long)m_grassBuilds,
                 m_grassBuildMs / double(std::max<uint64_t>(m_grassBuilds, 1)),
@@ -1566,7 +1566,7 @@ void Device::BeginFrame()
                 (unsigned long long)m_framePushers.size(), m_pusherSeenMax, m_trailActive, (unsigned long long)m_grassLeftOut[0],
                 (unsigned long long)m_grassLeftOut[1], (unsigned long long)m_grassLeftOut[2],
                 (unsigned long long)m_grassLeftOut[3], (unsigned long long)GrassTilesWaiting(),
-                double(m_grassShadowBlades) / 600.0);
+                double(m_grassShadowBlades) / 600.0, double(m_grassPointShadowBlades) / 600.0);
         if (m_leaf.on)
             Log("leaves: canopy draws a frame %.1f shrubs, %.1f trees, %.1f palms; %.1f leaf draws a frame, %.0f leaves a "
                 "frame; %zu sets, %u baked (%.2f ms each, %.0f leaves each); %.0f leaves a frame cast the sun's shadow "
@@ -1582,6 +1582,7 @@ void Device::BeginFrame()
         m_leafBakes = m_leafBakedLeaves = 0;
         m_leafBakeMs = 0.0;
         m_grassShadowBlades = 0;
+        m_grassPointShadowBlades = 0;
         m_grassLitBlades = m_grassBuiltBlades = 0;
         for (uint64_t& n : m_grassLeftOut)
             n = 0;

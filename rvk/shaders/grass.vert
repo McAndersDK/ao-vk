@@ -164,6 +164,7 @@ float PointShadow(Light l, vec3 posW, vec3 n)
     float texel = 2.0 * dist / float(textureSize(pointShadowMaps, 0).x);
     float cosAngle = clamp(dot(n, -d / dist), 0.0, 1.0);
     d += n * texel * (1.0 + 2.0 * (1.0 - cosAngle));
+    d -= d / dist * 0.12;                        // (the blades cast into the cube too: not their own shadow)
     vec3 a = abs(d);
     float w = max(a.x, max(a.y, a.z));
     float f = l.direction.w, nr = kPointShadowNear;

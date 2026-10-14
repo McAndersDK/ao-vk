@@ -657,6 +657,7 @@ void Device::RenderPointShadowMaps(VkCommandBuffer cmd)
         }
         pointScanMs += ProfileCpu() - scanStart;
         double drawStart = ProfileCpu();
+        const bool grassUp = !GrassBelow(pos, l.range);   // (+Y, face 2: only if some grass reaches above the light)
         for (int face = 0; face < 6; ++face) {
             VkRenderingAttachmentInfo depthAtt{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
             depthAtt.imageView = m_cubeFaceViews[k * 6 + face];
@@ -686,6 +687,14 @@ void Device::RenderPointShadowMaps(VkCommandBuffer cmd)
                 ++m_pointShadowDraws;
             }
             FlushShadowGroup(cmd);               // this face's batch (M4)
+            // Our ground grass casts too (grass.cpp). Its pipeline replaces the shadow pipelines' bindings: they are
+            // bound again for the next face, and the cube's depth bias set back.
+            if ((face != 2 || grassUp) && DrawGrassPointShadow(cmd, vp, pos, l.range)) {
+                bind = ShadowBind{};
+                m_shadowArenaBound = false;
+                BindShadowRecords(cmd);
+                vkCmdSetDepthBias(cmd, 1.0f, 0.0f, 1.5f);
+            }
             vkCmdEndRendering(cmd);
         }
         pointDrawMs += ProfileCpu() - drawStart;

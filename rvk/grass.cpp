@@ -2015,6 +2015,85 @@ void Device::DrawGrassShadow(VkCommandBuffer cmd, const d3d::Matrix& lightViewPr
     }
 }
 
+// The blades into a point light's cube face (pointshadow.cpp RenderPointShadowMaps, after the face's casters, its
+// rendering open): the tiles within the light's range that reach the face, each blade square to the light
+// (grass_shadow.vert's point mode). Tiles further than a few units from the light through their sparse quarter.
+// Returns whether anything was drawn (the caller then rebinds the shadow pipelines' state).
+bool Device::DrawGrassPointShadow(VkCommandBuffer cmd, const d3d::Matrix& faceViewProj, const float light[3], float range)
+{
+    if (!m_grassOn || !m_grassShadows || !m_grassShadowPipeline || !m_grassPool || !m_grassIndex || !m_frameEyeValid ||
+        m_grassTiles.empty())
+        return false;
+    const float tall = m_grassHeight * 1.7f + 1.0f;
+    bool bound = false;
+    for (const auto& [key, tp] : m_grassTiles) {
+        const GrassTile& t = *tp;
+        if (!t.built || !t.blades)
+            continue;
+        const float x0 = float(t.tx) * kGrassTileSize, z0 = float(t.tz) * kGrassTileSize;
+        const float lo[3] = {x0 - 1.0f, t.minY - 1.0f, z0 - 1.0f};
+        const float hi[3] = {x0 + kGrassTileSize + 1.0f, t.maxY + tall, z0 + kGrassTileSize + 1.0f};
+        const float nx = std::max({lo[0] - light[0], 0.0f, light[0] - hi[0]});
+        const float ny = std::max({lo[1] - light[1], 0.0f, light[1] - hi[1]});
+        const float nz = std::max({lo[2] - light[2], 0.0f, light[2] - hi[2]});
+        const float near2 = nx * nx + ny * ny + nz * nz;
+        if (near2 > range * range || BoxInClip(lo, hi, faceViewProj, false) == -1)
+            continue;
+        if (!bound) {
+            bound = true;
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_grassShadowPipeline);
+            VkDescriptorBufferInfo bladeInfo{m_grassPool, 0, VK_WHOLE_SIZE};
+            VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            w.dstBinding = 2;
+            w.descriptorCount = 1;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w.pBufferInfo = &bladeInfo;
+            vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_grassShadowLayout, 0, 1, &w);
+            vkCmdBindIndexBuffer(cmd, m_grassIndex, 0, VK_INDEX_TYPE_UINT32);
+            GrassShadowPass p{};
+            std::memcpy(p.lightViewProj, &faceViewProj, sizeof(p.lightViewProj));
+            p.camera[0] = m_frameEye[0];
+            p.camera[1] = m_frameEye[1];
+            p.camera[2] = m_frameEye[2];
+            p.camera[3] = m_grassDistance;
+            p.wind[0] = float(m_windTime);          // (as DrawGrassTiles: the blades sway the same)
+            p.wind[1] = 0.56f;
+            p.wind[2] = 0.35f;
+            p.wind[3] = std::max(m_sway, 0.3f);
+            p.sun[0] = light[0];
+            p.sun[1] = light[1];
+            p.sun[2] = light[2];
+            p.sun[3] = std::max(m_grassGusts, 0.0f);
+            p.cascade[0] = 0.01f;                   // (a cube texel a few units out: about a centimetre)
+            p.cascade[1] = 1e9f;
+            p.cascade[2] = 2e9f;
+            p.cascade[3] = 1.0f;
+            vkCmdPushConstants(cmd, m_grassShadowLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(p), &p);
+        }
+        const uint32_t n = near2 > 6.0f * 6.0f && t.sparse ? t.sparse : t.blades;
+        vkCmdDrawIndexed(cmd, n * kFarIndices, 1, m_grassIndexBlades * kNearIndices, int32_t(t.first * 8), 0);
+        m_grassPointShadowBlades += n;
+    }
+    return bound;
+}
+
+// Whether all the grass within `range` of the light is below it (the cube's upward face then needs none).
+bool Device::GrassBelow(const float light[3], float range) const
+{
+    const float tall = m_grassHeight * 1.7f + 1.0f;
+    for (const auto& [key, tp] : m_grassTiles) {
+        const GrassTile& t = *tp;
+        if (!t.built || !t.blades || t.maxY + tall < light[1])
+            continue;
+        const float x0 = float(t.tx) * kGrassTileSize, z0 = float(t.tz) * kGrassTileSize;
+        const float nx = std::max({x0 - light[0], 0.0f, light[0] - x0 - kGrassTileSize});
+        const float nz = std::max({z0 - light[2], 0.0f, light[2] - z0 - kGrassTileSize});
+        if (nx * nx + nz * nz <= range * range)
+            return false;
+    }
+    return true;
+}
+
 // The fallback: if the frame never saw a blended draw to hook, the blades go in at the end of the scene, on their own
 // rendering.
 void Device::RenderGrassField(VkCommandBuffer cmd)

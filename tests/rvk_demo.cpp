@@ -1141,6 +1141,7 @@ float g_grassBenchYaw = 0.0f;  // --grass-bench-yaw R: the bench's camera turned
 bool g_grassBenchWalker = false;  // --grass-bench-walker: a "character" walking through the grass ahead of the camera
 bool g_grassBenchCross = false;   // --grass-bench-cross: ... crossing the view from left to right over the run (with
                                   // --grass-bench-still: the trail it leaves lies across the screenshot)
+bool g_grassBenchLamp = false;    // --grass-bench-lamp: a lamp just over the grass ahead (point light shadows)
 bool g_grassBenchNight = false;   // --grass-bench-night: a dim lightmap and ambient, a faint bluish moon
 int g_grassBenchLoading = 0;      // --grass-bench-loading N: the ground's texture a plain green stand-in until frame N
 bool g_grassBenchLoadingNull = false;   // --grass-bench-loading-null: ... drawn untextured instead
@@ -1225,6 +1226,11 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
     int counted = 0, worstFrame = 0;
     std::vector<double> times;
     dev.SetGrassField(!g_terrainPbr, g_grassFieldDist, 5.0f, 0.5f, true);   // the game's default density
+    if (g_grassBenchLamp) {    // the lamp's cube shadow map (the grass casts into it): per-pixel lights, overridden
+        dev.SetPixelLighting(true);
+        dev.SetLightOverride(true);
+        dev.SetPointShadows(4);
+    }
     if (g_terrainPbr) {
         std::vector<uint32_t> orm(64 * 64);
         for (int y = 0; y < 64; ++y)
@@ -1284,6 +1290,18 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
         }
         dev.SetLight(0, sun);
         dev.LightEnable(0, true);
+        if (g_grassBenchLamp) {    // a warm lamp just over the grass, 3 units ahead, a little left (its shadows in view)
+            const float lx = ex + 3.0f * std::cos(yaw) + 0.8f * std::sin(yaw), lz = ez + 3.0f * std::sin(yaw) - 0.8f * std::cos(yaw);
+            Light lamp{};
+            lamp.type = LIGHT_POINT;
+            lamp.diffuse = {1.6f, 1.1f, 0.6f, 1};
+            lamp.position = {lx, height(lx, lz) + 0.6f, lz};
+            lamp.range = 8;
+            lamp.attenuation0 = 0.3f;
+            lamp.attenuation1 = 0.2f;
+            dev.SetLight(1, lamp);
+            dev.LightEnable(1, true);
+        }
         dev.SetTextureStageState(0, TSS_COLORARG1, TA_TEXTURE);
         dev.SetTextureStageState(0, TSS_COLORARG2, TA_DIFFUSE);
         dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG1);
@@ -3678,6 +3696,7 @@ int main(int argc, char** argv)
         else if (a == "--grass-bench-walker") g_grassBenchWalker = true;
         else if (a == "--grass-bench-cross") { g_grassBenchCross = true; g_grassBenchWalker = true; }
         else if (a == "--grass-bench-night") g_grassBenchNight = true;
+        else if (a == "--grass-bench-lamp") g_grassBenchLamp = true;
         else if (a == "--grass-bench-still") g_grassBenchStill = true;
         else if (a == "--terrain-pbr") { g_terrainPbr = g_grassBench = g_grassBenchStill = true; hdr = true; }
         else if (a == "--grass-bench-storm") g_grassBenchStorm = true;

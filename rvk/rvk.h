@@ -1732,6 +1732,8 @@ private:
     // The blades into the sun's nearest cascade (RVK_GrassShadow), after its casters: lightViewProj its matrix, texel
     // its texel size, depth its light-space depth range.
     void DrawGrassShadow(VkCommandBuffer cmd, const d3d::Matrix& lightViewProj, float texel, float depth);
+    bool DrawGrassPointShadow(VkCommandBuffer cmd, const d3d::Matrix& faceViewProj, const float light[3], float range);
+    bool GrassBelow(const float light[3], float range) const;
     bool m_grassDrawnThisFrame = false;            // the blades go in before the game's transparent pass (see Draw)
     // The water (water.cpp).
     WaterParams m_waterParams;
@@ -2017,6 +2019,7 @@ private:
     VkPipelineLayout m_grassShadowLayout = VK_NULL_HANDLE;
     VkPipeline m_grassShadowPipeline = VK_NULL_HANDLE;
     uint64_t m_grassShadowBlades = 0;            // blades drawn into the sun's cascade (the log's 600 frames)
+    uint64_t m_grassPointShadowBlades = 0;       // ... and into the point lights' cube faces
     // The blade pool (one storage buffer, suballocated per tile, its virtual block counted in blades) and the shared
     // index pattern (six triangles a blade near, then four far).
     VkBuffer m_grassPool = VK_NULL_HANDLE;
