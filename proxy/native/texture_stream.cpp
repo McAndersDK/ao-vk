@@ -49,6 +49,9 @@ void SetVtable(Creator* self) { self->vtable = reinterpret_cast<uint8_t*>(g_orig
 // The same bitmap converted the same way gives the same levels, so a texture's levels are kept (by a hash of the
 // bitmap's pixels and everything else that goes into the conversion) and copied in when that bitmap comes again.
 // Exact by construction: what is copied is what D3DX made. Uncompressed formats only; 64 MB, least recently used out.
+// Textures up to 128 x 128 (the map's tiles, interface pieces) are kept the first time; bigger ones up to 512 x 512
+// only when converted a second time (the options window's, opened again and again) - a zone's textures, made once,
+// filled it and pushed the tiles out.
 // RANDYVK_TEXTURE_CACHE=0 turns it off (A/B).
 namespace cache {
 
@@ -65,6 +68,7 @@ struct Entry {
 constexpr size_t kBytes = size_t(64) << 20;
 std::mutex g_mutex;
 std::list<Entry> g_lru;                                   // front = most recently used
+std::unordered_map<uint64_t, uint8_t> g_seen;             // bigger textures made once (their keys only; cleared at 64k)
 std::unordered_map<uint64_t, std::list<Entry>::iterator> g_index;
 size_t g_bytes;
 uint32_t g_hits, g_misses;
@@ -261,7 +265,8 @@ void* __fastcall CreateTexture(Creator* self, void*, void* bitmapRaw, const char
     }
     // (A bitmap converted before: its levels from the cache, else D3DX's conversion, then kept - see cache above.)
     auto** dds = surface ? static_cast<IDirectDrawSurface7**>(orig::surface_t_GetSurfacePointer(surface)) : nullptr;
-    IDirectDrawSurface7* top = cache::Enabled() && dds && bitmap->data ? *dds : nullptr;
+    const uint32_t area = surfaceWidth * surfaceHeight;
+    IDirectDrawSurface7* top = cache::Enabled() && dds && bitmap->data && area <= 512 * 512 ? *dds : nullptr;
     const uint64_t key = top ? cache::Key(bitmap, format, levels, surfaceWidth, surfaceHeight, self->filter) : 0;
     bool done = false;
     if (top) {
@@ -276,8 +281,14 @@ void* __fastcall CreateTexture(Creator* self, void*, void* bitmapRaw, const char
     if (!done) {
         orig::render_t_D3DXLoadTextureFromMemory(render, surface, 0xFFFFFFFF, bitmap->data, nullptr,
                                                  (bitmap->bitsPerPixel == 0x20) + 1, 0xFFFFFFFF, nullptr, self->filter);
+        bool keep = top && area <= 128 * 128;
+        if (top && !keep) {
+            std::lock_guard<std::mutex> lock(cache::g_mutex);
+            if (cache::g_seen.size() >= 65536) cache::g_seen.clear();
+            keep = !cache::g_seen.emplace(key, 1).second;
+        }
         cache::Entry entry{key, {}, 0};
-        if (top && cache::Read(top, &entry) && entry.bytes <= cache::kBytes / 8) {
+        if (keep && cache::Read(top, &entry)) {
             std::lock_guard<std::mutex> lock(cache::g_mutex);
             if (!cache::g_index.count(key)) {
                 cache::g_bytes += entry.bytes;

@@ -254,7 +254,10 @@ constexpr uint32_t kPngVtable = 0x8AA10, kJpegVtable = 0x8A4D0;
 int32_t StreamSize(Stream* s) { return reinterpret_cast<int32_t(__fastcall*)(void*, void*)>(s->vtable[19])(s, nullptr); }
 
 // Decoded images, remembered by their file's bytes: the planet map decodes the same ~110 PNG tiles each time it opens
-// (~27 ms of stb). Exact by construction (what is copied is what stb made); 48 MB, least recently used out.
+// (~27 ms of stb). Exact by construction (what is copied is what stb made); 48 MB, least recently used out. Images up
+// to 128 x 128 (the map's tiles, interface pieces) are kept the first time; bigger ones up to 512 x 512 only when
+// decoded a second time (the options window's, opened again and again) - a zone's textures, decoded once, filled it
+// and pushed the tiles out.
 // RANDYVK_TEXTURE_CACHE=0 turns it off with the texture cache (texture_stream.cpp).
 namespace decoded {
 
@@ -265,7 +268,9 @@ struct Entry {
     std::vector<uint8_t> pixels;
 };
 constexpr size_t kBytes = size_t(48) << 20;
+constexpr uint64_t kSmallPixels = 128 * 128, kMaxPixels = 512 * 512;
 std::mutex g_mutex;
+std::unordered_map<uint64_t, uint8_t> g_seen;            // bigger images decoded once (their keys only; cleared at 64k)
 std::list<Entry> g_lru;
 std::unordered_map<uint64_t, std::list<Entry>::iterator> g_index;
 size_t g_bytes;
@@ -306,7 +311,7 @@ void DecodeImage(Bitmap* self, Stream* stream, bool headerOnly)
     }
     uint8_t* bytes = static_cast<uint8_t*>(vc10::AllocateArray(size_t(size)));
     Read(stream, bytes, size);
-    const bool cached = !headerOnly && decoded::Enabled();
+    bool cached = !headerOnly && decoded::Enabled();
     const uint64_t key = cached ? decoded::Key(bytes, size_t(size)) : 0;
     if (cached) {
         std::lock_guard<std::mutex> lock(decoded::g_mutex);
@@ -331,6 +336,8 @@ void DecodeImage(Bitmap* self, Stream* stream, bool headerOnly)
     }
     self->width = uint32_t(width);
     self->height = uint32_t(height);
+    const uint64_t area = uint64_t(width) * uint64_t(height);
+    cached = cached && area <= decoded::kMaxPixels;
     const bool alpha = channels == 2 || channels == 4;
     const int wanted = alpha ? 4 : 3;
     self->bitsPerPixel = alpha ? 0x20 : 0x18;
@@ -355,9 +362,14 @@ void DecodeImage(Bitmap* self, Stream* stream, bool headerOnly)
     }
     stbi_image_free(pixels);
     const size_t outBytes = count * size_t(wanted);
-    if (cached && outBytes <= decoded::kBytes / 8) {
+    if (cached) {
         std::lock_guard<std::mutex> lock(decoded::g_mutex);
-        if (!decoded::g_index.count(key)) {
+        bool keep = area <= decoded::kSmallPixels;
+        if (!keep) {
+            if (decoded::g_seen.size() >= 65536) decoded::g_seen.clear();
+            keep = !decoded::g_seen.emplace(key, 1).second;
+        }
+        if (keep && !decoded::g_index.count(key)) {
             decoded::g_lru.push_front({key, self->width, self->height, self->bitsPerPixel,
                                        std::vector<uint8_t>(out, out + outBytes)});
             decoded::g_index[key] = decoded::g_lru.begin();

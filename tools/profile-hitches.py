@@ -24,7 +24,7 @@ def map_functions(path):
     """[(rva, name)] from an lld-link /MAP file (Rva+Base column, base 0x10000000)."""
     funcs = []
     for line in open(path, errors="replace"):
-        m = re.match(r"\s*0001:[0-9a-f]+\s+(\S+)\s+([0-9a-f]{8})", line)
+        m = re.match(r"\s*0001:[0-9a-f]+\s+(\S+)\s+([0-9a-f]{8,16})", line)
         if m:
             funcs.append((int(m.group(2), 16) - 0x10000000, demo.short(m.group(1))))
     return sorted(funcs)
@@ -92,6 +92,7 @@ def main():
     ap.add_argument("--top", type=int, default=30)
     ap.add_argument("--since", default="")
     ap.add_argument("--min-ms", type=int, default=50)
+    ap.add_argument("--offset", type=float, default=0.0, help="added to sample times to make them wall-clock")
     args = ap.parse_args()
 
     regs = demo.regions(args.maps)
@@ -125,7 +126,7 @@ def main():
         if len(parts) < 3:
             continue
         try:
-            tid, t, ip = int(parts[0]), float(parts[1]), int(parts[2], 16)
+            tid, t, ip = int(parts[0]), float(parts[1]) + args.offset, int(parts[2], 16)
         except ValueError:
             continue
         i = bisect.bisect_right(wstarts, t) - 1
