@@ -1405,11 +1405,14 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
                 sum / std::max(counted, 1), p99, worst, worstFrame);
 }
 
-// City benchmark (--city-bench, docs/render-batching-plan.md P0): shaped like West Bank's city in the game (2026-10-14:
-// ~4,000 draws a frame, the render thread the limit). Through ThreadedDevice with retained meshes (RegisterMesh /
-// DrawMesh, as the proxy's mesh handles): 600 buildings of two unique pieces each (walls, roof), 2,400 props of 40
-// kinds, 250 cut-out fences of 8 kinds, 120 blended panes of 4 kinds after the opaque ones - ~70% of the draws repeat a
-// mesh - on a two-pass ground (as AnarchyGround_t), a sun with shadows and 7 point lights, the camera circling slowly.
+// City benchmark (--city-bench, docs/render-batching-plan.md P0): shaped like a frame of West Bank's city in the game
+// (frame dump and log of 2026-10-14: ~3,400-3,600 draws, the render thread the limit). Through ThreadedDevice, the
+// statics by mesh handle (RegisterMesh / DrawMesh, as the proxy's): ~2,000 objects of 1-2 pieces drawn from 160 small
+// mesh kinds (FVF 0x112, ~37 vertices; a few kinds make most draws, as the game's), 85% of them blended
+// SRCALPHA/INVSRCALPHA with depth writes (the opaque fast path, as the game draws its statics), 170 fence pieces with
+// holes (the foliage path: two-pass edges), 40 additive panes at the end; 160 ground chunks (216 indices into one of 4
+// static vertex buffers) in two passes (AnarchyGround_t: base, then the multiplying light pass) with the ground grass; a sun with shadows and 7
+// point lights; the camera circling slowly.
 // The clock is fixed (1/60 s a frame), so a run of N frames ends on the same picture (--shot; --dump: its draws).
 // After --city-warm frames a profile window opens; at the end the render thread's sections are logged ("city bench:"
 // lines, stderr) and the calling thread's frame printed.
@@ -1417,15 +1420,18 @@ int g_cityWarm = 60;              // --city-warm N: frames before the measured w
 bool g_cityNoGrass = false;       // --city-no-grass: without the ground grass (on by default, as in the game)
 
 namespace city {
-// A box with each side face split into s x s quads (the roof: one quad), its base on y = 0.
-void AddBox(std::vector<VtxMesh>& v, std::vector<uint16_t>& idx, float w, float h, float d, int s, bool top, uint32_t col)
+struct Vtx { float x, y, z, nx, ny, nz, u, v; };   // FVF 0x112, the game's statics
+constexpr uint32_t kFvf = FVF_XYZ | FVF_NORMAL | (1 << 8);
+
+// A box without its bottom (5 quads: 20 vertices, 30 indices - the game's most drawn static), each side face split
+// into s x s quads; its base on y = 0.
+void AddBox(std::vector<Vtx>& v, std::vector<uint16_t>& idx, float w, float h, float d, int s)
 {
     struct Face { Vector o, u, w, n; };
     const Face faces[5] = {{{-w, 0, -d}, {2 * w, 0, 0}, {0, h, 0}, {0, 0, -1}}, {{w, 0, d}, {-2 * w, 0, 0}, {0, h, 0}, {0, 0, 1}},
                            {{w, 0, -d}, {0, 0, 2 * d}, {0, h, 0}, {1, 0, 0}}, {{-w, 0, d}, {0, 0, -2 * d}, {0, h, 0}, {-1, 0, 0}},
                            {{-w, h, -d}, {2 * w, 0, 0}, {0, 0, 2 * d}, {0, 1, 0}}};
     for (int f = 0; f < 5; ++f) {
-        if (f == 4 && !top) break;
         const Face& F = faces[f];
         const int n = f == 4 ? 1 : s;
         const uint16_t base = uint16_t(v.size());
@@ -1433,7 +1439,7 @@ void AddBox(std::vector<VtxMesh>& v, std::vector<uint16_t>& idx, float w, float 
             for (int i = 0; i <= n; ++i) {
                 const float a = float(i) / n, b = float(j) / n;
                 v.push_back({F.o.x + a * F.u.x + b * F.w.x, F.o.y + a * F.u.y + b * F.w.y, F.o.z + a * F.u.z + b * F.w.z,
-                             F.n.x, F.n.y, F.n.z, col, a * 2, b * 2});
+                             F.n.x, F.n.y, F.n.z, a * 2, b * 2});
             }
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i) {
@@ -1446,13 +1452,13 @@ void AddBox(std::vector<VtxMesh>& v, std::vector<uint16_t>& idx, float w, float 
 }
 
 // A cylinder (k sides, capped), its base on y = 0.
-void AddCylinder(std::vector<VtxMesh>& v, std::vector<uint16_t>& idx, float r, float h, int k)
+void AddCylinder(std::vector<Vtx>& v, std::vector<uint16_t>& idx, float r, float h, int k)
 {
     const uint16_t base = uint16_t(v.size());
     for (int i = 0; i <= k; ++i) {
         const float a = 2 * kPi * i / k, c = std::cos(a), s = std::sin(a);
-        v.push_back({r * c, 0, r * s, c, 0, s, 0xFFFFFFFF, float(i) / k, 0});
-        v.push_back({r * c, h, r * s, c, 0, s, 0xFFFFFFFF, float(i) / k, 1});
+        v.push_back({r * c, 0, r * s, c, 0, s, float(i) / k, 0});
+        v.push_back({r * c, h, r * s, c, 0, s, float(i) / k, 1});
     }
     for (int i = 0; i < k; ++i) {
         const uint16_t q = uint16_t(base + 2 * i);
@@ -1460,10 +1466,10 @@ void AddCylinder(std::vector<VtxMesh>& v, std::vector<uint16_t>& idx, float r, f
         idx.insert(idx.end(), t, t + 6);
     }
     const uint16_t centre = uint16_t(v.size());
-    v.push_back({0, h, 0, 0, 1, 0, 0xFFFFFFFF, 0.5f, 0.5f});
+    v.push_back({0, h, 0, 0, 1, 0, 0.5f, 0.5f});
     for (int i = 0; i <= k; ++i) {
         const float a = 2 * kPi * i / k;
-        v.push_back({r * std::cos(a), h, r * std::sin(a), 0, 1, 0, 0xFFFFFFFF, 0.5f + 0.5f * std::cos(a), 0.5f + 0.5f * std::sin(a)});
+        v.push_back({r * std::cos(a), h, r * std::sin(a), 0, 1, 0, 0.5f + 0.5f * std::cos(a), 0.5f + 0.5f * std::sin(a)});
     }
     for (int i = 0; i < k; ++i) {
         const uint16_t t[3] = {centre, uint16_t(centre + 2 + i), uint16_t(centre + 1 + i)};
@@ -1471,19 +1477,26 @@ void AddCylinder(std::vector<VtxMesh>& v, std::vector<uint16_t>& idx, float r, f
     }
 }
 
-// A flat panel w wide, h high, in the x-y plane (fences, panes): s columns.
-void AddPanel(std::vector<VtxMesh>& v, std::vector<uint16_t>& idx, float w, float h, int s)
+// Upright panels w wide, h high in the x-y plane: s columns (a fence); with `cross`, a second one turned 90 degrees.
+void AddPanel(std::vector<Vtx>& v, std::vector<uint16_t>& idx, float w, float h, int s, bool cross = false)
 {
-    const uint16_t base = uint16_t(v.size());
-    for (int i = 0; i <= s; ++i) {
-        const float x = -w + 2 * w * i / s;
-        v.push_back({x, 0, 0, 0, 0, -1, 0xFFFFFFFF, float(i), 1});
-        v.push_back({x, h, 0, 0, 0, -1, 0xFFFFFFFF, float(i), 0});
-    }
-    for (int i = 0; i < s; ++i) {
-        const uint16_t q = uint16_t(base + 2 * i);
-        const uint16_t t[6] = {q, uint16_t(q + 1), uint16_t(q + 2), uint16_t(q + 2), uint16_t(q + 1), uint16_t(q + 3)};
-        idx.insert(idx.end(), t, t + 6);
+    for (int p = 0; p < (cross ? 2 : 1); ++p) {
+        const uint16_t base = uint16_t(v.size());
+        for (int i = 0; i <= s; ++i) {
+            const float t = -w + 2 * w * i / s;
+            if (p == 0) {
+                v.push_back({t, 0, 0, 0, 0, -1, float(i), 1});
+                v.push_back({t, h, 0, 0, 0, -1, float(i), 0});
+            } else {
+                v.push_back({0, 0, t, -1, 0, 0, float(i), 1});
+                v.push_back({0, h, t, -1, 0, 0, float(i), 0});
+            }
+        }
+        for (int i = 0; i < s; ++i) {
+            const uint16_t q = uint16_t(base + 2 * i);
+            const uint16_t t[6] = {q, uint16_t(q + 1), uint16_t(q + 2), uint16_t(q + 2), uint16_t(q + 1), uint16_t(q + 3)};
+            idx.insert(idx.end(), t, t + 6);
+        }
     }
 }
 
@@ -1494,11 +1507,12 @@ uint32_t Hash(uint32_t x)
 }
 float Rand(uint32_t seed, uint32_t salt) { return float(Hash(seed * 0x9E3779B9u + salt) & 0xFFFFFF) / float(0x1000000); }
 
+struct Piece { uint32_t mesh; Texture* tex; bool emissive; };
 struct Object {
     float x, z, yaw;
-    uint32_t mesh[2];                            // pieces (0: none)
-    Texture* tex[2];
-    enum Kind { Opaque, Cutout, Blended } kind;
+    Piece piece[2];
+    uint32_t pieces;
+    enum Kind { Blended, Solid, Holes, Additive } kind;   // Blended: SRCALPHA/INVSRCALPHA writing depth (most)
     uint32_t visual;
 };
 }  // namespace city
@@ -1508,52 +1522,69 @@ void RunCityBench(D& dev, int frames, const std::string& shot, const std::string
 {
     using namespace city;
     Device::SetFixedClock(1.0 / 60.0);
-    // Textures: 24 opaque (walls, roofs, props), 4 cut-out fences (transparent cells), 2 glass (half alpha).
-    std::vector<Texture*> opaque, fences, glass;
-    for (uint32_t i = 0; i < 24; ++i) {
-        const uint32_t a = 0xFF000000u | (0x30 + 7 * i) << 16 | (0x28 + 5 * (i % 7)) << 8 | (0x20 + 9 * (i % 5));
-        auto px = Checker(64, 2 + i % 6, a, 0xFF000000u | ((a & 0xFEFEFE) >> 1));
+    // Textures: 60 opaque, 4 with holes (fences), 2 for the additive panes.
+    std::vector<Texture*> opaque, holes, glow;
+    for (uint32_t i = 0; i < 60; ++i) {
+        const uint32_t a = 0xFF000000u | (0x40 + 3 * i) << 16 | (0x38 + 11 * (i % 9)) << 8 | (0x30 + 13 * (i % 7));
+        auto px = Checker(64, 2 + i % 7, a, 0xFF000000u | ((a & 0xFEFEFE) >> 1));
         opaque.push_back(dev.CreateTexture(64, 64, px.data()));
     }
     for (uint32_t i = 0; i < 4; ++i) {
         auto px = Checker(64, 4 + 2 * i, 0xFF706048u + 0x080808u * i, 0x00000000);
-        fences.push_back(dev.CreateTexture(64, 64, px.data()));
+        holes.push_back(dev.CreateTexture(64, 64, px.data()));
     }
     for (uint32_t i = 0; i < 2; ++i) {
-        std::vector<uint32_t> px(64 * 64, i ? 0x80A0C0E0u : 0x6080E0A0u);
-        glass.push_back(dev.CreateTexture(64, 64, px.data()));
+        std::vector<uint32_t> px(64 * 64, i ? 0x80F0C060u : 0x8060C0F0u);
+        glow.push_back(dev.CreateTexture(64, 64, px.data()));
     }
     // Meshes, registered once (ids from 1, as the proxy hands them out).
     uint32_t nextId = 1;
     size_t vertexBytes = 0;
-    auto add = [&](const std::vector<VtxMesh>& v, const std::vector<uint16_t>& idx) {
+    auto add = [&](const std::vector<Vtx>& v, const std::vector<uint16_t>& idx) {
         auto vs = std::make_shared<std::vector<uint8_t>>(reinterpret_cast<const uint8_t*>(v.data()),
                                                          reinterpret_cast<const uint8_t*>(v.data() + v.size()));
         auto is = std::make_shared<std::vector<uint8_t>>(reinterpret_cast<const uint8_t*>(idx.data()),
                                                          reinterpret_cast<const uint8_t*>(idx.data() + idx.size()));
         vertexBytes += vs->size();
         const uint32_t id = nextId++;
-        dev.RegisterMesh(id, TriangleList, kFvfMesh, ThreadedDevice::SharedVertices(vs), 0, uint32_t(v.size()),
+        dev.RegisterMesh(id, TriangleList, kFvf, ThreadedDevice::SharedVertices(vs), 0, uint32_t(v.size()),
                          ThreadedDevice::SharedVertices(is), uint32_t(idx.size()));
         return id;
     };
-    std::vector<uint32_t> propKinds, fenceKinds, paneKinds;
-    for (uint32_t k = 0; k < 40; ++k) {          // crates, pillars, posts, barrels
-        std::vector<VtxMesh> v;
+    // 160 static kinds, the first ones drawn most (weight 1 / (k + 1)^1.1: kind 0 ~ a fifth of the pieces).
+    constexpr uint32_t kKinds = 160;
+    std::vector<uint32_t> kinds;
+    std::vector<float> cumulative;
+    float total = 0.0f;
+    for (uint32_t k = 0; k < kKinds; ++k) {
+        std::vector<Vtx> v;
         std::vector<uint16_t> idx;
-        const float s = 0.4f + 0.8f * Rand(k, 1);
-        if (k % 3 == 0) AddCylinder(v, idx, s * 0.5f, s * (1.5f + 3.0f * Rand(k, 2)), 8 + 4 * (k % 3));
-        else AddBox(v, idx, s, s * (1.0f + 2.0f * Rand(k, 2)), s * (0.6f + 0.6f * Rand(k, 3)), 2 + k % 3, true, 0xFFFFFFFF);
-        propKinds.push_back(add(v, idx));
+        const float w = 0.4f + 2.6f * Rand(k, 1), h = 0.5f + 5.0f * Rand(k, 2), d = 0.4f + 2.6f * Rand(k, 3);
+        switch (k < 4 ? 0 : Hash(k) % 10) {
+        case 4: AddPanel(v, idx, w, h, 1); break;                    // 4 / 6
+        case 5: AddPanel(v, idx, w, h, 1, true); break;              // 8 / 12
+        case 6: AddBox(v, idx, w, h, d, 2); break;                   // 40 / 102
+        case 7: AddCylinder(v, idx, 0.5f * w, h, 8); break;          // 28 / 72
+        case 8: AddBox(v, idx, w, h, d, 3); break;                   // 68 / 222
+        default: AddBox(v, idx, w, h, d, 1); break;                  // 20 / 30
+        }
+        kinds.push_back(add(v, idx));
+        total += 1.0f / std::pow(float(k + 1), 1.1f);
+        cumulative.push_back(total);
     }
+    auto pickKind = [&](uint32_t seed) {
+        const float r = Rand(seed, 77) * total;
+        return uint32_t(std::lower_bound(cumulative.begin(), cumulative.end(), r) - cumulative.begin());
+    };
+    std::vector<uint32_t> fenceKinds, paneKinds;
     for (uint32_t k = 0; k < 8; ++k) {
-        std::vector<VtxMesh> v;
+        std::vector<Vtx> v;
         std::vector<uint16_t> idx;
         AddPanel(v, idx, 2.0f + k * 0.25f, 1.2f + 0.1f * k, 4 + k);
         fenceKinds.push_back(add(v, idx));
     }
     for (uint32_t k = 0; k < 4; ++k) {
-        std::vector<VtxMesh> v;
+        std::vector<Vtx> v;
         std::vector<uint16_t> idx;
         AddPanel(v, idx, 1.0f + 0.3f * k, 2.0f + 0.4f * k, 1);
         paneKinds.push_back(add(v, idx));
@@ -1562,48 +1593,56 @@ void RunCityBench(D& dev, int frames, const std::string& shot, const std::string
     constexpr int kLotsX = 25, kLotsZ = 24;
     constexpr float kLot = 12.0f;
     uint32_t visual = 0x10000;
-    for (int lz = 0; lz < kLotsZ; ++lz)
-        for (int lx = 0; lx < kLotsX; ++lx) {
-            const uint32_t seed = uint32_t(lz * kLotsX + lx);
-            const float cx = (float(lx) - kLotsX / 2.0f + 0.5f) * kLot, cz = (float(lz) - kLotsZ / 2.0f + 0.5f) * kLot;
-            {                                    // the building: walls and roof, unique meshes
-                const float w = 2.5f + 1.8f * Rand(seed, 10), d = 2.5f + 1.8f * Rand(seed, 11);
-                const float h = 3.0f + 14.0f * Rand(seed, 12) * Rand(seed, 13);
-                std::vector<VtxMesh> v;
-                std::vector<uint16_t> idx;
-                AddBox(v, idx, w, h, d, 3 + int(h / 5), false, 0xFFFFFFFF);
-                const uint32_t walls = add(v, idx);
-                v.clear();
-                idx.clear();
-                AddBox(v, idx, w + 0.3f, 0.4f, d + 0.3f, 1, true, 0xFFE0E0E0);
-                for (VtxMesh& p : v) p.y += h;
-                const uint32_t roof = add(v, idx);
-                objects.push_back({cx, cz, Rand(seed, 14) * 0.3f, {walls, roof},
-                                   {opaque[Hash(seed) % 16], opaque[16 + Hash(seed + 7) % 8]}, Object::Opaque, visual++});
-            }
-            for (int p = 0; p < 4; ++p) {        // props around it
-                const uint32_t ps = seed * 8 + uint32_t(p);
-                const float a = Rand(ps, 20) * 2 * kPi, r = 4.6f + 0.8f * Rand(ps, 21);
-                objects.push_back({cx + r * std::cos(a), cz + r * std::sin(a), Rand(ps, 22) * 2 * kPi,
-                                   {propKinds[Hash(ps) % propKinds.size()], 0}, {opaque[Hash(ps + 3) % 24], nullptr},
-                                   Object::Opaque, visual++});
-            }
-            if (seed % 24 < 5) {                 // fences on 5 lots of 24 (250: 2 x 125)
-                objects.push_back({cx, cz - kLot * 0.45f, 0.0f, {fenceKinds[seed % 8], 0}, {fences[seed % 4], nullptr},
-                                   Object::Cutout, visual++});
-                objects.push_back({cx - kLot * 0.45f, cz, kPi * 0.5f, {fenceKinds[(seed + 3) % 8], 0},
-                                   {fences[(seed + 1) % 4], nullptr}, Object::Cutout, visual++});
-            }
+    auto lotCentre = [&](uint32_t lot, float& cx, float& cz) {
+        cx = (float(lot % kLotsX) - kLotsX / 2.0f + 0.5f) * kLot;
+        cz = (float(lot / kLotsX) - kLotsZ / 2.0f + 0.5f) * kLot;
+    };
+    for (uint32_t i = 0; i < 2000; ++i) {        // statics: 1 or 2 pieces (~1.47 a static, as the game's 3,029 / 2,067)
+        float cx, cz;
+        lotCentre(i % (kLotsX * kLotsZ), cx, cz);
+        Object o{};
+        o.x = cx + (Rand(i, 10) - 0.5f) * kLot * 0.8f;
+        o.z = cz + (Rand(i, 11) - 0.5f) * kLot * 0.8f;
+        o.yaw = Rand(i, 12) * 2 * kPi;
+        o.pieces = Rand(i, 13) < 0.47f ? 2 : 1;
+        for (uint32_t p = 0; p < o.pieces; ++p) {
+            const uint32_t k = pickKind(i * 2 + p);
+            o.piece[p] = {kinds[k], opaque[(k * 7 + p) % opaque.size()], k % 53 == 7};   // (texture, material: the kind's)
         }
-    // Blended panes on 120 lots (drawn after the opaque ones).
-    std::vector<Object> panes;
-    for (uint32_t i = 0; i < 120; ++i) {
-        const uint32_t lot = Hash(i + 999) % (kLotsX * kLotsZ);
-        const float cx = (float(lot % kLotsX) - kLotsX / 2.0f + 0.5f) * kLot, cz = (float(lot / kLotsX) - kLotsZ / 2.0f + 0.5f) * kLot;
-        panes.push_back({cx + 4.5f, cz + 4.5f, Rand(i, 30) * kPi, {paneKinds[i % 4], 0}, {glass[i % 2], nullptr},
-                         Object::Blended, visual++});
+        o.kind = Rand(i, 14) < 0.85f ? Object::Blended : Object::Solid;
+        o.visual = visual++;
+        objects.push_back(o);
     }
-    // The ground: 6 x 6 chunks of non-indexed triangles, base pass + multiplying light pass (AnarchyGround_t).
+    for (uint32_t i = 0; i < 85; ++i) {          // fences on 85 lots: 170 pieces with holes (the game's ~170 foliage)
+        float cx, cz;
+        lotCentre(Hash(i + 500) % (kLotsX * kLotsZ), cx, cz);
+        for (int s = 0; s < 2; ++s) {
+            Object o{};
+            o.x = s ? cx - kLot * 0.45f : cx;
+            o.z = s ? cz : cz - kLot * 0.45f;
+            o.yaw = s ? kPi * 0.5f : 0.0f;
+            o.pieces = 1;
+            o.piece[0] = {fenceKinds[(i + 3 * s) % 8], holes[(i + s) % 4], false};
+            o.kind = Object::Holes;
+            o.visual = visual++;
+            objects.push_back(o);
+        }
+    }
+    std::vector<Object> panes;                   // additive, no depth writes, after the rest (the game's effects)
+    for (uint32_t i = 0; i < 40; ++i) {
+        float cx, cz;
+        lotCentre(Hash(i + 999) % (kLotsX * kLotsZ), cx, cz);
+        Object o{};
+        o.x = cx + 4.5f;
+        o.z = cz + 4.5f;
+        o.yaw = Rand(i, 30) * kPi;
+        o.pieces = 1;
+        o.piece[0] = {paneKinds[i % 4], glow[i % 2], false};
+        o.kind = Object::Additive;
+        o.visual = visual++;
+        panes.push_back(o);
+    }
+    // The ground: 16 x 10 chunks, base pass + multiplying light pass.
     std::vector<uint32_t> groundPixels(64 * 64), lightmapPixels(64 * 64);
     for (int y = 0; y < 64; ++y)
         for (int x = 0; x < 64; ++x) {
@@ -1615,29 +1654,46 @@ void RunCityBench(D& dev, int frames, const std::string& shot, const std::string
     Texture* lightmap = dev.CreateTexture(64, 64, lightmapPixels.data());
     struct VtxTerrain { float x, y, z, nx, ny, nz, u0, v0, u1, v1; };
     const uint32_t kFvfTerrain = FVF_XYZ | FVF_NORMAL | (2 << 8);
-    constexpr int kChunks = 6, kChunkCells = 16;
-    constexpr float kChunk = 56.0f, kCell = kChunk / kChunkCells, kOrigin = -kChunk * kChunks / 2;
-    std::vector<std::vector<VtxTerrain>> chunks;
-    for (int cz = 0; cz < kChunks; ++cz)
-        for (int cx = 0; cx < kChunks; ++cx) {
+    // As the game's: big static vertex buffers (a quadrant each here), every chunk drawn with its own few indices.
+    constexpr int kChunksX = 16, kChunksZ = 10, kChunkCells = 6, kQuads = 2;
+    constexpr float kChunkX = 20.0f, kChunkZ = 30.0f;
+    constexpr int kQuadChunksX = kChunksX / kQuads, kQuadChunksZ = kChunksZ / kQuads;
+    constexpr int kGridX = kQuadChunksX * kChunkCells + 1, kGridZ = kQuadChunksZ * kChunkCells + 1;
+    struct Chunk { int quadrant; std::vector<uint16_t> indices; };
+    std::vector<ThreadedDevice::SharedVertices> groundBuffers;
+    std::vector<Chunk> chunks;
+    for (int qz = 0; qz < kQuads; ++qz)
+        for (int qx = 0; qx < kQuads; ++qx) {
             std::vector<VtxTerrain> v;
-            for (int j = 0; j < kChunkCells; ++j)
-                for (int i = 0; i < kChunkCells; ++i) {
-                    const float xs[2] = {kOrigin + cx * kChunk + i * kCell, kOrigin + cx * kChunk + (i + 1) * kCell};
-                    const float zs[2] = {kOrigin + cz * kChunk + j * kCell, kOrigin + cz * kChunk + (j + 1) * kCell};
-                    auto vert = [&](int a, int b) {
-                        return VtxTerrain{xs[a], 0.0f, zs[b], 0, 1, 0, xs[a] / 4, zs[b] / 4, float(i + a) / kChunkCells,
-                                          float(j + b) / kChunkCells};
-                    };
-                    const VtxTerrain q[6] = {vert(0, 0), vert(0, 1), vert(1, 0), vert(1, 0), vert(0, 1), vert(1, 1)};
-                    v.insert(v.end(), q, q + 6);
+            const float x0 = -kChunkX * kChunksX / 2 + qx * kQuadChunksX * kChunkX;
+            const float z0 = -kChunkZ * kChunksZ / 2 + qz * kQuadChunksZ * kChunkZ;
+            for (int j = 0; j < kGridZ; ++j)
+                for (int i = 0; i < kGridX; ++i) {
+                    const float x = x0 + kChunkX * i / kChunkCells, z = z0 + kChunkZ * j / kChunkCells;
+                    v.push_back({x, 0.0f, z, 0, 1, 0, x / 4, z / 4, float(i % kChunkCells) / kChunkCells,
+                                 float(j % kChunkCells) / kChunkCells});
                 }
-            chunks.push_back(std::move(v));
+            groundBuffers.push_back(std::make_shared<std::vector<uint8_t>>(
+                reinterpret_cast<const uint8_t*>(v.data()), reinterpret_cast<const uint8_t*>(v.data() + v.size())));
+            for (int cz = 0; cz < kQuadChunksZ; ++cz)
+                for (int cx = 0; cx < kQuadChunksX; ++cx) {
+                    Chunk c{qz * kQuads + qx, {}};
+                    for (int j = cz * kChunkCells; j < (cz + 1) * kChunkCells; ++j)
+                        for (int i = cx * kChunkCells; i < (cx + 1) * kChunkCells; ++i) {
+                            const uint16_t q = uint16_t(j * kGridX + i);
+                            const uint16_t t[6] = {q, uint16_t(q + kGridX), uint16_t(q + 1), uint16_t(q + 1),
+                                                   uint16_t(q + kGridX), uint16_t(q + kGridX + 1)};
+                            c.indices.insert(c.indices.end(), t, t + 6);
+                        }
+                    chunks.push_back(std::move(c));
+                }
         }
+    const uint32_t groundVertices = uint32_t(kGridX * kGridZ);
     if (g_grassFieldOn && !g_cityNoGrass)
         dev.SetGrassField(true, g_grassFieldDist, 5.0f, 0.5f, true);
-    std::printf("city bench: %u meshes (%.1f MB of vertices), %zu objects + %zu panes, %d frames (window from %d)\n",
-                nextId - 1, double(vertexBytes) / 1048576.0, objects.size(), panes.size(), frames, g_cityWarm);
+    std::printf("city bench: %u meshes (%.2f MB of vertices), %zu objects + %zu panes, %zu ground chunks, %d frames "
+                "(window from %d)\n", nextId - 1, double(vertexBytes) / 1048576.0, objects.size(), panes.size(),
+                chunks.size(), frames, g_cityWarm);
 
     LARGE_INTEGER freq, t0, t1;
     QueryPerformanceFrequency(&freq);
@@ -1677,7 +1733,7 @@ void RunCityBench(D& dev, int frames, const std::string& shot, const std::string
             l.type = LIGHT_POINT;
             l.diffuse = {1.0f, 0.85f, 0.6f, 1};
             l.position = {(Rand(i, 40) - 0.5f) * 120.0f, 3.0f, (Rand(i, 41) - 0.5f) * 120.0f};
-            l.range = 12.0f;
+            l.range = 20.0f;
             l.attenuation0 = 1.0f;
             l.attenuation1 = 0.1f;
             dev.SetLight(i, l);
@@ -1687,7 +1743,6 @@ void RunCityBench(D& dev, int frames, const std::string& shot, const std::string
         dev.SetTextureStageState(0, TSS_COLORARG2, TA_DIFFUSE);
         dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG1);
         dev.SetTextureStageState(0, TSS_ALPHAARG1, TA_TEXTURE);
-        Material mat{{1, 1, 1, 1}, {1, 1, 1, 1}, {0, 0, 0, 0}, {0, 0, 0, 0}, 0.0f};
         for (const auto& c : chunks) {           // the ground
             dev.SetRenderState(RS_LIGHTING, 0);
             dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
@@ -1695,7 +1750,8 @@ void RunCityBench(D& dev, int frames, const std::string& shot, const std::string
             dev.SetTexture(0, groundTex);
             dev.SetTextureStageState(0, TSS_TEXCOORDINDEX, 0);
             dev.SetTextureStageState(0, TSS_COLOROP, TOP_SELECTARG1);
-            dev.DrawPrimitive(TriangleList, kFvfTerrain, c.data(), uint32_t(c.size()));
+            dev.DrawIndexedPrimitiveShared(TriangleList, kFvfTerrain, groundBuffers[c.quadrant], 0, groundVertices,
+                                           c.indices.data(), uint32_t(c.indices.size()));
             dev.SetRenderState(RS_LIGHTING, 1);
             dev.SetRenderState(RS_AMBIENT, 0xFF515151);
             dev.SetRenderState(RS_ALPHABLENDENABLE, 1);
@@ -1705,38 +1761,49 @@ void RunCityBench(D& dev, int frames, const std::string& shot, const std::string
             dev.SetTexture(0, lightmap);
             dev.SetTextureStageState(0, TSS_TEXCOORDINDEX, 1);
             dev.SetTextureStageState(0, TSS_COLOROP, TOP_ADD);
-            dev.DrawPrimitive(TriangleList, kFvfTerrain, c.data(), uint32_t(c.size()));
+            dev.DrawIndexedPrimitiveShared(TriangleList, kFvfTerrain, groundBuffers[c.quadrant], 0, groundVertices,
+                                           c.indices.data(), uint32_t(c.indices.size()));
             draws += 2;
         }
         dev.SetTextureStageState(0, TSS_TEXCOORDINDEX, 0);
         dev.SetRenderState(RS_ZFUNC, CMP_LESSEQUAL);
-        dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
         dev.SetRenderState(RS_LIGHTING, 1);
-        dev.SetRenderState(RS_AMBIENT, 0xFF6F6F6F);
+        dev.SetRenderState(RS_AMBIENT, 0xFF616161);
         dev.SetRenderState(RS_DIFFUSEMATERIALSOURCE, MCS_MATERIAL);
         dev.SetTextureStageState(0, TSS_COLOROP, TOP_MODULATE);
+        const Material plain{{1, 1, 1, 1}, {1, 1, 1, 1}, {0, 0, 0, 0}, {0, 0, 0, 0}, 0.0f};
+        const Material glowing{{1, 1, 1, 1}, {1, 1, 1, 1}, {0, 0, 0, 0}, {1, 1, 1, 1}, 0.0f};
         auto drawObject = [&](const Object& o) {
             dev.SetDrawVisual(uint32_t(VisualKind::Static), "RTriMesh_t", 0, o.visual);
             dev.SetTransform(World, Mul(RotateY(o.yaw), Translate(o.x, 0.0f, o.z)));
-            for (int p = 0; p < 2 && o.mesh[p]; ++p) {
+            for (uint32_t p = 0; p < o.pieces; ++p) {
                 // As the game's pieces: their state set again for each (the hand-off drops repeats).
-                dev.SetMaterial(mat);
-                dev.SetTexture(0, o.tex[p]);
-                dev.SetRenderState(RS_ALPHATESTENABLE, o.kind == Object::Cutout);
-                if (o.kind == Object::Cutout) {
-                    dev.SetRenderState(RS_ALPHAREF, 0x80);
-                    dev.SetRenderState(RS_ALPHAFUNC, CMP_GREATEREQUAL);
+                dev.SetMaterial(o.piece[p].emissive ? glowing : plain);
+                dev.SetTexture(0, o.piece[p].tex);
+                switch (o.kind) {
+                case Object::Solid:
+                    dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
+                    dev.SetRenderState(RS_ZWRITEENABLE, 1);
+                    break;
+                case Object::Blended:
+                case Object::Holes:
+                    dev.SetRenderState(RS_ALPHABLENDENABLE, 1);
+                    dev.SetRenderState(RS_SRCBLEND, BLEND_SRCALPHA);
+                    dev.SetRenderState(RS_DESTBLEND, BLEND_INVSRCALPHA);
+                    dev.SetRenderState(RS_ZWRITEENABLE, 1);
+                    break;
+                case Object::Additive:
+                    dev.SetRenderState(RS_ALPHABLENDENABLE, 1);
+                    dev.SetRenderState(RS_SRCBLEND, BLEND_SRCALPHA);
+                    dev.SetRenderState(RS_DESTBLEND, BLEND_ONE);
+                    dev.SetRenderState(RS_ZWRITEENABLE, 0);
+                    break;
                 }
-                dev.DrawMesh(o.mesh[p]);
+                dev.DrawMesh(o.piece[p].mesh);
                 ++draws;
             }
         };
         for (const Object& o : objects) drawObject(o);
-        dev.SetRenderState(RS_ALPHATESTENABLE, 0);
-        dev.SetRenderState(RS_ALPHABLENDENABLE, 1);    // the blended ones: the game's own order, after the opaque
-        dev.SetRenderState(RS_SRCBLEND, BLEND_SRCALPHA);
-        dev.SetRenderState(RS_DESTBLEND, BLEND_INVSRCALPHA);
-        dev.SetRenderState(RS_ZWRITEENABLE, 0);
         for (const Object& o : panes) drawObject(o);
         dev.SetRenderState(RS_ZWRITEENABLE, 1);
         dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
@@ -1756,8 +1823,8 @@ void RunCityBench(D& dev, int frames, const std::string& shot, const std::string
     dev.Sync();
     for (uint32_t id = 1; id < nextId; ++id) dev.ReleaseMesh(id);
     for (Texture* t : opaque) dev.DestroyTexture(t);
-    for (Texture* t : fences) dev.DestroyTexture(t);
-    for (Texture* t : glass) dev.DestroyTexture(t);
+    for (Texture* t : holes) dev.DestroyTexture(t);
+    for (Texture* t : glow) dev.DestroyTexture(t);
     dev.DestroyTexture(groundTex);
     dev.DestroyTexture(lightmap);
     dev.Sync();

@@ -62,34 +62,34 @@ Ceiling: the GPU at 6.3 ms here -> ~150 fps once the render thread drops under i
   comparisons (fixed frame, fixed camera at the end).
 - Record baselines (time and images) before any change. Every later phase: pixel-identical where order is unchanged.
 
-**Done (2026-10-14).** `rvk_demo --city-bench` (tests/rvk_demo.cpp `RunCityBench`): 600 buildings of two unique
-pieces, 2,400 props of 40 kinds, 250 cut-out fences of 8 kinds, 120 blended panes of 4 kinds (after the opaque), a
-two-pass ground with the ground grass, the sun with shadows and 7 point lights; 1,252 registered meshes, **4,042 draws
-a frame, 69% repeating a mesh**; HDR, pixel lighting. The clock is fixed: a run is pixel-identical to the next.
+**Done (2026-10-14).** `rvk_demo --city-bench` (tests/rvk_demo.cpp `RunCityBench`), shaped after the game's city
+frame dump (rvk-frame-085542: 3,029 static draws of 2,067 objects, FVF 0x112, ~37 vertices, 133 distinct sizes -
+one 20/30 box alone 909 draws; 85% blended SRCALPHA/INVSRCALPHA writing depth; the ground 320 draws indexing big
+static vertex buffers): 2,000 statics of 1-2 pieces from 160 mesh kinds (the first kinds drawn most), 85% blended with
+depth writes, 170 fence pieces with holes (two-pass foliage), 40 additive panes; 160 ground chunks in two passes from 4
+shared vertex buffers, with the ground grass; sun shadows, 7 point lights; **3,498 draws, all from shared buffers
+(3,178 by mesh handle)**; HDR, pixel lighting. The clock is fixed: a run is pixel-identical to the next.
 `--city-warm N` (default 60), `--city-no-grass`, `--dump`. `tools/city-bench.sh OUT [BASE]` runs the set (city picture
 + dump, two 700-frame timing runs at 2560x1440, shadow / cache / statel pictures, `--bench 300 --threaded`);
 `tools/city-compare.py BASE NEW` diffs pictures (writes *-diff.png) and the render-thread sections.
 
-Baseline: `build/rb-base` (statels 5875a16 + the bench). Its sections are close to the game's at West Bank:
+Baseline `build/rb-base` (ms a frame; the game's West Bank profile beside it - it also has characters, effects and
+~560 copied draws the bench hasn't, so its frame is longer):
 
 | section | bench | game |
 |---|---|---|
-| render thread frame | 9.32 (1.34 of it waiting for the GPU) | 10.6 |
-| draw: geometry + casters (shadow casters of it) | 3.50 (1.98) | 3.50 (2.26) |
-| draw: state + descriptors + draw | 1.90 | 1.93 |
-| draw: motion vectors | 0.79 | 0.72 |
-| draw: setup (sky, terrain notes, grass tiles) | 0.77 | 0.76 |
-| sun shadows | 0.71 | 1.25 |
-| draw: setup (pick, grass cover) | 0.68 | 0.65 |
-| draw: constants | 0.58 | 0.78 |
-| draw: setup | 0.43 | 0.57 |
-| draw: setup (mesh info) | 0.34 | 0.50 |
-| draw: sway / canopy, plants / light mask / mesh ids | 0.28 / 0.26 / 0.23 / 0.20 | 0.34 / 0.36 / 0.46 / 0.37 |
-| GPU total | 7.93 | 6.3 |
-| draw batching | 3,970 of 4,042 draws in 257 indirect calls | 4,330 -> 794 |
+| render thread frame | 6.41 (GPU 3.24: the render thread is the limit) | 10.6 |
+| draw: geometry + casters (shadow casters of it) | 2.51 (1.47) | 3.50 (2.26) |
+| draw: state + descriptors + draw | 1.79 | 1.93 |
+| draw: motion vectors | 0.76 | 0.72 |
+| draw: constants | 0.69 | 0.78 |
+| draw: setup (pick, grass cover) | 0.56 | 0.65 |
+| sun shadows | 0.51 | 1.25 |
+| draw: setup / mesh info | 0.38 / 0.36 | 0.57 / 0.50 |
+| draw: sway / canopy, plants / light mask / mesh ids | 0.23 / 0.21 / 0.18 / 0.15 | 0.34 / 0.36 / 0.46 / 0.37 |
+| draw batching | 3,498 draws in 938 indirect calls, 938 constant blocks | 3,600 in 735, 599 blocks |
 
-The bench's GPU (7.9 ms at 2560x1440) is near its render thread: once the render thread's work drops under it, the
-frame time stops falling - judge the phases by the sections, not the fps.
+(The per-draw sections are sampled one frame in 16 and scaled: their sum overshoots the frame a little.)
 
 ### P1. Per-object frame cache (biggest, lowest risk)
 
