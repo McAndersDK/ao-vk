@@ -153,7 +153,7 @@ Setting g_settings[] = {
     {"RVK_CloudNight",  "Clouds: how light at night (x the above)",                 "Experimental",     Float, 0.25f, 2, 0.05f, 0.8f, nullptr, 0, "RVK_CloudsOn"},
     // (Off by default: every crash of 2026-10-13/14 - heap corruption found in the grass code - came in a session with
     // it on, two within minutes of switching it on; RVK_StaticShad casts the placed objects without it.)
-    {"RVK_ShadowAll",   "Shadows of culled meshes drawn by the game for their shadow alone (UNSTABLE: has crashed the game; RVK_StaticShad covers placed objects)", "Experimental", Bool, 0, 1, 1, 0, nullptr, 0, "RVK_SunShadow"},
+    {"RVK_ShadowAll",   "Shadows of culled meshes drawn for their shadow alone (TESTING ONLY, needs RANDYVK_SHADOW_ALL=1: it damages memory and crashes the game; RVK_StaticShad covers placed objects)", "Experimental", Bool, 0, 1, 1, 0, nullptr, 0, "RVK_SunShadow"},
     {"RVK_StaticShad",  "Shadows of the playfield's placed objects from its own list - rocks, walls, trees, seen or not (ao-assets statels): 0 off, 1 once their placement is confirmed, 2 always", "Shadows", Int, 0, 2, 1, 1, nullptr, 0, "RVK_SunShadow"},
     {"RVK_ShadowView",  "Debug: show the sun shadow map's light (white lit, dark shadowed; tint = cascade)", "Experimental", Bool, 0, 1, 1, 0, nullptr, 0},
     {"RVK_Occlusion",   "The game's culling of what hills hide (off: all in view drawn - whole shadows, more draws)", "Experimental", Bool, 0, 1, 1, 1, nullptr, 0},
@@ -375,6 +375,17 @@ void Apply(const Setting& s, rvk::ThreadedDevice* d)
         if (child.parent && std::strcmp(child.parent, s.name) == 0) ApplyOne(child, d);
 }
 
+// RVK_ShadowAll damages memory (the 2026-10-13/14 crashes, docs/stability-plan.md): it only takes effect for testing,
+// with RANDYVK_SHADOW_ALL=1 in the environment, whatever the setting says.
+bool ShadowAllAllowed()
+{
+    static const bool allowed = [] {
+        char v[8] = "";
+        return GetEnvironmentVariableA("RANDYVK_SHADOW_ALL", v, sizeof(v)) && v[0] == '1';
+    }();
+    return allowed;
+}
+
 // Puts one setting into effect: each device call takes the setting and its partners.
 void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
 {
@@ -384,7 +395,7 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
     // Static meshes the game culls cast anyway within the shadows' reach (native mesh.cpp; as the renderer's memory of
     // casters: 1.4 x the shadow distance), meshes under a unit across left out.
     if (is("RVK_ShadowAll") || is("RVK_SunDist") || is("RVK_SunShadow"))
-        rnative::mesh::SetShadowOnlyRange(V("RVK_ShadowAll") != 0.0f && V("RVK_SunShadow") != 0.0f ? 1.4f * V("RVK_SunDist")
+        rnative::mesh::SetShadowOnlyRange(V("RVK_ShadowAll") != 0.0f && ShadowAllAllowed() && V("RVK_SunShadow") != 0.0f ? 1.4f * V("RVK_SunDist")
                                                                                                     : 0.0f, 1.0f);
     if (is("RVK_Enhance")) {                     // every enhancement at its own value or the game's
         for (const Setting& other : g_settings)
