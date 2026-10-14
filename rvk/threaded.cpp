@@ -965,6 +965,11 @@ void ThreadedDevice::SetTaa(bool enable, float sharpen)
     Enqueue([this, enable, sharpen](const uint8_t*) { m_device.SetTaa(enable, sharpen); });
 }
 
+void ThreadedDevice::SetFxaa(bool enable)
+{
+    Enqueue([this, enable](const uint8_t*) { m_device.SetFxaa(enable); });
+}
+
 void ThreadedDevice::SetSway(float strength)
 {
     Enqueue([this, strength](const uint8_t*) { m_device.SetSway(strength); });

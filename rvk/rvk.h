@@ -425,6 +425,7 @@ public:
     }
     // With HDR: temporal anti-aliasing (jittered scene, resolved against the last frame) and sharpening after it.
     void SetTaa(bool enable, float sharpen) { m_taa = enable; m_sharpen = sharpen; m_frameLightsDirty = true; }
+    void SetFxaa(bool enable) { m_fxaa = enable; }   // FXAA: the anti-aliasing while TAA is off (fxaa.frag)
     // Sun shadow penumbra growth with blocker distance (0 = hard), sunlight through leaves, night glow of bright
     // texels on unlit / self-lit surfaces, contact shadows (screen-space, against the sun).
     void SetSunSoftness(float s) { m_sunSoftness = s; m_frameLightsDirty = true; }
@@ -2121,12 +2122,13 @@ private:
     double m_windTime = 0.0, m_windTimePrev = 0.0;   // this frame's and last frame's (set at the frame's start)
     double m_frameClock = 0.0;                   // SwayClock at the frame's start (per-caster bookkeeping)
     bool m_taa = true;
+    bool m_fxaa = false;
     float m_sharpen = 0.4f;
     float m_taaJitter[2] = {};                   // this frame's jitter, clip units (FrameLights taa)
     Texture* m_taaHistory[2] = {};               // resolved frames (RGBA16F): [m_taaIndex] is the last one
     uint32_t m_taaIndex = 0;
     uint64_t m_taaFrame = ~0ull;                 // frame of the last resolve (history valid if it was the previous)
-    VkPipeline m_taaPipeline = VK_NULL_HANDLE, m_sharpenPipeline = VK_NULL_HANDLE;
+    VkPipeline m_taaPipeline = VK_NULL_HANDLE, m_sharpenPipeline = VK_NULL_HANDLE, m_fxaaPipeline = VK_NULL_HANDLE;
     bool TaaActive() const { return m_taa && m_hdr; }
     // A per-frame offset (0..1) for the noise patterns of sampled effects while the TAA averages frames; else 0.
     float FrameNoise() const { return TaaActive() ? float(m_frameNumber % 64 * 618034 % 1000000) * 1e-6f : 0.0f; }
@@ -2225,6 +2227,7 @@ private:
     mutable bool m_worldCameraSame = false;
     uint64_t MotionKey(uint32_t primitive, uint32_t fvf, uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount) const;
     Texture* m_tonemapped = nullptr;             // with motion blur: the tone mapped scene, blurred into m_ldrMain
+    Texture* m_fxaaOut = nullptr;                // FXAA with motion blur: the anti-aliased image the blur reads
     VkPipeline m_motionPipeline = VK_NULL_HANDLE;
     d3d::Matrix m_prevView{}, m_prevProj{};      // the last frame's world camera
     float m_prevEye[3] = {};

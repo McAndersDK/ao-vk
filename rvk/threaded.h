@@ -122,6 +122,7 @@ public:
     void SetPointLightIntensity(float lights, float characters);
     void SetTessellation(float shape, float distance, uint32_t level);
     void SetTaa(bool enable, float sharpen);
+    void SetFxaa(bool enable);
     void ProfileWindow(bool start, const std::string& label);
     void ProfileManualEnd();
     void SetSunSoftness(float s);

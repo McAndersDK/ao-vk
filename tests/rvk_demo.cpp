@@ -3536,7 +3536,7 @@ int main(int argc, char** argv)
     float ptLight = 1.0f, tess = 0.0f;
     int tessLevel = 4;
     float saturation = 1.0f, contrast = 1.0f, warmth = 0.0f, nightTint = 0.0f, vignette = 0.0f;
-    bool lutSepia = false, taa = false;
+    bool lutSepia = false, taa = false, fxaa = false;
     float sharpen = 0.4f;
     bool normalMapTest = false, pbrTest = false;
     uint32_t anisotropy = 1;
@@ -3741,6 +3741,7 @@ int main(int argc, char** argv)
         else if (a == "--sway" && i + 1 < argc) sway = float(std::atof(argv[++i]));
         else if (a == "--lut-sepia") lutSepia = true;
         else if (a == "--taa") taa = true;
+        else if (a == "--fxaa") fxaa = true;
         else if (a == "--sun-view") g_sunView = true;
         else if (a == "--two-lamps") g_twoLamps = true;
         else if (a == "--lamp-wobble") g_lampWobble = true;
@@ -3858,6 +3859,7 @@ int main(int argc, char** argv)
     dev.SetPointLightIntensity(ptLight, ptLight);
     dev.SetTessellation(tess, 20.0f, uint32_t(tessLevel));
     dev.SetTaa(taa, sharpen);
+    dev.SetFxaa(fxaa);
     dev.SetGrading(saturation, contrast, warmth, 1.0f, nightTint, vignette);
     if (lutSepia) {                      // --lut-sepia: a 16^3 sepia lookup table in the day slot (the 3D LUT path)
         const uint32_t n = 16;

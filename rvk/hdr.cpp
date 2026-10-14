@@ -65,6 +65,9 @@ const uint32_t kTaaSpirv[] = {
 const uint32_t kSharpenSpirv[] = {
 #include "sharpen.frag.inc"
 };
+const uint32_t kFxaaSpirv[] = {
+#include "fxaa.frag.inc"
+};
 const uint32_t kUiCompositeSpirv[] = {
 #include "ui_composite.frag.inc"
 };
@@ -262,6 +265,7 @@ bool Device::CreateHdrResources(std::string* error)
                          &m_contactPipeline) &&
               fullscreen(kTaaSpirv, sizeof(kTaaSpirv), hdrFormat, false, m_bloomLayout, &m_taaPipeline) &&
               fullscreen(kSharpenSpirv, sizeof(kSharpenSpirv), kColorFormat, false, m_bloomLayout, &m_sharpenPipeline) &&
+              fullscreen(kFxaaSpirv, sizeof(kFxaaSpirv), kColorFormat, false, m_bloomLayout, &m_fxaaPipeline) &&
               fullscreen(kUiCompositeSpirv, sizeof(kUiCompositeSpirv), kColorFormat, 2, m_bloomLayout,
                          &m_uiCompositePipeline) &&
               fullscreen(kMotionBlurSpirv, sizeof(kMotionBlurSpirv), kColorFormat, false, m_bloomLayout, &m_motionPipeline) &&
@@ -306,6 +310,7 @@ void Device::DestroyHdrResources()
     for (Texture*& t : m_contactTex)
         if (t) { DestroyTextureNow(t); t = nullptr; }
     if (m_tonemapped) { DestroyTextureNow(m_tonemapped); m_tonemapped = nullptr; }
+    if (m_fxaaOut) { DestroyTextureNow(m_fxaaOut); m_fxaaOut = nullptr; }
     if (m_uiLayer) { DestroyTextureNow(m_uiLayer); m_uiLayer = nullptr; }
     m_uiLayerReady.store(false, std::memory_order_relaxed);
     for (Texture*& t : m_motionTiles)
@@ -315,7 +320,7 @@ void Device::DestroyHdrResources()
     for (VkPipeline* p : {&m_bloomDown, &m_bloomUp, &m_aoPipeline, &m_aoBlurPipeline, &m_giPipeline, &m_giBlurPipeline,
                           &m_envAccumPipeline, &m_envFilterPipeline,
                           &m_volumePipeline, &m_volumeBlurPipeline, &m_ssrPipeline,
-                          &m_contactPipeline, &m_taaPipeline, &m_sharpenPipeline, &m_uiCompositePipeline,
+                          &m_contactPipeline, &m_taaPipeline, &m_sharpenPipeline, &m_fxaaPipeline, &m_uiCompositePipeline,
                           &m_motionPipeline,
                           &m_tileMaxPipeline, &m_neighbourMaxPipeline, &m_objectBlurPipeline, &m_dofCompositePipeline,
                           &m_dofFocusPipeline, &m_dofPrefilterPipeline, &m_dofTilesPipeline, &m_dofGatherPipeline,
@@ -443,14 +448,22 @@ void Device::EndScene()
     bool taa = TaaParams(taaParams);
     float motion[24];
     bool blur = MotionBlurParams(motion);
-    if ((blur || taa) &&
+    bool fxaa = m_fxaa && !taa && m_fxaaPipeline;    // (TAA anti-aliases already)
+    if ((blur || taa || fxaa) &&
         (!m_tonemapped || m_tonemapped->m_width != m_ldrMain->m_width || m_tonemapped->m_height != m_ldrMain->m_height)) {
         if (m_tonemapped) DestroyTexture(m_tonemapped);
         m_tonemapped = CreateImage(m_ldrMain->m_width, m_ldrMain->m_height, Format::A8R8G8B8, 1, true);
         blur = blur && m_tonemapped;
         taa = taa && m_tonemapped;
+        fxaa = fxaa && m_tonemapped;
     }
-    Texture* toned = blur || taa ? m_tonemapped : m_ldrMain;
+    if (fxaa && blur &&
+        (!m_fxaaOut || m_fxaaOut->m_width != m_ldrMain->m_width || m_fxaaOut->m_height != m_ldrMain->m_height)) {
+        if (m_fxaaOut) DestroyTexture(m_fxaaOut);
+        m_fxaaOut = CreateImage(m_ldrMain->m_width, m_ldrMain->m_height, Format::A8R8G8B8, 1, true);
+        fxaa = fxaa && m_fxaaOut;
+    }
+    Texture* toned = blur || taa || fxaa ? m_tonemapped : m_ldrMain;
     // With TAA the tone mapping's alpha says how much of each pixel additive effects made (taa.frag: those pixels
     // take more of the new frame - sparks and spell effects, new each frame, were averaged away).
     if (taa) params[7] = float(int(params[7]) | 16);
@@ -458,6 +471,15 @@ void Device::EndScene()
     ProfileMark("tonemap");
     if (taa)
         RenderTaa(cmd, blur ? m_tonemapped : m_ldrMain, taaParams);
+    if (fxaa) {
+        // Into the main target, or - with motion blur - into an image of its own that the blur then reads (the two
+        // swap: m_tonemapped is what the blur reads).
+        Transition(cmd, m_tonemapped, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        const float size[4] = {1.0f / float(m_tonemapped->m_width), 1.0f / float(m_tonemapped->m_height), 0.0f, 0.0f};
+        FullscreenPass(cmd, blur ? m_fxaaOut : m_ldrMain, m_fxaaPipeline, m_tonemapped->m_view, m_tonemapped->m_view,
+                       m_linearSampler, size, sizeof(size), false);
+        if (blur) std::swap(m_tonemapped, m_fxaaOut);
+    }
     ProfileMark("taa + sharpen");
     if (blur) {
         Transition(cmd, m_tonemapped, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
