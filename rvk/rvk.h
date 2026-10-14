@@ -802,6 +802,11 @@ private:
     VkSampler m_normalSampler = VK_NULL_HANDLE;
     Texture* m_constantsNormalMap = nullptr;
     bool m_constantsSkyScenery = false;
+    // The last constant block's light list (draw.cpp): reused while the lights (a generation: SetLight / LightEnable
+    // changing one), the frame and the list's kind stay. (GpuLight bytes: the type is internal.h's.)
+    uint64_t m_lightsGen = 1, m_lightListGen = 0, m_lightListFrame = ~0ull;
+    uint32_t m_lightListKind = 0, m_lightListCount = 0, m_lightListLocal = 0;
+    std::vector<uint8_t> m_lightList;
     uint32_t m_constantsBlend = ~0u;             // the blend enable the block was written with (Draw may turn it off)
     bool m_opaqueBlend = true;                   // RANDYVK_OPAQUE_BLEND=0: alpha-1 blended draws stay blended (A/B)
     uint64_t m_opaqueBlendDraws = 0;             // (logged with the opaque fast path)

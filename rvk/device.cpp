@@ -1348,11 +1348,11 @@ uint32_t Device::AppendConstant(const DrawConstants& c, size_t bytes)
 uint32_t Device::AppendRecord(uint32_t constIndex, const DrawTransform& d)
 {
     uint32_t index = m_recordCount++;
-    DrawRecord rec{};
-    rec.constIndex = constIndex;
-    rec.d = d;
-    std::memcpy(m_frames[m_frameIndex].ringData + m_recordsBase + VkDeviceSize(index) * sizeof(DrawRecord), &rec,
-                sizeof(rec));
+    // Straight into the ring (a record built and copied was two passes over ~250 bytes a draw).
+    uint8_t* dst = m_frames[m_frameIndex].ringData + m_recordsBase + VkDeviceSize(index) * sizeof(DrawRecord);
+    const uint32_t head[4] = {constIndex, 0u, 0u, 0u};
+    std::memcpy(dst, head, sizeof(head));
+    std::memcpy(dst + offsetof(DrawRecord, d), &d, sizeof(d));
     return index;
 }
 

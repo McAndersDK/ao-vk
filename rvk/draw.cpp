@@ -178,6 +178,7 @@ void Device::SetLight(uint32_t index, const d3d::Light& light)
         return;
     }
     ++slot.version;
+    ++m_lightsGen;
     slot.light = light;
     slot.cosHalfTheta = std::cos(light.theta * 0.5f);
     slot.cosHalfPhi = std::cos(light.phi * 0.5f);
@@ -195,6 +196,7 @@ void Device::LightEnable(uint32_t index, bool enable)
     if (slot.enabled != enable) {
         slot.enabled = enable;
         m_constantsDirty = true;
+        ++m_lightsGen;
     }
     if (enable)
         CaptureLight(slot);
@@ -2806,6 +2808,15 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
         c.stageB[s][3] = t[d3d::TSS_TEXTURETRANSFORMFLAGS];
     }
     uint32_t lightCount = 0, localLights = 0;
+    // The block's lights (FillGpuLight each): the last list made again while the lights (their generation), the frame
+    // (the moon, the lights' scales) and what decides the list - lit, the override, the ground, the sky - are the same.
+    const uint32_t lightKind = ((flags & F_LIGHTING) ? 1u : 0u) | (override ? 2u : 0u) | (terrain ? 4u : 0u) |
+                               (VisualKind(m_drawVisualKind) == VisualKind::Sky ? 8u : 0u);
+    if (m_lightListGen == m_lightsGen && m_lightListFrame == m_frameNumber && m_lightListKind == lightKind) {
+        lightCount = m_lightListCount;
+        localLights = m_lightListLocal;
+        std::memcpy(c.lights, m_lightList.data(), size_t(lightCount) * sizeof(GpuLight));
+    } else {
     if (flags & F_LIGHTING)
         for (const LightSlot& slot : m_lights) {
             if (!slot.enabled || lightCount == kMaxLights)
@@ -2829,6 +2840,14 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     if ((flags & F_LIGHTING) && override && MoonOn() && VisualKind(m_drawVisualKind) != VisualKind::Sky &&
         lightCount < kMaxLights)
         FillGpuLight(MoonAsLight(), 0.0f, 0.0f, c.lights[lightCount++], 1.0f);
+    m_lightListGen = m_lightsGen;
+    m_lightListFrame = m_frameNumber;
+    m_lightListKind = lightKind;
+    m_lightListCount = lightCount;
+    m_lightListLocal = localLights;
+    m_lightList.assign(reinterpret_cast<const uint8_t*>(c.lights),
+                       reinterpret_cast<const uint8_t*>(c.lights) + size_t(lightCount) * sizeof(GpuLight));
+    }
     c.lightInfo[0] = lightCount;
     c.lightInfo[1] = localLights;
     c.lightInfo[2] = override ? carrier : 0;   // frame light (index + 1) this draw carries: it doesn't light it
@@ -3141,8 +3160,9 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
 
     // Would an instanced batch cover this draw together with the one before it? Only static snapshots share their
     // vertex data across draws; ring copies are unique per draw, so those never merge.
+    // (A statistic of the frame dump's alone: worked out only while one is written.)
     uint64_t batchKey = 0;
-    if (m_drawStaticBuffer && !m_external && !m_drawGpu) {
+    if (m_dumpFile && m_drawStaticBuffer && !m_external && !m_drawGpu) {
         uint64_t k = 0x9E3779B97F4A7C15ull;
         auto mix = [&k](uint64_t x) { k = (k ^ x) * 0xFF51AFD7ED558CCDull; k ^= k >> 32; };
         mix(uint64_t(m_drawStaticBuffer));
