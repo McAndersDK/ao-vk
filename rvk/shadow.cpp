@@ -786,6 +786,11 @@ void Device::UpdateCasterCache()
             m_casterCache.size(), m_casterStreaks.size(), m_cacheStreakStarts, m_cacheRefusedFar,
             double(m_cacheRefusedFarD), double(m_frameEye[0]), double(m_frameEye[1]), double(m_frameEye[2]),
             m_cacheRefusedFull, m_cacheRefusedNoVertices, m_cacheRefusedMoving, m_cacheKeptSolid, m_shadowOnlyDraws);
+        if (!m_statelItems.empty())
+            Log("placed objects: playfield %u, %u pieces cast, %u drawn ones not remembered (last frame); placement %s "
+                "(%u drawn pieces as ours, %u otherwise)", m_statelPlayfield, m_statelItemsThisFrame, m_statelCoveredLast,
+                m_statelVerified > 0 ? "confirmed" : m_statelVerified < 0 ? "refused" : "unconfirmed", m_statelMatched,
+                m_statelMismatched);
     }
     m_shadowOnlyDraws = 0;
     m_cacheStreakStarts = m_cacheRefusedFar = m_cacheRefusedFull = m_cacheRefusedNoVertices = m_cacheRefusedMoving = 0;

@@ -3483,8 +3483,9 @@ int main(int argc, char** argv)
         tdev.SetHideInterface(g_hideUi);
         tdev.SetLightOverride(lightOverride);
         tdev.SetShadows(shadows);
-        if (!dump.empty() && !shadowTest) tdev.RequestFrameDump(dump);
-        if (shadowTest) RunShadowTest(tdev, frames, shot, cacheTest, frameMs, dump);
+        if (!dump.empty() && !shadowTest && g_statelPack.empty()) tdev.RequestFrameDump(dump);
+        if (!g_statelPack.empty()) RunStatelTest(tdev, frames, shot, dump);
+        else if (shadowTest) RunShadowTest(tdev, frames, shot, cacheTest, frameMs, dump);
         else RunDemo(tdev, windowed, stress, frames, shot);
     } else if (!g_statelPack.empty()) {
         RunStatelTest(dev, frames, shot, dump);
