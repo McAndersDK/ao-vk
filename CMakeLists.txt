@@ -84,7 +84,7 @@ foreach(entry "leaf.vert|ffp.vert|RVK_LEAF" "leaf_shadow.vert|shadow.vert|RVK_LE
     list(APPEND RVK_SHADER_INCS "${out}")
 endforeach()
 
-add_library(rvk STATIC rvk/vk.cpp rvk/vma.cpp rvk/device.cpp rvk/resources.cpp rvk/draw.cpp rvk/objects.cpp rvk/diag.cpp rvk/shadow.cpp rvk/pointshadow.cpp rvk/hdr.cpp rvk/particles.cpp rvk/grading.cpp rvk/profile.cpp rvk/skin.cpp rvk/skin_gpu.cpp rvk/static_gpu.cpp rvk/prepass.cpp rvk/threaded.cpp rvk/interface.cpp rvk/grass.cpp rvk/leaves.cpp rvk/water.cpp rvk/rain.cpp rvk/smoke.cpp rvk/clouds.cpp rvk/meshids.cpp rvk/statels.cpp rvk/night.cpp rvk/sky.cpp rvk/mist.cpp rvk/sun.cpp rvk/terrain_sun.cpp ${RVK_SHADER_INCS})
+add_library(rvk STATIC rvk/vk.cpp rvk/vma.cpp rvk/device.cpp rvk/resources.cpp rvk/draw.cpp rvk/objects.cpp rvk/diag.cpp rvk/shadow.cpp rvk/pointshadow.cpp rvk/hdr.cpp rvk/particles.cpp rvk/grading.cpp rvk/profile.cpp rvk/skin.cpp rvk/skin_gpu.cpp rvk/static_gpu.cpp rvk/prepass.cpp rvk/threaded.cpp rvk/interface.cpp rvk/grass.cpp rvk/leaves.cpp rvk/water.cpp rvk/rain.cpp rvk/smoke.cpp rvk/clouds.cpp rvk/meshids.cpp rvk/statels.cpp rvk/night.cpp rvk/sky.cpp rvk/mist.cpp rvk/sun.cpp rvk/terrain_sun.cpp rvk/wind.cpp ${RVK_SHADER_INCS})
 target_include_directories(rvk PUBLIC rvk PRIVATE "${RVK_SHADER_OUT}")
 # Vulkan headers and VMA come from the SDK; /imsvc keeps their warnings quiet.
 target_compile_options(rvk PUBLIC "/imsvc${VULKAN_SDK_DIR}/include")

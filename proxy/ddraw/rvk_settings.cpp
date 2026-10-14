@@ -135,6 +135,8 @@ Setting g_settings[] = {
     {"RVK_RainAmount", "Rain: how many drops",                                     "Experimental",     Float, 0, 4, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_RainSplash", "Rain: splashes where it lands (0 = none)",                "Experimental",     Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_RainBright", "Rain: brightness",                                         "Experimental",     Float, 0, 3, 0.05f, 1, nullptr, 0, "RVK_WeatherOn"},
+    {"RVK_WindStorm",  "Storm wind: how hard storms blow - grass, plants, trees and leaves (0: as on a calm day)", "Experimental", Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
+    {"RVK_StormTint",  "The game's storm tint: its flat sheet over the screen in sand and ash storms (off: left out)", "Experimental", Bool, 0, 1, 1, 0, nullptr, 0, "RVK_WeatherOn"},
 
     {"RVK_SmokeOn",    "Simulated smoke (needs HDR)",  "Experimental",    Bool,  0, 1, 1, 0, nullptr, 0},
     {"RVK_SmokeQual",  "Smoke: most cells a box (1: 64, 2: 96, 3: 128 a side)",  "Experimental",     Int,   1, 3, 1, 2, nullptr, 0, "RVK_SmokeOn"},
@@ -465,6 +467,8 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
     }
     else if (is("RVK_Taa") || is("RVK_Sharpen")) d->SetTaa(V("RVK_Taa") != 0.0f, V("RVK_Sharpen"));
     else if (is("RVK_Fxaa")) d->SetFxaa(V(n) != 0.0f);
+    else if (is("RVK_WindStorm")) d->SetWindStorm(V(n));
+    else if (is("RVK_StormTint")) d->SetStormTint(V(n) != 0.0f);
     else if (is("RVK_Saturation") || is("RVK_Contrast") || is("RVK_Warmth") || is("RVK_NightTint") ||
              is("RVK_Vignette") || is("RVK_LutAmount"))
         d->SetGrading(V("RVK_Saturation"), V("RVK_Contrast"), V("RVK_Warmth"), V("RVK_LutAmount"), V("RVK_NightTint"),

@@ -1637,11 +1637,8 @@ void Device::BeginFrame()
         SavePipelineCache("after the first frames");   // (the pipelines made on demand since the start)
     TickFixedClock();                            // (tests: SetFixedClock)
     CollectWaterBodies();                        // the water's ripples follow the characters of the last frame
-    m_windTimePrev = m_windTime;
     m_frameClock = SwayClock();
-    m_windTime = std::fmod(m_frameClock, 3600.0);
-    if (m_windTimePrev > m_windTime || m_windTime - m_windTimePrev > 0.25)
-        m_windTimePrev = m_windTime;             // wrapped, or the first frame after a pause
+    UpdateWind();                                // (m_windTime, m_windTimePrev: wind.cpp)
     m_lightsPrev.swap(m_lightsCur);              // last frame's complete light set lights this frame
     m_lightsCur.clear();
     m_sunLuminance = 0.0f;

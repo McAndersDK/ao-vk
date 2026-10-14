@@ -123,6 +123,8 @@ public:
     void SetTessellation(float shape, float distance, uint32_t level);
     void SetTaa(bool enable, float sharpen);
     void SetFxaa(bool enable);
+    void SetWindStorm(float scale);
+    void SetStormTint(bool on);
     void ProfileWindow(bool start, const std::string& label);
     void ProfileManualEnd();
     void SetSunSoftness(float s);

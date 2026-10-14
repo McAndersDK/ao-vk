@@ -222,9 +222,12 @@ void Device::RenderRain(VkCommandBuffer cmd)
     if (!drops)
         return;
 
-    // The wind leans the rain (the game's, smoothed; at most ~45 degrees).
+    // The wind leans the rain (the game's, smoothed; at most ~45 degrees) - without one, the shared wind's (wind.cpp),
+    // as hard as the storm.
+    const float stormLean = 4.0f * m_storm * std::max(m_windStormScale, 0.0f);
+    const float shared[3] = {m_windDir[0] * stormLean, 0.0f, m_windDir[1] * stormLean};
     for (int i = 0; i < 3; ++i) {
-        const float w = fromGame ? m_weatherGame.wind[i] : 0.0f;
+        const float w = fromGame ? m_weatherGame.wind[i] : shared[i];
         m_rainWind[i] += (w - m_rainWind[i]) * (1.0f - std::exp(-dt / 1.5f));
     }
     float wind[3] = {m_rainWind[0], 0.0f, m_rainWind[2]};

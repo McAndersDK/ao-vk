@@ -294,7 +294,7 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
     FillPushers(fl, eye);
     fl->leaves[0] = m_leaf.on ? m_leaf.wind : 0.0f;
     fl->leaves[1] = m_leaf.on ? m_leaf.flutter : 0.0f;
-    fl->leaves[2] = std::max(m_grassGusts, 0.0f);
+    fl->leaves[2] = Gusts();
     fl->leaves[3] = m_leaf.on ? m_leaf.core : 0.0f;
     fl->leafView[0] = std::max(m_leaf.distance, 1.0f);
     fl->leafView[1] = m_leaf.on ? 1.0f : 0.0f;
@@ -1111,12 +1111,10 @@ bool Device::WaterWritesDepth(uint32_t fvf) const
 // Wind: a slowly turning direction; the vertex shaders add waves and gusts (sway.glsl).
 void Device::Wind(float out[4]) const
 {
-    double t = m_windTime;
-    float angle = 0.6f + 0.4f * float(std::sin(t * 0.013));
-    out[0] = std::cos(angle);
-    out[1] = std::sin(angle);
-    out[2] = float(t);
-    out[3] = m_sway;
+    out[0] = m_windDir[0];                       // (the shared wind: wind.cpp UpdateWind)
+    out[1] = m_windDir[1];
+    out[2] = float(m_windTime);
+    out[3] = m_sway * m_windStrength;
 }
 
 // The frame lights into a coarse x/z grid of light masks: each light's bit in every cell its sphere covers.
@@ -2104,6 +2102,16 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
         Device* d;                               // read it: outside a draw they must work from the matrix)
         ~ObjectScope() { d->m_drawObject = nullptr; }
     } objectScope{this};
+    // The game's storm tint (a sandstorm's, an ash storm's): a screen-sized blended sprite a few units ahead, drawn over
+    // everything with depth writes (an in-game dump: RSprite, 8 x 8 texture, ZFUNC ALWAYS). A flat sheet over the
+    // frame: with the new weather it's left out (RVK_StormTint brings it back) - our storms draw the air themselves.
+    if (m_weatherParams.enable && !m_stormTint && m_target == m_scene && m_rs[d3d::RS_ALPHABLENDENABLE] &&
+        m_rs[d3d::RS_ZFUNC] == d3d::CMP_ALWAYS && m_rs[d3d::RS_ZENABLE] && m_rs[d3d::RS_ZWRITEENABLE] &&
+        (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZRHW && m_textures[0] && m_textures[0]->m_width <= 16 &&
+        m_textures[0]->m_height <= 16) {
+        ++m_stormTintSkipped;
+        return;
+    }
     ++m_frameDraw;
     // GPU profiling: which class of scene draw this is (splits the "scene" block; see ProfileSceneClass).
     m_drawSceneClass = 0;

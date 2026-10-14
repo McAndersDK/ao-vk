@@ -1827,9 +1827,9 @@ void Device::DrawGrassTiles(VkCommandBuffer cmd)
     // frame's for the motion vectors.
     gf.wind[0] = float(m_windTime);
     gf.viewport[3] = float(m_windTimePrev);
-    gf.wind[1] = 0.56f;
-    gf.wind[2] = 0.35f;                          // a wind direction (normalised in the shader)
-    gf.wind[3] = std::max(m_sway, 0.3f);         // the plants' sway strength scales the wind
+    gf.wind[1] = m_windDir[0];                   // the shared wind (wind.cpp)
+    gf.wind[2] = m_windDir[1];
+    gf.wind[3] = std::max(m_sway, 0.3f) * m_windStrength;   // the plants' sway strength scales the wind
     gf.camera[0] = m_frameEye[0];
     gf.camera[1] = m_frameEye[1];
     gf.camera[2] = m_frameEye[2];
@@ -1839,7 +1839,7 @@ void Device::DrawGrassTiles(VkCommandBuffer cmd)
     gf.look[1] = 1.0f;
     std::memcpy(gf.sunColour, m_terrainSun, sizeof(gf.sunColour) + sizeof(gf.sunDir));
     gf.look[2] = std::max(m_grassGlow, 0.0f);
-    gf.look[3] = std::max(m_grassGusts, 0.0f);
+    gf.look[3] = Gusts();
     gf.lod[0] = float(m_scene->m_height) * 0.5f * m_proj.m[1][1];   // pixels per world unit at view depth 1
     gf.lod[1] = 1.0f;                            // blades at least a pixel wide
     // The frame lights (the sun, its cascades, the lights, the pushers) as of now, in this ring: the scene writes them
@@ -1980,13 +1980,13 @@ void Device::DrawGrassShadow(VkCommandBuffer cmd, const d3d::Matrix& lightViewPr
     p.camera[2] = m_frameEye[2];
     p.camera[3] = m_grassDistance;
     p.wind[0] = float(m_windTime);              // (as DrawGrassTiles: the blades sway the same)
-    p.wind[1] = 0.56f;
-    p.wind[2] = 0.35f;
-    p.wind[3] = std::max(m_sway, 0.3f);
+    p.wind[1] = m_windDir[0];
+    p.wind[2] = m_windDir[1];
+    p.wind[3] = std::max(m_sway, 0.3f) * m_windStrength;
     p.sun[0] = m_shadowLightDir[0];             // (the sun's, or by night the moon's)
     p.sun[1] = m_shadowLightDir[1];
     p.sun[2] = m_shadowLightDir[2];
-    p.sun[3] = std::max(m_grassGusts, 0.0f);
+    p.sun[3] = Gusts();
     p.cascade[0] = 0.5f * texel;
     p.cascade[1] = 0.75f;
     p.cascade[2] = 0.95f;
@@ -2057,13 +2057,13 @@ bool Device::DrawGrassPointShadow(VkCommandBuffer cmd, const d3d::Matrix& faceVi
             p.camera[2] = m_frameEye[2];
             p.camera[3] = m_grassDistance;
             p.wind[0] = float(m_windTime);          // (as DrawGrassTiles: the blades sway the same)
-            p.wind[1] = 0.56f;
-            p.wind[2] = 0.35f;
-            p.wind[3] = std::max(m_sway, 0.3f);
+            p.wind[1] = m_windDir[0];
+            p.wind[2] = m_windDir[1];
+            p.wind[3] = std::max(m_sway, 0.3f) * m_windStrength;
             p.sun[0] = light[0];
             p.sun[1] = light[1];
             p.sun[2] = light[2];
-            p.sun[3] = std::max(m_grassGusts, 0.0f);
+            p.sun[3] = Gusts();
             p.cascade[0] = 0.01f;                   // (a cube texel a few units out: about a centimetre)
             p.cascade[1] = 1e9f;
             p.cascade[2] = 2e9f;

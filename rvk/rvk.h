@@ -319,6 +319,8 @@ public:
     void SetStatelMode(uint32_t mode);
     // Wind for small plants (grass, bushes, flowers): 0 = still.
     void SetSway(float strength) { m_sway = strength; m_constantsDirty = true; m_frameLightsDirty = true; }
+    void SetWindStorm(float scale) { m_windStormScale = scale; }   // RVK_WindStorm (wind.cpp)
+    void SetStormTint(bool on) { m_stormTint = on; }               // RVK_StormTint (Draw: the game's storm sheet)
     // Grass and plants bending out of the way of characters walking through them (0 = off; scales reach and bend).
     void SetGrassPush(float strength) { m_grassPush = strength; m_frameLightsDirty = true; }
     // Plants' big quads split into pieces for smooth bending (0 = off; 1 = pieces about 0.3 units across).
@@ -1064,6 +1066,8 @@ private:
     double SkyClock() const;
     float SkyCloudiness() const;
     void SkyWind(float out[2]) const;
+    void UpdateWind();                           // the frame's shared wind (wind.cpp): direction, strength, gusts, clock
+    float Gusts() const { return std::max(m_grassGusts, 0.0f) * m_windGusts; }   // RVK_GrassGusts x the storm's
     float m_cloudWindSpeed = 8.0f;               // the clouds' drift (world units a second), eased (UpdateCloudDrift)
     static const char* SkyName(float cloudiness);
     bool m_shadowIsMoon = false;                 // ... the moon (FrameLights moon.w)
@@ -1826,6 +1830,15 @@ private:
     WeatherState m_weatherGame;                  // the game's, as last handed over
     double m_weatherGameTime = -1e9;             // when (m_frameClock)
     float m_rain = 0.0f;                         // how hard it rains now, 0..1 (eased towards the target)
+    // The shared wind (wind.cpp UpdateWind, read through Wind()): every swaying, falling and drifting thing's.
+    float m_windDir[2] = {0.848f, 0.530f};       // where it blows (world x, z, unit)
+    float m_windStrength = 1.0f;                 // x the sway: 1 calm .. ~3 in a full storm
+    float m_windGusts = 1.0f;                    // x RVK_GrassGusts: stronger gust fronts in storms
+    float m_storm = 0.0f;                        // 0 .. 1: how stormy (the rain, eased)
+    float m_windStormScale = 1.0f;               // RVK_WindStorm: how strong storms make the wind, x
+    double m_windClockPrev = -1.0;               // m_frameClock at the last update
+    bool m_stormTint = false;                    // RVK_StormTint: the game's storm tint drawn (with the new weather)
+    uint32_t m_stormTintSkipped = 0;             // its draws left out (the wind log line)
     float m_rainWind[3] = {0, 0, 0};
     double m_rainClock = 0.0;                    // the rain's own time (s), for the drops' fall
     double m_rainLastClock = -1.0;

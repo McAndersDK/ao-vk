@@ -1394,7 +1394,11 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
             dev.SetRenderState(RS_DESTBLEND, BLEND_INVSRCALPHA);
             dev.SetRenderState(RS_ZWRITEENABLE, 1);
             dev.SetRenderState(RS_ZFUNC, CMP_ALWAYS);
-            dev.SetTexture(0, nullptr);
+            static Texture* tintTex = [&] {      // (the game's: an 8 x 8 white texture under the vertex colour)
+                std::vector<uint32_t> white(64, 0xFFFFFFFFu);
+                return dev.CreateTexture(8, 8, white.data());
+            }();
+            dev.SetTexture(0, tintTex);
             dev.SetTextureStageState(0, TSS_COLOROP, TOP_SELECTARG2);
             dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG2);   // (the vertex colour's alpha)
             dev.SetTextureStageState(0, TSS_ALPHAARG2, TA_DIFFUSE);

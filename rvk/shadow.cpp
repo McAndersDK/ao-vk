@@ -1428,7 +1428,7 @@ void Device::DrawShadowItem(VkCommandBuffer cmd, ShadowBind& bind, ShadowItem& i
                 r.leafWind[0] = wind[0];
                 r.leafWind[1] = wind[1];
                 r.leafWind[2] = m_leaf.wind * wind[3];
-                r.leafWind[3] = std::max(m_grassGusts, 0.0f);
+                r.leafWind[3] = Gusts();
             }
         }
         item.record = AppendShadowRecord(r);
