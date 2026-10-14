@@ -1925,7 +1925,7 @@ bool g_smoke = false;             // --smoke: a smoke source on the ground in fr
 bool g_smokeWalker = false;       // --smoke-walker: a "character" walking to and fro through the smoke
 bool g_smokeGame = false;         // --smoke-game: the source as the game's barrel smoke hands it over (small, no push
                                   // of its own, 6 s, the game's wind)
-float g_smokeDensity = 1.0f;      // --smoke-density X (RVK_SmokeDensity)
+float g_smokeDensity = 1.0f;      // --smoke-density X (RVK_SmokeThick)
 float g_smokeWindScale = 1.0f;    // --smoke-wind X: the game's wind x X
 float g_smokeWisps = 1.0f;        // --smoke-wisps X (RVK_SmokeWisps)
 bool g_smokeHalf = true;          // --smoke-full: RVK_SmokeHalf off

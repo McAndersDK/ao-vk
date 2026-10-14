@@ -139,7 +139,7 @@ Setting g_settings[] = {
     {"RVK_SmokeOn",    "Simulated smoke (needs HDR)",  "Experimental",    Bool,  0, 1, 1, 0, nullptr, 0},
     {"RVK_SmokeQual",  "Smoke: most cells a box (1: 64, 2: 96, 3: 128 a side)",  "Experimental",     Int,   1, 3, 1, 2, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeRes",   "Smoke: cells per world unit (detail)",                    "Experimental",     Float, 4, 24, 1, 12, nullptr, 0, "RVK_SmokeOn"},
-    {"RVK_SmokeDensity","Smoke: how thick",                                         "Experimental",     Float, 0.1f, 8, 0.1f, 1, nullptr, 0, "RVK_SmokeOn"},
+    {"RVK_SmokeThick", "Smoke: how thick",                                         "Experimental",     Float, 0.1f, 8, 0.1f, 1, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeLife",  "Smoke: how long it lasts (x the game's)",                 "Experimental",     Float, 0.25f, 4, 0.25f, 1, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeStir",  "Smoke: how much characters stir it",                      "Experimental",     Float, 0, 2, 0.25f, 1, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeWisps", "Smoke: fine wisps carried by the flow",                   "Experimental",     Float, 0, 1, 0.25f, 1, nullptr, 0, "RVK_SmokeOn"},
@@ -527,7 +527,7 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
         s.enable = V("RVK_SmokeOn") != 0.0f;
         s.quality = uint32_t(V("RVK_SmokeQual"));
         s.resolution = V("RVK_SmokeRes");
-        s.density = V("RVK_SmokeDensity");
+        s.density = V("RVK_SmokeThick");
         s.stir = V("RVK_SmokeStir");
         s.detail = V("RVK_SmokeWisps");
         s.brightness = V("RVK_SmokeBright");
@@ -594,12 +594,18 @@ void Load()
     if (g_loaded) return;
     g_loaded = true;
     ResolveIniPath();
+    for (const Setting& s : g_settings)             // the game's option variables take at most 15 characters: a longer
+        if (std::strlen(s.name) > 15)               // name's slider has no variable behind it and breaks the game
+            RvkLog("settings: %s is longer than 15 characters - it can't be in the Renderer tab", s.name);
     std::vector<bool> inIni;
     for (Setting& s : g_settings) {
         s.value = s.defaultValue;
         char buf[64] = "";
         GetPrivateProfileStringA("Renderer", s.name, "", buf, sizeof(buf), g_iniPath);
         inIni.push_back(buf[0] != 0);
+        // (RVK_SmokeThick was RVK_SmokeDensity - 16 characters, one too many for the game's option variables.)
+        if (!buf[0] && std::strcmp(s.name, "RVK_SmokeThick") == 0)
+            GetPrivateProfileStringA("Renderer", "RVK_SmokeDensity", "", buf, sizeof(buf), g_iniPath);
         if (buf[0]) {
             s.value = float(std::atof(buf));
         } else if (s.legacyEnv && GetEnvironmentVariableA(s.legacyEnv, buf, sizeof(buf)) && buf[0]) {
@@ -670,7 +676,7 @@ void Set(const char* name, float value)
 {
     Load();
     Setting* s = Find(name);
-    if (!s) return;
+    if (!s || !std::isfinite(value)) return;    // (a broken slider sent NaN every frame - user, 2026-10-14)
     float v = Clamp(*s, value);
     if (v == s->value) return;
     s->value = v;

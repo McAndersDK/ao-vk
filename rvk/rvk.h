@@ -576,7 +576,7 @@ public:
         bool enable = false;                     // RVK_SmokeOn
         uint32_t quality = 2;                    // RVK_SmokeQual: a box's cells a side at most: 1 64, 2 96, 3 128
         float resolution = 12.0f;               // RVK_SmokeRes: cells per world unit (a bigger box has more)
-        float density = 1.0f;                   // RVK_SmokeDensity: how thick, x
+        float density = 1.0f;                   // RVK_SmokeThick: how thick, x
         float stir = 1.0f;                      // RVK_SmokeStir: how much characters move it (0 not at all)
         float detail = 1.0f;                    // RVK_SmokeWisps: the wisps finer than the grid (0 none)
         float brightness = 1.0f;                // RVK_SmokeBright: its colour, x

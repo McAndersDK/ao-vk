@@ -53,7 +53,7 @@ constexpr float kSimStep = 1.0f / 60.0f;         // a volume steps about this of
 constexpr float kSimFar = 40.0f;                // between its last two states; beyond this (world) half as often
 constexpr uint32_t kNoiseSize = 64;             // the wisps' noise image (cells a side)
 constexpr float kFlowMax = 4.0f;                // the flow image's range (world / s; smoke_common.glsl kSmokeFlowMax)
-constexpr float kExtinction = 3.2f;             // per world unit at density 1 (x RVK_SmokeDensity)
+constexpr float kExtinction = 3.2f;             // per world unit at density 1 (x RVK_SmokeThick)
 
 constexpr uint32_t kSmokeBodies = 8;            // characters stirring a volume (smoke_sim.comp Bodies)
 constexpr float kBodyRadius = 0.35f;            // a character's (world)
@@ -838,7 +838,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
             p.b[i] = (s.pos[i] - corner[i]) / s.size;
         p.b[3] = s.radius / s.size;
         const float puff = Puff(now, v.key);
-        // (A small source denser, so it gives about as much smoke; RVK_SmokeDensity is the extinction's, not this.)
+        // (A small source denser, so it gives about as much smoke; RVK_SmokeThick is the extinction's, not this.)
         const float small = std::clamp(0.6f / std::max(s.radius, 0.05f), 1.0f, 4.0f);
         p.c[0] = fed ? s.rate * small * (0.5f + 0.5f * puff) : 0.0f;
         p.c[1] = fed ? s.heat * (0.6f + 0.8f * puff) : 0.0f;
