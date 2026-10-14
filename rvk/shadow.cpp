@@ -450,6 +450,15 @@ void Device::RecordShadowCaster(uint32_t primitive, uint32_t fvf, uint32_t strid
         double since;
         ~Timed() { if (since > 0.0) d->ProfileCpuAddMs("draw: shadow casters (of geometry + casters)", (d->ProfileCpu() - since) * 16.0); }
     } timed{this, (m_frameNumber & 15) == 0 ? ProfileCpu() : 0.0};
+    // A still piece of a placed object, which casts from the playfield's list (statels.cpp) wherever it is: not again
+    // as drawn - its key, the cache's books and a second shadow item for the same shadow cost the render thread over
+    // a city (~900 of 4000 casters, user 2026-10-14). (One that sways or carries leaves still casts as drawn: ours
+    // stands still.)
+    if (VisualKind(m_drawVisualKind) == VisualKind::Static && !(m_drawSway[3] > 0.5f) && !m_drawLeaves &&
+        StatelPieceCasting(m_world, vertexCount, indexCount)) {
+        ++m_statelCoveredThisFrame;
+        return;
+    }
     UpdateFrameEye();
     // Most casters (a whole frame's worth) share one camera, the world's: try the last match first, not the scan.
     uint32_t view = m_casterViewLast;
