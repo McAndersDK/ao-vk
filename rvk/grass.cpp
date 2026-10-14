@@ -740,14 +740,14 @@ bool Device::CreateGrassResources(std::string* error)
 {
     DestroyGrassResources();
     // One set: 0 the camera (uniform), 2 the blades, 3 the trails, 4 the frame lights, 5 the sun's shadows, 6 the point
-    // lights', 7 the clouds'.
-    VkDescriptorSetLayoutBinding b[7] = {};
-    const uint32_t numbers[7] = {0, 2, 3, 4, 5, 6, 7};
-    const VkDescriptorType types[7] = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    // lights', 7 the clouds', 8 the terrain's shade (terrain_sun.cpp).
+    VkDescriptorSetLayoutBinding b[8] = {};
+    const uint32_t numbers[8] = {0, 2, 3, 4, 5, 6, 7, 8};
+    const VkDescriptorType types[8] = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                                        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                       VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};
-    for (int i = 0; i < 7; ++i) {
+                                       VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};
+    for (int i = 0; i < 8; ++i) {
         b[i].binding = numbers[i];
         b[i].descriptorType = types[i];
         b[i].descriptorCount = 1;
@@ -755,7 +755,7 @@ bool Device::CreateGrassResources(std::string* error)
     }
     VkDescriptorSetLayoutCreateInfo sl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     sl.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-    sl.bindingCount = 7;
+    sl.bindingCount = 8;
     sl.pBindings = b;
     if (!Check(vkCreateDescriptorSetLayout(m_device, &sl, nullptr, &m_grassSetLayout),
                "vkCreateDescriptorSetLayout", error))
@@ -1865,7 +1865,10 @@ void Device::DrawGrassTiles(VkCommandBuffer cmd)
     VkDescriptorImageInfo shadowInfo{m_shadowSampler, m_shadowView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkDescriptorImageInfo cubeInfo{m_cubeSampler, m_cubeArrayView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkDescriptorImageInfo cloudInfo{m_linearSampler, CloudShadowView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet writes[7] = {};
+    const bool terrainMap = m_terrainSunMap && m_terrainSunMap->m_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkDescriptorImageInfo terrainInfo{m_linearSampler, terrainMap ? m_terrainSunMap->m_view : m_blackTexture->m_view,
+                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet writes[8] = {};
     for (auto& w : writes) {
         w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w.descriptorCount = 1;
@@ -1891,7 +1894,10 @@ void Device::DrawGrassTiles(VkCommandBuffer cmd)
     writes[6].dstBinding = 7;
     writes[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[6].pImageInfo = &cloudInfo;
-    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_grassLayout, 0, 7, writes);
+    writes[7].dstBinding = 8;
+    writes[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[7].pImageInfo = &terrainInfo;
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_grassLayout, 0, 8, writes);
     vkCmdBindIndexBuffer(cmd, m_grassIndex, 0, VK_INDEX_TYPE_UINT32);
     // Which of the frame's 64 lights reach a tile, so a blade only tests the few that matter (the frame lights the
     // scene lights by too, so only with the light override on).

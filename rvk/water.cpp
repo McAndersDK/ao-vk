@@ -239,11 +239,11 @@ bool Device::CreateWaterResources(std::string* error)
     DestroyWaterResources();
     // One pushed set: 0 the block, 2 the mesh's vertices, 4 the frame lights, 5 the sun's shadows, 7 the water map, 8
     // the scene's depth, 9 the scene, 10 the detail texture, 11 the game's texture, 12 the environment probe's atlas, 13 the disturbance field,
-    // 14 the clouds' shadow.
-    const uint32_t numbers[12] = {0, 2, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14};
-    VkDescriptorSetLayoutBinding b[12] = {};
+    // 14 the clouds' shadow, 15 the terrain's shade (terrain_sun.cpp).
+    const uint32_t numbers[13] = {0, 2, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+    VkDescriptorSetLayoutBinding b[13] = {};
     const VkShaderStageFlags both = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    for (int i = 0; i < 12; ++i) {
+    for (int i = 0; i < 13; ++i) {
         b[i].binding = numbers[i];
         b[i].descriptorCount = 1;
         b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -254,7 +254,7 @@ bool Device::CreateWaterResources(std::string* error)
     b[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     VkDescriptorSetLayoutCreateInfo sl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     sl.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-    sl.bindingCount = 12;
+    sl.bindingCount = 13;
     sl.pBindings = b;
     if (!Check(vkCreateDescriptorSetLayout(m_device, &sl, nullptr, &m_waterSetLayout), "vkCreateDescriptorSetLayout",
                error))
@@ -1624,9 +1624,12 @@ void Device::DrawWater(const WaterVertex* vertices, uint32_t vertexCount, const 
         VkDescriptorImageInfo simInfo{m_waterRepeatSampler, m_waterSimLive ? m_waterSimView[m_waterSimCur] : m_waterDetail->m_view,
                                       m_waterSimLive ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkDescriptorImageInfo cloudInfo{m_linearSampler, CloudShadowView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        VkWriteDescriptorSet writes[12] = {};
-        const uint32_t bindings[12] = {0, 2, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14};
-        for (int i = 0; i < 12; ++i) {
+        const bool terrainMap = m_terrainSunMap && m_terrainSunMap->m_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkDescriptorImageInfo terrainInfo{m_linearSampler, terrainMap ? m_terrainSunMap->m_view : m_blackTexture->m_view,
+                                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet writes[13] = {};
+        const uint32_t bindings[13] = {0, 2, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+        for (int i = 0; i < 13; ++i) {
             writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].descriptorCount = 1;
             writes[i].dstBinding = bindings[i];
@@ -1647,7 +1650,8 @@ void Device::DrawWater(const WaterVertex* vertices, uint32_t vertexCount, const 
         writes[9].pImageInfo = &envInfo;
         writes[10].pImageInfo = &simInfo;
         writes[11].pImageInfo = &cloudInfo;
-        vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_waterLayout, 0, 12, writes);
+        writes[12].pImageInfo = &terrainInfo;
+        vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_waterLayout, 0, 13, writes);
         if (kind == 2) {
             vkCmdDraw(cmd, idxCount, 1, 0, 0);
         } else if (meshMode) {

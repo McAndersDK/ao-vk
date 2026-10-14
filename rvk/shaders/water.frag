@@ -18,6 +18,20 @@ layout(set = 0, binding = 11) uniform sampler2D gameTexture;           // the ga
 layout(set = 0, binding = 12) uniform sampler2D envAtlas;              // the environment probe (env_common.glsl)
 layout(set = 0, binding = 2, std430) readonly buffer Feet { FootSegment feet[]; };   // the grid: the falls' feet
 layout(set = 0, binding = 14) uniform sampler2D cloudShadow;   // the clouds' (rvk clouds.cpp)
+layout(set = 0, binding = 15) uniform sampler2D terrainSunMap; // the terrain's shade (rvk terrain_sun.cpp)
+
+// At a point: 1 in the sun, 0 under the terrain hiding it (FL.terrainSun: where, its weight) - per point, not the eye's
+// (a lake went dark or lit all at once as the eye crossed a hill's shade).
+float TerrainSunAt(vec3 q)
+{
+    if ((floatBitsToUint(FL.terrainSun.w) & 0xFFFFFu) == 0u || FL.terrainSun2.y <= 0.0)
+        return 1.0;
+    vec2 uv = (q.xz - FL.terrainSun.xy) * FL.terrainSun.z;
+    vec2 edge = min(uv, 1.0 - uv);
+    float inside = smoothstep(0.0, 0.03, min(edge.x, edge.y));
+    float need = textureLod(terrainSunMap, clamp(uv, 0.0, 1.0), 0.0).r;
+    return mix(1.0, smoothstep(need - 1.0, need + 3.0, q.y + 2.0), FL.terrainSun2.y * inside);
+}
 #include "cloud_shadow_common.glsl"
 #include "env_common.glsl"
 
@@ -336,7 +350,7 @@ void main()
     vec3 L = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
     // (A fall lies on its cliff: looked up a little out from the sheet, or the cliff shadows it.)
     float shadow = SunShadow(vPos + (fall ? N * 0.6 : vec3(0.0)) + vec3(0.0, 0.05, 0.0));
-    vec3 sun = FL.sunColor.rgb * mix(1.0, FL.terrainSun2.x, FL.terrainSun2.y);   // (low sun under the mountains: none)
+    vec3 sun = FL.sunColor.rgb * TerrainSunAt(vPos);   // (under the terrain hiding the sun: none)
     vec3 ambient = W.ambient.rgb;
     vec3 light = ambient + sun * (max(L.y, 0.0) * shadow);
 

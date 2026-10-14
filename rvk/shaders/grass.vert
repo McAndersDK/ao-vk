@@ -33,6 +33,7 @@ layout(set = 0, binding = 3, std430) readonly buffer Trails { uint trail[]; };
 layout(set = 0, binding = 5) uniform sampler2DArrayShadow shadowMap;            // the sun's cascades
 layout(set = 0, binding = 6) uniform samplerCubeArrayShadow pointShadowMaps;     // the point lights' cubes
 layout(set = 0, binding = 7) uniform sampler2D cloudShadow;                      // the clouds' (rvk clouds.cpp)
+layout(set = 0, binding = 8) uniform sampler2D terrainSunMap;                    // the terrain's shade (terrain_sun.cpp)
 #include "cloud_shadow_common.glsl"
 // Which of the frame's 64 lights reach this tile (grass.cpp: the tile's box against each light's range).
 layout(push_constant) uniform GrassPush { uvec2 lightMask; } GP;
@@ -271,7 +272,16 @@ void main()
     // The terrain's shade from a low sun, as on the ground (ffp FlatShade: the darker of it and the shadows, at the
     // shadows' own strength) - the eye's place (grass is drawn near it). Brighter than the game's ground grass under
     // the mountains, ours stood out until the game's took over further off (user, 2026-10-13).
-    float terrainLit = mix(1.0, FL.terrainSun2.x, FL.terrainSun2.y);
+    // (At the blade's own place, as the ground (ffp TerrainSun, 2 units' grace) - by the eye's alone, the whole field
+    // went dark or lit at once as the eye crossed a hill's shade, the sun higher than before - user, 2026-10-14.)
+    float terrainLit = 1.0;
+    if ((floatBitsToUint(FL.terrainSun.w) & 0xFFFFFu) != 0u && FL.terrainSun2.y > 0.0) {
+        vec2 tsUv = (root.xz - FL.terrainSun.xy) * FL.terrainSun.z;
+        vec2 tsEdge = min(tsUv, 1.0 - tsUv);
+        float tsInside = smoothstep(0.0, 0.03, min(tsEdge.x, tsEdge.y));
+        float need = textureLod(terrainSunMap, clamp(tsUv, 0.0, 1.0), 0.0).r;
+        terrainLit = mix(1.0, smoothstep(need - 1.0, need + 3.0, root.y + 2.0), FL.terrainSun2.y * tsInside);
+    }
     shade = min(shade, 1.0 - (1.0 - terrainLit) * FL.terrainSun2.z);
     vec3 groundN = normalize(vec3(up.x * 0.5, 1.0, up.z * 0.5));
     vec3 sun = GF.sunColour.rgb * max(dot(groundN, -normalize(GF.sunDir.xyz + vec3(0.0, -1e-6, 0.0))), 0.0);
@@ -311,7 +321,7 @@ void main()
         float sunOn = clamp(dot(FL.sunColor.rgb, kLuma) * 2.5, 0.0, 1.0) * smoothstep(0.0, 0.1, Ls.y);
         float canopyShade = mix(1.0, smoothstep(0.0, 0.75, t), canopy * 0.7 * (1.0 - Ls.y));
         // (Low sun: the eye's place under the mountains hiding it - grass is drawn near the eye - rvk terrain_sun.cpp.)
-        float sunlit = shade * sunOn * canopyShade * GF.look.z * mix(1.0, FL.terrainSun2.x, FL.terrainSun2.y);
+        float sunlit = shade * sunOn * canopyShade * GF.look.z * terrainLit;
         // Rounded: the edge towards the sun lighter, the other darker (zero-mean across the blade, so the field stays
         // as bright as its ground - which already holds the sunlight).
         vec3 face = vec3(vh.x, 0.0, vh.y) / max(vl, 1e-3);
