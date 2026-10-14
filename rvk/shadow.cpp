@@ -691,7 +691,8 @@ void Device::CacheCaster(uint64_t key, const ShadowCaster& c, const void* vertic
         float d = std::max(std::max(e.boundsMin[j] - m_frameEye[j], 0.0f), m_frameEye[j] - e.boundsMax[j]);
         d2 += d * d;
     }
-    if (d2 > 9.0f * kCasterCacheRange * kCasterCacheRange) {
+    const float keep = CasterKeepRange();
+    if (d2 > keep * keep) {
         ++m_cacheRefusedFar;
         m_cacheRefusedFarD = std::sqrt(d2);
         return;
@@ -783,7 +784,8 @@ void Device::UpdateCasterCache()
             // partly visible), so only the box's centre on screen counts as in view.
             float centre[3];
             for (int j = 0; j < 3; ++j) centre[j] = 0.5f * (e.boundsMin[j] + e.boundsMax[j]);
-            if (d2 > 16.0f * kCasterCacheRange * kCasterCacheRange) {
+            const float forget = CasterKeepRange() * (4.0f / 3.0f);
+            if (d2 > forget * forget) {
                 ++m_forgottenFar;
                 ForgetCachedCaster(it);
             } else if (m_frameViewProjValid && d2 < 20.0f * 20.0f && m_frameNumber - e.lastSeen >= 60 &&

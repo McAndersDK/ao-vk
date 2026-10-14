@@ -875,7 +875,11 @@ private:
     // ... and after them the ground grass's own (grass_shadow.vert; the nearest cascade's square): receivers weigh it
     // apart from the other casters' (a field shading itself in full would be far darker than its ground).
     static constexpr uint32_t kGrassShadowLayer = kShadowCascades, kShadowLayers = kShadowCascades + 1;
-    static constexpr float kCasterCacheRange = 60.0f; // remembered casters: kept within 3x, forgotten beyond 4x
+    static constexpr float kCasterCacheRange = 60.0f; // remembered casters: kept within 3x, forgotten beyond 4x - at least
+    // As far as the sun's shadows reach (the widest cascade: its half width, and its centre ahead of the camera): a
+    // caster further off than 180 units was never remembered, and its shadow on a cliff in view went when the camera
+    // looked away from it (user, 2026-10-14). Forgotten beyond 4/3 of it.
+    float CasterKeepRange() const { return std::max(3.0f * kCasterCacheRange, 1.4f * m_shadowRange); }
     struct ShadowCaster {
         uint32_t primitive, stride, vertexCount, indexCount;
         VkDeviceSize vbOffset, ibOffset;
