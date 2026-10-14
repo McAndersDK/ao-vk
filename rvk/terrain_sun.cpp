@@ -4,7 +4,8 @@
 // (user, 2026-10-13). The game's terrain as drawn (its base pass, world positions) is kept in a height grid round the
 // eye (16 world units a cell, 256 a side; moved with the eye); from it, each cell's height to see the sun over the
 // terrain (FL.terrainSun: ffp_main TerrainSun - per point, in the world) and the eye's own (FL.terrainSun2.x: grass,
-// water, the air - drawn near the eye). Weighted in under ~20 degrees (full under ~10).
+// water, the air - drawn near the eye). Full up to a sun of ~37 degrees, faded out by ~58 (the terrain casts nothing
+// into the shadow map: this is its only shade).
 #include "internal.h"
 
 #include <algorithm>
@@ -101,9 +102,11 @@ void Device::UpdateTerrainSun(VkCommandBuffer cmd)
     if (l < 1e-6f)
         return;
     for (float& v : to) v /= l;
-    // (Weighted in under ~20 degrees, full under ~10: higher, things' shadows have it - and mountains rarely.)
-    // (None once it's down: no sunlight to take - by night the ground's lightmap would only darken.)
-    const float t = std::clamp((to[1] - 0.17f) / (0.35f - 0.17f), 0.0f, 1.0f);
+    // (Full up to ~37 degrees, faded out by ~58: the terrain casts nothing into the shadow map, so this is its only
+    // shade - weighted in only under 20 degrees, a cliff with the sun at 21 behind it left the grass before it lit
+    // (user, 2026-10-14); a high sun is seldom behind a hill. None once it's down: no sunlight to take - by night
+    // the ground's lightmap would only darken.)
+    const float t = std::clamp((to[1] - 0.6f) / (0.85f - 0.6f), 0.0f, 1.0f);
     m_tsWeight = (1.0f - t * t * (3.0f - 2.0f * t)) * std::clamp((to[1] + 0.03f) / 0.03f, 0.0f, 1.0f);
     if (m_tsWeight <= 0.0f)
         return;
