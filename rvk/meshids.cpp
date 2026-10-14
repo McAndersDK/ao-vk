@@ -123,7 +123,9 @@ void Device::HashMeshId(MeshInfo& info, uint32_t fvf, uint32_t stride, const voi
 // This draw's piece, for the object (visual) drawing it: the meshes it can be narrowed by each of its pieces.
 void Device::NoteMeshPiece()
 {
-    if (m_meshIds.empty())
+    // (Its results feed the statistics and the log alone: worked out on one frame in 16 - the same objects get named,
+    // a little later. Each object's lookup by its visual every frame was ~3% of the render thread over a city.)
+    if (m_meshIds.empty() || (m_frameNumber & 15) != 0)
         return;
     // An object (visual) once: its result kept, its draws on later frames skip the work - the candidate lists built,
     // sorted and intersected per piece, every frame, cost the render thread ~2 ms over a city (4500 draws; user
