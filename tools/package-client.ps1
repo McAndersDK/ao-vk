@@ -10,8 +10,9 @@
 #   <OutputDir>\ao-vk-package\
 #   <OutputDir>\ao-vk-package.zip
 #
-# The package includes randy31.dll and an install.ps1 helper. The installer preserves the game's original
-# randy31.dll as randy31_orig.dll once; plugins in the client's ao-vk-plugins folder are left as they are.
+# The package includes randy31.dll, the AOPlugins plugin (AOPlugins\ao-vk.dll: the Renderer tab, aoplugin/) and an
+# install.ps1 helper. The installer preserves the game's original randy31.dll as randy31_orig.dll once and puts
+# ao-vk.dll into the client's AOPlugins folder; plugins in the client's ao-vk-plugins folder are left as they are.
 
 param(
     [string]$OutputDir = "",
@@ -33,18 +34,23 @@ if (-not $OutputDir) { $OutputDir = Join-Path $repo "dist" }
 $OutputDir = [System.IO.Path]::GetFullPath($OutputDir)
 $packageDir = Join-Path $OutputDir "ao-vk-package"
 $dll = Join-Path $repo "build\linux-release\randy31.dll"
+$plugin = Join-Path $repo "build\aoplugin\ao-vk.dll"
 
 # 1. Build, unless requested not to.
 if (-not $NoBuild) {
     $wslRepo = "/mnt/" + $repo.Substring(0, 1).ToLower() + ($repo.Substring(2) -replace '\\', '/')
     Write-Host "package-client: building in WSL ($Distro)"
-    $buildScript = "cd '$wslRepo' && { [ -f build/linux-release/build.ninja ] || cmake --preset linux-release >/dev/null; } && cmake --build --preset linux-release"
+    $buildScript = "cd '$wslRepo' && { [ -f build/linux-release/build.ninja ] || cmake --preset linux-release >/dev/null; } && cmake --build --preset linux-release" +
+                   " && cd aoplugin && { [ -f ../build/aoplugin/build.ninja ] || cmake --preset linux-release >/dev/null; } && cmake --build --preset linux-release"
     & wsl -d $Distro -- bash -lc $buildScript
     if ($LASTEXITCODE -ne 0) { Fail "the build failed" }
 }
 
 if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) {
     Fail "no built DLL at $dll (build first or omit -NoBuild)"
+}
+if (-not (Test-Path -LiteralPath $plugin -PathType Leaf)) {
+    Fail "no built plugin at $plugin (build first or omit -NoBuild)"
 }
 
 # 2. Recreate the package directory so removed source files don't linger.
@@ -54,6 +60,8 @@ if (Test-Path -LiteralPath $packageDir) {
 New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
 
 Copy-Item -LiteralPath $dll -Destination (Join-Path $packageDir "randy31.dll")
+New-Item -ItemType Directory -Path (Join-Path $packageDir "AOPlugins") -Force | Out-Null
+Copy-Item -LiteralPath $plugin -Destination (Join-Path $packageDir "AOPlugins\ao-vk.dll")
 
 if ($OriginalDll) {
     if (-not (Test-Path -LiteralPath $OriginalDll -PathType Leaf)) {
@@ -77,6 +85,7 @@ function Fail([string]$message) {
 
 $package = $PSScriptRoot
 $sourceDll = Join-Path $package "randy31.dll"
+$sourcePlugin = Join-Path $package "AOPlugins\ao-vk.dll"
 if (-not (Test-Path (Join-Path $Client "AnarchyOnline.exe"))) {
     Fail "no AnarchyOnline.exe in $Client"
 }
@@ -84,6 +93,7 @@ if (Get-Process -Name "AnarchyOnline" -ErrorAction SilentlyContinue) {
     Fail "the game is running - close it first"
 }
 if (-not (Test-Path $sourceDll)) { Fail "package is missing randy31.dll" }
+if (-not (Test-Path $sourcePlugin)) { Fail "package is missing AOPlugins\ao-vk.dll" }
 
 $target = Join-Path $Client "randy31.dll"
 $orig = Join-Path $Client "randy31_orig.dll"
@@ -104,6 +114,18 @@ Copy-Item $sourceDll $target -Force
 
 $hash = (Get-FileHash $target -Algorithm SHA256).Hash.Substring(0, 12).ToLower()
 Write-Host "install: randy31.dll installed to $Client ($hash)"
+
+# The Renderer tab: a plugin for AOPlugins (its version.dll in the client folder loads the AOPlugins folder).
+$plugins = Join-Path $Client "AOPlugins"
+New-Item -ItemType Directory -Path $plugins -Force | Out-Null
+Copy-Item $sourcePlugin $plugins -Force
+Write-Host "install: ao-vk.dll installed to $plugins"
+$version = Join-Path $Client "version.dll"
+$isAOPlugins = (Test-Path $version) -and
+    [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($version)).Contains("=== AOPlugins session")
+if (-not $isAOPlugins) {
+    Write-Host "install: note - AOPlugins isn't installed (version.dll), so there is no Renderer tab in the options window; settings are in randy-vk.ini" -ForegroundColor Yellow
+}
 Write-Host "install: done"
 '@
 Set-Content -LiteralPath (Join-Path $packageDir "install.ps1") -Value $installer -Encoding UTF8
@@ -115,13 +137,17 @@ ao-vk package
 
 Contents:
 - randy31.dll: ao-vk renderer
+- AOPlugins\ao-vk.dll: the Renderer tab in the options window (F10), a plugin for AOPlugins
 - install.ps1: installer helper
 
 Install (PowerShell):
   powershell -ExecutionPolicy Bypass -File .\install.ps1 -Client "C:\path\to\client"
 
 Close Anarchy Online before installing. The installer preserves the existing renderer as
-randy31_orig.dll if a backup does not already exist. Review install.ps1 before running it.
+randy31_orig.dll if a backup does not already exist, and puts ao-vk.dll into the client's
+AOPlugins folder. The Renderer tab needs AOPlugins (its version.dll in the client folder);
+without it, settings are changed in randy-vk.ini or with the hotkeys. Review install.ps1
+before running it.
 "@
 Set-Content -LiteralPath (Join-Path $packageDir "README.txt") -Value $readme -Encoding UTF8
 

@@ -1,5 +1,6 @@
 # Builds ao-vk (in WSL) and puts it into a client: randy31.dll into the client folder (the game's own kept as
-# randy31_orig.dll). Plugins in the client's ao-vk-plugins folder (docs/ui-dll.md) are left as they are.
+# randy31_orig.dll), and the AOPlugins plugin (aoplugin/: ao-vk.dll, the Renderer tab) into the client's AOPlugins
+# folder. Plugins in the client's ao-vk-plugins folder (docs/ui-dll.md) are left as they are.
 #
 # Usage (from anywhere):  powershell -ExecutionPolicy Bypass -File tools\update-client.ps1 [-NoBuild] [-Client <dir>]
 #                         [-Distro <WSL distro>]
@@ -28,11 +29,14 @@ $dll = Join-Path $repo "build\linux-release\randy31.dll"
 if (-not $NoBuild) {
     $wslRepo = "/mnt/" + $repo.Substring(0, 1).ToLower() + ($repo.Substring(2) -replace '\\', '/')
     Write-Host "update-client: building in WSL ($Distro)"
-    $script = "cd '$wslRepo' && { [ -f build/linux-release/build.ninja ] || cmake --preset linux-release >/dev/null; } && cmake --build --preset linux-release"
+    $script = "cd '$wslRepo' && { [ -f build/linux-release/build.ninja ] || cmake --preset linux-release >/dev/null; } && cmake --build --preset linux-release" +
+              " && cd aoplugin && { [ -f ../build/aoplugin/build.ninja ] || cmake --preset linux-release >/dev/null; } && cmake --build --preset linux-release"
     wsl -d $Distro -- bash -lc $script
     if ($LASTEXITCODE -ne 0) { Fail "the build failed" }
 }
 if (-not (Test-Path $dll)) { Fail "no $dll - build first" }
+$plugin = Join-Path $repo "build\aoplugin\ao-vk.dll"
+if (-not (Test-Path $plugin)) { Fail "no $plugin - build first" }
 
 # 2. The renderer: the game's randy31.dll becomes randy31_orig.dll (once), ours takes its place.
 $target = Join-Path $Client "randy31.dll"
@@ -46,4 +50,18 @@ if (-not (Test-Path $orig)) {
 Copy-Item $dll $target -Force
 $hash = (Get-FileHash $target -Algorithm SHA256).Hash.Substring(0, 12).ToLower()
 Write-Host "update-client: randy31.dll -> $Client ($hash)"
+
+# 3. The AOPlugins plugin. It only runs with AOPlugins' version.dll in the client folder (another version.dll, e.g.
+# the AOReloaded fork, ignores the folder).
+$plugins = Join-Path $Client "AOPlugins"
+New-Item -ItemType Directory -Force $plugins | Out-Null
+Copy-Item $plugin $plugins -Force
+$hash = (Get-FileHash (Join-Path $plugins "ao-vk.dll") -Algorithm SHA256).Hash.Substring(0, 12).ToLower()
+Write-Host "update-client: ao-vk.dll -> $plugins ($hash)"
+$version = Join-Path $Client "version.dll"
+$isAOPlugins = (Test-Path $version) -and
+    [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($version)).Contains("=== AOPlugins session")
+if (-not $isAOPlugins) {
+    Write-Host "update-client: note - the client's version.dll isn't AOPlugins, so ao-vk.dll isn't loaded (AOPlugins: tools\update-client.ps1 there)" -ForegroundColor Yellow
+}
 Write-Host "update-client: done"
