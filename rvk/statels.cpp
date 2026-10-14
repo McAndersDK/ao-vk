@@ -5,11 +5,12 @@
 // was which piece - and two wall pieces turned round one pivot were taken for one (sun42, 2026-10-14).
 //
 // The list: ao-assets (python -m aoassets statels) reads each playfield's statel file (rdb 1000003) and writes
-// <client>/randy-vk/statels/<playfield>.bin - the placements, and the meshes' shadow-casting pieces (no animated
-// meshes: grass clumps, seaweed and swaying shrubs stay the live draws'), with alpha masks for cut-out pieces. Here:
-// one buffer of their vertices and indices, every piece placed (its world matrix as the game builds it: the
-// statel's yaw, pitch and roll as qZ * qX * qY, scale, position; the piece's own frame matrix before), a grid over
-// the ground for the frame's range, and the pieces within the shadows' reach added to the shadow items each frame.
+// <client>/randy-vk/statels/<playfield>.bin - the placements (each statel's frame matrix as N3 builds it from the
+// file: yaw, pitch and roll as qZ * qX * qY, or a yaw with a stretch and a lean), and the meshes' shadow-casting
+// pieces (no animated meshes: grass clumps, seaweed and swaying shrubs stay the live draws'; no frames named
+// "invis", which the game hides), with alpha masks for cut-out pieces. Here: one buffer of their vertices and
+// indices, every piece placed (its frame matrix in the mesh, then the statel's), a grid over the ground for the
+// frame's range, and the pieces within the shadows' reach added to the shadow items each frame.
 // They add to what the game draws (a depth map takes the same caster twice unharmed).
 //
 // Mode 1 (the default) casts only once the placement is confirmed: the first statel pieces the game draws are
@@ -30,7 +31,10 @@ using namespace detail;
 namespace {
 
 constexpr float kStatelCell = 64.0f;            // grid cells (world units)
-constexpr uint32_t kVerifyMatches = 30;         // matching draws that confirm the placement
+// Matching draws that confirm the placement: of statels turned by yaw, pitch and roll; of stretched and leaned ones
+// (flags & 1: fences and walls laid along a path - checked apart, as their decode is apart).
+constexpr uint32_t kVerifyMatches[2] = {30, 10};
+const char* const kKindName[2] = {"turned", "stretched (fences, walls)"};
 
 #pragma pack(push, 1)
 struct PackHeader {
@@ -47,13 +51,19 @@ struct PackPiece {
     float alphaRef;
     float boxMin[3], boxMax[3];
 };
-struct PackStatel { float pos[3]; int16_t yaw, pitch, roll; uint16_t mesh; float scale; uint32_t zone, ordinal; };
+struct PackStatel {
+    float m[12];                                // its frame in the world: rows x, y, z, position (ao-assets)
+    int16_t yaw, pitch, roll;                   // (for the log: degrees; pitch -32768: yaw in 630ths, a stretch)
+    uint16_t mesh;
+    float scale;
+    uint32_t zone, ordinal;
+};
 #pragma pack(pop)
 static_assert(sizeof(PackHeader) == 44, "statel pack header");
 static_assert(sizeof(PackTexture) == 16, "statel pack texture");
 static_assert(sizeof(PackMesh) == 36, "statel pack mesh");
 static_assert(sizeof(PackPiece) == 112, "statel pack piece");
-static_assert(sizeof(PackStatel) == 32, "statel pack statel");
+static_assert(sizeof(PackStatel) == 68, "statel pack statel");
 
 // A piece's identity for m_statelLookup: its counts and where it stands, to an eighth of a unit (the game's matrix
 // and ours agree to a thousandth: offline against the game's frame dumps, 2026-10-14).
@@ -65,48 +75,6 @@ uint64_t PieceKey(uint32_t vertexCount, uint32_t indexCount, const float* at)
     mix(indexCount);
     for (int k = 0; k < 3; ++k) mix(uint64_t(int64_t(std::lround(double(at[k]) * 8.0))));
     return h;
-}
-
-// Hamilton product a * b of (x, y, z, w) quaternions.
-void QuatMul(const double* a, const double* b, double* out)
-{
-    out[0] = a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1];
-    out[1] = a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0];
-    out[2] = a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3];
-    out[3] = a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2];
-}
-
-// A statel's matrix (row vectors) as N3 builds it (FUN_1002777a) and its frame takes it (RRefFrame_t: the quaternion's
-// rotation, scaled, then the position): q = qZ(roll) * qX(pitch) * qY(yaw), each (axis sin(t / 2), cos(t / 2)).
-d3d::Matrix StatelMatrix(const PackStatel& s)
-{
-    const double rad = 6.283185307179586 / 360.0;
-    const double y = s.yaw * rad * 0.5, p = s.pitch * rad * 0.5, r = s.roll * rad * 0.5;
-    const double qy[4] = {0.0, std::sin(y), 0.0, std::cos(y)};
-    const double qx[4] = {std::sin(p), 0.0, 0.0, std::cos(p)};
-    const double qz[4] = {0.0, 0.0, std::sin(r), std::cos(r)};
-    double xy[4], q[4];
-    QuatMul(qx, qy, xy);
-    QuatMul(qz, xy, q);
-    const double x2 = q[0] * 2.0, y2 = q[1] * 2.0, z2 = q[2] * 2.0;
-    const double xx = q[0] * x2, yy = q[1] * y2, zz = q[2] * z2, xyv = q[1] * x2, xz = q[2] * x2, xw = x2 * q[3];
-    const double yz = q[2] * y2, yw = y2 * q[3], zw = z2 * q[3];
-    const double sc = s.scale;
-    d3d::Matrix m{};
-    m.m[0][0] = float((1.0 - yy - zz) * sc);
-    m.m[0][1] = float((xyv + zw) * sc);
-    m.m[0][2] = float((xz - yw) * sc);
-    m.m[1][0] = float((xyv - zw) * sc);
-    m.m[1][1] = float((1.0 - xx - zz) * sc);
-    m.m[1][2] = float((yz + xw) * sc);
-    m.m[2][0] = float((yw + xz) * sc);
-    m.m[2][1] = float((yz - xw) * sc);
-    m.m[2][2] = float((1.0 - xx - yy) * sc);
-    m.m[3][0] = s.pos[0];
-    m.m[3][1] = s.pos[1];
-    m.m[3][2] = s.pos[2];
-    m.m[3][3] = 1.0f;
-    return m;
 }
 
 }  // namespace
@@ -174,8 +142,8 @@ bool Device::LoadStatels(const char* path, uint32_t playfield)
         at += bytes;
         return p;
     };
-    if (std::memcmp(h.magic, "AOSTATEL", 8) != 0 || h.version != 1) {
-        Log("statels: %s is not a statel pack (version 1)", path);
+    if (std::memcmp(h.magic, "AOSTATEL", 8) != 0 || h.version != 2) {
+        Log("statels: %s is not a statel pack of version 2 (ao-assets: python -m aoassets statels)", path);
         return false;
     }
     const auto* textures = reinterpret_cast<const PackTexture*>(section(size_t(h.textures) * sizeof(PackTexture)));
@@ -256,8 +224,11 @@ bool Device::LoadStatels(const char* path, uint32_t playfield)
         const PackMesh& mesh = meshes[st.mesh];
         if (uint64_t(mesh.firstPiece) + mesh.pieces > h.pieces)
             continue;
-        const d3d::Matrix placed = StatelMatrix(st);
-        m_statelPlaced.push_back({st.pos[0], st.pos[1], st.pos[2], st.yaw, st.pitch, st.roll, st.scale, mesh.id});
+        d3d::Matrix placed{};
+        for (int r = 0; r < 4; ++r)
+            for (int c = 0; c < 3; ++c) placed.m[r][c] = st.m[r * 3 + c];
+        placed.m[3][3] = 1.0f;
+        m_statelPlaced.push_back({st.m[9], st.m[10], st.m[11], st.yaw, st.pitch, st.roll, st.scale, mesh.id});
         for (uint32_t k = 0; k < mesh.pieces; ++k) {
             const uint32_t pi = mesh.firstPiece + k;
             const PackPiece& p = pieces[pi];
@@ -267,6 +238,7 @@ bool Device::LoadStatels(const char* path, uint32_t playfield)
             item.world = MulMatrix(local, placed);
             item.piece = pi;
             item.statel = uint32_t(m_statelPlaced.size() - 1);
+            item.kind = st.pitch == -32768 ? 1 : 0;
             TransformBounds(p.boxMin, p.boxMax, item.world, item.boundsMin, item.boundsMax);
             lo[0] = std::min(lo[0], item.boundsMin[0]);
             lo[1] = std::min(lo[1], item.boundsMin[2]);
@@ -316,15 +288,18 @@ bool Device::LoadStatels(const char* path, uint32_t playfield)
     m_statelLookup.reserve(m_statelItems.size());
     for (const StatelItem& it : m_statelItems) {
         const StatelPiece& p = m_statelPieces[it.piece];
-        m_statelLookup.insert(PieceKey(p.vertexCount, p.indexCount, it.world.m[3]));
+        m_statelLookup[PieceKey(p.vertexCount, p.indexCount, it.world.m[3])] |= uint8_t(1u << it.kind);
     }
     m_statelPlayfield = playfield;
-    if (m_statelVerified == 0)
-        m_statelMatched = m_statelMismatched = 0;
-    Log("statels: playfield %u: %u placed, %zu pieces to cast (%u meshes, %u masks), %.1f MB; grid %ux%u; placement %s",
-        playfield, h.statels, m_statelItems.size(), h.meshes, h.textures,
-        double(bi.size + VkDeviceSize(h.texelBytes) * 4) / 1048576.0, m_statelGridW, m_statelGridH,
-        m_statelVerified > 0 ? "confirmed" : m_statelVerified < 0 ? "REFUSED (see above)" : "to be confirmed");
+    for (int k = 0; k < 2; ++k)
+        if (m_statelVerified[k] == 0)
+            m_statelMatched[k] = m_statelMismatched[k] = 0;
+    auto state = [&](int k) {
+        return m_statelVerified[k] > 0 ? "confirmed" : m_statelVerified[k] < 0 ? "REFUSED (see above)" : "to be confirmed";
+    };
+    Log("statels: playfield %u: %u placed, %zu pieces to cast (%u meshes, %u masks), %.1f MB; grid %ux%u; placement %s, "
+        "of stretched ones %s", playfield, h.statels, m_statelItems.size(), h.meshes, h.textures,
+        double(bi.size + VkDeviceSize(h.texelBytes) * 4) / 1048576.0, m_statelGridW, m_statelGridH, state(0), state(1));
     return true;
 }
 
@@ -332,7 +307,7 @@ bool Device::LoadStatels(const char* path, uint32_t playfield)
 // with the same counts should have the draw's matrix.
 void Device::CheckStatelDraw(const d3d::Matrix& world, uint32_t vertexCount, uint32_t indexCount)
 {
-    if (m_statelVerified != 0 || m_statelItems.empty())
+    if ((m_statelVerified[0] != 0 && m_statelVerified[1] != 0) || m_statelItems.empty())
         return;
     const float x = world.m[3][0], y = world.m[3][1], z = world.m[3][2];
     const float cx = std::floor((x - m_statelGridOrigin[0]) / kStatelCell);
@@ -357,15 +332,15 @@ void Device::CheckStatelDraw(const d3d::Matrix& world, uint32_t vertexCount, uin
                     break;
                 }
         if (same) {
-            ++m_statelMatched;
+            ++m_statelMatched[it.kind];
             sameSpot = nullptr;
             break;
         }
         sameSpot = &it;
     }
     if (sameSpot) {
-        ++m_statelMismatched;
-        if (m_statelMismatched <= 4) {
+        const int kind = sameSpot->kind;
+        if (++m_statelMismatched[kind] <= 4) {
             const StatelPlaced& s = m_statelPlaced[sameSpot->statel];
             const auto& a = world.m;
             const auto& b = sameSpot->world.m;
@@ -376,22 +351,55 @@ void Device::CheckStatelDraw(const d3d::Matrix& world, uint32_t vertexCount, uin
                 b[0][0], b[0][1], b[0][2], b[1][0], b[1][1], b[1][2], b[2][0], b[2][1], b[2][2]);
         }
     }
-    if (m_statelMatched >= kVerifyMatches && m_statelMismatched * 5 <= m_statelMatched) {
-        m_statelVerified = 1;
-        Log("statels: placement confirmed - %u drawn pieces as ours (%u otherwise); the placed objects cast", m_statelMatched,
-            m_statelMismatched);
-    } else if (m_statelMismatched >= kVerifyMatches && m_statelMismatched > m_statelMatched) {
-        m_statelVerified = -1;
-        Log("statels: placement REFUSED - %u drawn pieces turned otherwise than ours (%u as ours); the placed objects "
-            "don't cast (RVK_StaticShad=2 casts anyway)", m_statelMismatched, m_statelMatched);
+    for (int k = 0; k < 2; ++k) {
+        if (m_statelVerified[k] != 0)
+            continue;
+        if (m_statelMatched[k] >= kVerifyMatches[k] && m_statelMismatched[k] * 5 <= m_statelMatched[k]) {
+            m_statelVerified[k] = 1;
+            Log("statels: placement of %s statels confirmed - %u drawn pieces as ours (%u otherwise); they cast",
+                kKindName[k], m_statelMatched[k], m_statelMismatched[k]);
+        } else if (m_statelMismatched[k] >= kVerifyMatches[k] && m_statelMismatched[k] > m_statelMatched[k]) {
+            m_statelVerified[k] = -1;
+            Log("statels: placement of %s statels REFUSED - %u drawn pieces turned otherwise than ours (%u as ours); "
+                "they don't cast (RVK_StaticShad=2 casts anyway)", kKindName[k], m_statelMismatched[k], m_statelMatched[k]);
+        }
     }
+}
+
+// "turned confirmed (40 as ours, 0 otherwise), stretched unconfirmed (0, 0)" - for the log and the frame dump.
+std::string Device::StatelPlacementState() const
+{
+    std::string out;
+    for (int k = 0; k < 2; ++k) {
+        char part[96];
+        std::snprintf(part, sizeof(part), "%s%s %s (%u as ours, %u otherwise)", k ? ", " : "", k ? "stretched" : "turned",
+                      m_statelVerified[k] > 0 ? "confirmed" : m_statelVerified[k] < 0 ? "refused" : "unconfirmed",
+                      m_statelMatched[k], m_statelMismatched[k]);
+        out += part;
+    }
+    return out;
+}
+
+// Whether placed pieces of a kind cast: mode 2 always; mode 1 once the turned ones' placement is confirmed (the
+// stretched ones' too, for them).
+bool Device::StatelKindCasting(int kind) const
+{
+    if (m_statelMode == 0)
+        return false;
+    return m_statelMode >= 2 || (m_statelVerified[0] > 0 && m_statelVerified[kind] > 0);
 }
 
 bool Device::StatelPieceCasting(const d3d::Matrix& world, uint32_t vertexCount, uint32_t indexCount) const
 {
-    if (m_statelLookup.empty() || m_statelMode == 0 || (m_statelMode == 1 && m_statelVerified <= 0))
+    if (m_statelLookup.empty())
         return false;
-    return m_statelLookup.count(PieceKey(vertexCount, indexCount, world.m[3])) != 0;
+    auto found = m_statelLookup.find(PieceKey(vertexCount, indexCount, world.m[3]));
+    if (found == m_statelLookup.end())
+        return false;
+    for (int k = 0; k < 2; ++k)
+        if ((found->second >> k & 1) && StatelKindCasting(k))
+            return true;
+    return false;
 }
 
 // CollectShadowItems: the pieces within the shadows' reach of the eye.
@@ -400,7 +408,8 @@ void Device::AddStatelShadowItems()
     m_statelItemsThisFrame = 0;
     m_statelCoveredLast = m_statelCoveredThisFrame;   // (the frame's drawn pieces of ours: for the frame dump)
     m_statelCoveredThisFrame = 0;
-    if (m_statelItems.empty() || m_statelMode == 0 || (m_statelMode == 1 && m_statelVerified <= 0))
+    const bool casting[2] = {StatelKindCasting(0), StatelKindCasting(1)};
+    if (m_statelItems.empty() || (!casting[0] && !casting[1]))
         return;
     UpdateFrameEye();
     const float range = CasterKeepRange();
@@ -425,6 +434,8 @@ void Device::AddStatelShadowItems()
                     continue;
                 m_statelStamp[i] = m_statelStampNow;
                 const StatelItem& s = m_statelItems[i];
+                if (!casting[s.kind])
+                    continue;
                 // Its box's nearest point (x, z) within reach.
                 const float dx = std::max({s.boundsMin[0] - ex, 0.0f, ex - s.boundsMax[0]});
                 const float dz = std::max({s.boundsMin[2] - ez, 0.0f, ez - s.boundsMax[2]});

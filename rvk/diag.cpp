@@ -131,10 +131,9 @@ void Device::EndFrameDump()
         // Every sun shadow item near the eye (within 120 units): this frame's or remembered, shadow-only or drawn, its
         // key, where, its box, and the cascades it went into (bits: 1 nearest .. 8 widest) - which casters a shadow had.
         std::fprintf(m_dumpFile, "# placed objects (statels.cpp): playfield %u, %zu pieces, %u cast this frame, %u drawn ones not "
-                                 "remembered; mode %u, placement %s (%u drawn pieces as ours, %u otherwise)\n",
+                                 "remembered; mode %u, placement %s\n",
                      m_statelPlayfield, m_statelItems.size(), m_statelItemsThisFrame, m_statelCoveredLast, m_statelMode,
-                     m_statelVerified > 0 ? "confirmed" : m_statelVerified < 0 ? "refused" : "unconfirmed", m_statelMatched,
-                     m_statelMismatched);
+                     StatelPlacementState().c_str());
         std::fprintf(m_dumpFile, "# sun shadow items within 120 of the eye (T this frame, M remembered, P placed; cascades bits):\n");
         for (const ShadowItem& it : m_shadowItems) {
             float d2 = 0.0f;

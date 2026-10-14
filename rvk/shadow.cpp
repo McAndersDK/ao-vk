@@ -489,7 +489,7 @@ void Device::RecordShadowCaster(uint32_t primitive, uint32_t fvf, uint32_t strid
     c.leafKey = m_drawLeaves ? m_drawLeafKey : 0;
     m_casters.push_back(c);
     if (VisualKind(c.kind) == VisualKind::Static) {
-        if (m_statelVerified == 0)
+        if (m_statelVerified[0] == 0 || m_statelVerified[1] == 0)
             CheckStatelDraw(m_world, vertexCount, indexCount);   // (statels.cpp: is our placement the game's?)
         // A piece of a placed object, which casts from the playfield's list wherever it is: not remembered (one
         // remembered under another's key is what made the wall's shadow come and go - sun42).
@@ -787,10 +787,9 @@ void Device::UpdateCasterCache()
             double(m_cacheRefusedFarD), double(m_frameEye[0]), double(m_frameEye[1]), double(m_frameEye[2]),
             m_cacheRefusedFull, m_cacheRefusedNoVertices, m_cacheRefusedMoving, m_cacheKeptSolid, m_shadowOnlyDraws);
         if (!m_statelItems.empty())
-            Log("placed objects: playfield %u, %u pieces cast, %u drawn ones not remembered (last frame); placement %s "
-                "(%u drawn pieces as ours, %u otherwise)", m_statelPlayfield, m_statelItemsThisFrame, m_statelCoveredLast,
-                m_statelVerified > 0 ? "confirmed" : m_statelVerified < 0 ? "refused" : "unconfirmed", m_statelMatched,
-                m_statelMismatched);
+            Log("placed objects: playfield %u, %u pieces cast, %u drawn ones not remembered (last frame); placement %s",
+                m_statelPlayfield, m_statelItemsThisFrame, m_statelCoveredLast,
+                StatelPlacementState().c_str());
     }
     m_shadowOnlyDraws = 0;
     m_cacheStreakStarts = m_cacheRefusedFar = m_cacheRefusedFull = m_cacheRefusedNoVertices = m_cacheRefusedMoving = 0;

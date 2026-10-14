@@ -1114,7 +1114,7 @@ private:
     std::unordered_map<uint64_t, CachedCaster> m_casterCache;
     // Placed objects (statels.cpp): every piece of the playfield's static objects, placed; a grid (x, z) over them.
     struct StatelPiece { uint32_t firstVertex, vertexCount, firstIndex, indexCount; Texture* texture; float alphaRef; };
-    struct StatelItem { d3d::Matrix world; float boundsMin[3], boundsMax[3]; uint32_t piece, statel; };
+    struct StatelItem { d3d::Matrix world; float boundsMin[3], boundsMax[3]; uint32_t piece, statel; uint8_t kind; };
     struct StatelPlaced { float x, y, z; int yaw, pitch, roll; float scale; uint32_t mesh; };   // (for the log)
     std::vector<StatelPiece> m_statelPieces;
     std::vector<StatelItem> m_statelItems;
@@ -1127,14 +1127,18 @@ private:
     uint32_t m_statelGridW = 0, m_statelGridH = 0;
     std::vector<uint32_t> m_statelCellStart, m_statelCellItems, m_statelStamp;
     uint32_t m_statelStampNow = 0, m_statelPlayfield = 0, m_statelMode = 1, m_statelItemsThisFrame = 0;
-    int m_statelVerified = 0;                    // the placement: 1 confirmed, -1 refused, 0 not yet (a session's)
-    uint32_t m_statelMatched = 0, m_statelMismatched = 0;
+    // The placement, of turned statels [0] and of stretched ones [1] (fences, walls): 1 confirmed, -1 refused, 0 not
+    // yet (for the session).
+    int m_statelVerified[2] = {};
+    uint32_t m_statelMatched[2] = {}, m_statelMismatched[2] = {};
+    bool StatelKindCasting(int kind) const;
+    std::string StatelPlacementState() const;
     void DestroyStatels();
     void AddStatelShadowItems();
     void CheckStatelDraw(const d3d::Matrix& world, uint32_t vertexCount, uint32_t indexCount);
     // A drawn piece that is one of ours (same counts, same spot: m_statelLookup) while ours cast.
     bool StatelPieceCasting(const d3d::Matrix& world, uint32_t vertexCount, uint32_t indexCount) const;
-    std::unordered_set<uint64_t> m_statelLookup;
+    std::unordered_map<uint64_t, uint8_t> m_statelLookup;   // -> the kinds (bits) of ours there
     uint32_t m_statelCoveredThisFrame = 0, m_statelCoveredLast = 0;
     std::unordered_map<uint64_t, CasterStreak> m_casterStreaks;
     std::vector<std::pair<uint64_t, std::pair<VkBuffer, VmaAllocation_T*>>> m_deadBuffers;
