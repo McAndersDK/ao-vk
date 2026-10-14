@@ -962,6 +962,7 @@ void Device::CollectShadowItems()
         it.kind = c.kind;
         it.leafKey = c.leafKey;
         std::memcpy(it.sway, c.sway, sizeof(it.sway));
+        it.cacheKey = c.key;
         m_shadowItems.push_back(it);
         drawOf.push_back(c.draw);
     }
@@ -997,6 +998,7 @@ void Device::CollectShadowItems()
         it.kind = e.kind;
         it.leafKey = e.leafKey;
         std::memcpy(it.sway, e.plantSway, sizeof(it.sway));
+        it.cacheKey = key;
         m_shadowItems.push_back(it);
     }
     // The drawn-static tally and the animated subset: the point-light pass asks "is anything animated in range?" once
@@ -1451,6 +1453,7 @@ void Device::RenderShadowMap(VkCommandBuffer cmd)
         double drawStart = ProfileCpu();
         for (uint32_t i : m_cascadeVisible) {
             ShadowItem& item = m_shadowItems[i];
+            item.cascades |= 1u << c;
             if (item.cached) ++m_cachedCastersDrawn;
             ++m_shadowDrawn;
             if (uint32_t(item.kind) == uint32_t(VisualKind::Static)) ++m_shadowStaticDrawn;

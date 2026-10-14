@@ -924,6 +924,8 @@ private:
         // light matrix is a push constant): its record (kNoShadowRecord: the arena was full) and its group key.
         uint32_t record = ~0u;
         uint64_t key = 0;
+        uint32_t cascades = 0;                   // (frame dump: the cascades it was drawn into, a bit each)
+        uint64_t cacheKey = 0;                   // (frame dump: its caster cache key)
     };
     static constexpr uint32_t kNoShadowRecord = ~1u;
     std::vector<ShadowItem> m_shadowItems;       // EndFrame: what the shadow passes draw

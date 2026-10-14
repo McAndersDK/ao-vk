@@ -517,15 +517,24 @@ void ShadowRasterize(Visual* v, void* vp)
 {
     uint8_t* data = Field<uint8_t*>(v, kData);
     if (!data) return;
+    // (Each as RenderWithTransparency without a hook: an environment-mapped material through EnvironmentPass, which
+    // puts the second stage back after it - set and left, it stayed on every later draw, the interface's too: all
+    // washed out white - user, 2026-10-14; the material reset after each.)
+    static const uint16_t stages = orig::Randy_t_GetTextureStageCount(Randy());
     auto& meshes = Meshes(data);
     for (uint8_t** m = meshes.first; m != meshes.last; ++m) {
         void* material = Field<void*>(*m, kMaterial);
         if (!material) continue;
+        const bool env = orig::RMaterial_t_GetEnvTexture(material) && v[kEnvAllowed] && stages >= 2;
         orig::RViewPort_t_SetMaterial(vp, material);
-        orig::DeviceState_UpdateDevice(Field<void*>(vp, kVpState));
-        MeshRender(*m, nullptr, vp);
+        if (env) {
+            EnvironmentPass(v, nullptr, vp, *m);
+        } else {
+            orig::DeviceState_UpdateDevice(Field<void*>(vp, kVpState));
+            MeshRender(*m, nullptr, vp);
+        }
+        orig::RViewPort_t_ResetMaterial(vp);
     }
-    orig::RViewPort_t_ResetMaterial(vp);
 }
 
 // Culled, but within the shadows' reach (SetShadowOnlyRange): its bounding sphere's nearest point that close to

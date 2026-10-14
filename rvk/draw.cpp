@@ -2099,6 +2099,10 @@ void Device::DrawShadowOnly(uint32_t primitive, uint32_t fvf, const void* vertic
     m_drawLeaves = leaves;
     std::memcpy(m_drawSway, sway, sizeof(sway));
     ++m_shadowOnlyDraws;
+    if (m_dumpFile && !m_casters.empty() && m_casters.back().draw == m_frameDraw)
+        std::fprintf(m_dumpFile, "S shadow-only: key %016llx at (%.2f %.2f %.2f) v %u i %u%s\n",
+                     (unsigned long long)m_casters.back().key, double(m_world.m[3][0]), double(m_world.m[3][1]),
+                     double(m_world.m[3][2]), vertexCount, indexCount, m_casters.back().texture ? " cut-out" : "");
 }
 
 void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32_t vertexCount,

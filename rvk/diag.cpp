@@ -127,6 +127,25 @@ void Device::EndFrameDump()
                          e.sway.size(), e.texture ? " cut-out" : "");
         }
     }
+    {
+        // Every sun shadow item near the eye (within 120 units): this frame's or remembered, shadow-only or drawn, its
+        // key, where, its box, and the cascades it went into (bits: 1 nearest .. 8 widest) - which casters a shadow had.
+        std::fprintf(m_dumpFile, "# sun shadow items within 120 of the eye (T this frame, M remembered; cascades bits):\n");
+        for (const ShadowItem& it : m_shadowItems) {
+            float d2 = 0.0f;
+            for (int j = 0; j < 3; ++j) {
+                const float d = std::max(std::max(it.boundsMin[j] - m_frameEye[j], m_frameEye[j] - it.boundsMax[j]), 0.0f);
+                d2 += d * d;
+            }
+            if (d2 > 120.0f * 120.0f)
+                continue;
+            std::fprintf(m_dumpFile, "%c %016llx: at (%.2f %.2f %.2f) box (%.1f %.1f %.1f)..(%.1f %.1f %.1f) v %u i %u%s cascades %x\n",
+                         it.cached ? 'M' : 'T', (unsigned long long)it.cacheKey, double(it.world.m[3][0]),
+                         double(it.world.m[3][1]), double(it.world.m[3][2]), double(it.boundsMin[0]), double(it.boundsMin[1]),
+                         double(it.boundsMin[2]), double(it.boundsMax[0]), double(it.boundsMax[1]), double(it.boundsMax[2]),
+                         it.vertexCount, it.indexCount, it.texture ? " cut-out" : "", it.cascades);
+        }
+    }
     std::fprintf(m_dumpFile, "# sun shadow pass: %u items (%u static, %u animated); drew %u item-cascades (%u static,"
                              " %u animated), culled %u; %.2f ms collect, %.2f cull, %.2f draw; M4 %u calls\n",
                  m_shadowItemsCount, m_shadowStaticItems, m_shadowAnimatedItems, m_shadowDrawn, m_shadowStaticDrawn,
