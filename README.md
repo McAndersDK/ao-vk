@@ -148,7 +148,8 @@ Spell effects with GPU particles, and depth of field.
 - Ambient occlusion and screen-space indirect light (bounce light).
 - Volumetric light: sun shafts through haze.
 - Screen-space reflections on water, glossy surfaces and optionally wet-looking floors.
-- Motion blur (camera and per object), temporal anti-aliasing with sharpening.
+- Motion blur (camera and per object), temporal anti-aliasing with sharpening (particles and spell effects stay
+  bright through it), or FXAA when TAA is off.
 - Depth of field with bokeh, focused on your character by default.
 - Colour grading: saturation, contrast, warmth, a cooler night tint, vignette, and your own `.cube` look-up tables
   (`randy-vk-day.cube`, `randy-vk-night.cube` next to `randy-vk.ini`).
@@ -333,7 +334,8 @@ You need up to two files from a [release](../../releases) (or your own build, se
    ao-vk loads it and lets the game's renderer code do its usual work; it must sit in the same folder.
 3. **Copy ao-vk's `randy31.dll`** into the client folder.
 4. Optional: **copy AOReloaded's `version.dll`** into the client folder for the in-game settings tab
-   (Options, F10, **Renderer** tab). Without it, settings are changed in `randy-vk.ini` or with the hotkeys.
+   (Options, F10, **Renderer** and **Advanced** tabs). Without it, settings are changed in `randy-vk.ini` or with
+   the hotkeys.
 5. **Start the game as usual** (launcher or `AnarchyOnline.exe`). ao-vk creates `randy-vk.ini` (settings) and
    `randy-vk.log` (log) in the client folder on the first start.
 
@@ -356,10 +358,9 @@ Delete ao-vk's `randy31.dll`, rename `randy31_orig.dll` back to `randy31.dll`, a
 
 All settings live in `randy-vk.ini` (section `[Renderer]`; the native code's switches in `[Native]`, above) and are
 saved whenever they change. With AOReloaded they
-appear in the game's options window (F10) under **Renderer**: the presets first, then every feature as an on/off
-checkbox, its
-sliders and choices further down, grouped by feature. New, unfinished features sit in their own **Experimental**
-block just under the feature switches, off by default. Changes apply immediately. Edits to the `[Renderer]` section of
+appear in the game's options window (F10) in two tabs. **Renderer**: the presets first, then every feature as an
+on/off checkbox; new, unfinished features sit in their own **Experimental** block just under the feature switches,
+off by default. **Advanced**, right after it: every slider and choice, grouped by feature. Changes apply immediately. Edits to the `[Renderer]` section of
 `randy-vk.ini` made while the game runs apply too, within half a second (the options window shows them once
 reopened). A few debugging switches are set in `randy-vk.ini` only and don't appear in the window:
 `RVK_PbrDebug` (also Ctrl+Shift+K), `RVK_ShadowView`, `RVK_Occlusion`, `RVK_TimeOfDay` and `RVK_TimeSpeed`.
