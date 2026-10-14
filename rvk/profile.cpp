@@ -210,8 +210,12 @@ void Device::ProfileCpuAdd(const char* name, double since) { ProfileAdd(m_profil
 
 void Device::ProfileAdd(std::vector<std::pair<const char*, double>>& sums, const char* name, double ms)
 {
+    // By address first (the names are literals: a per-draw section is added ~10 times a draw on a sampled frame, and a
+    // string compare against each section before it cost the render thread ~1%), then by text.
     for (auto& s : sums)
-        if (s.first == name || std::strcmp(s.first, name) == 0) { s.second += ms; return; }
+        if (s.first == name) { s.second += ms; return; }
+    for (auto& s : sums)
+        if (std::strcmp(s.first, name) == 0) { s.second += ms; return; }
     sums.push_back({name, ms});
 }
 

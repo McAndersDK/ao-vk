@@ -360,6 +360,7 @@ bool Device::CreateShadowResources(std::string* error)
 void Device::DestroyShadowResources()
 {
     m_casterCache.clear();                       // their arena goes with the static one (DestroyStaticGeometry)
+    ++m_casterCacheEpoch;
     for (auto& [tag, b] : m_deadBuffers) vmaDestroyBuffer(m_allocator, b.first, b.second);
     m_deadBuffers.clear();
     for (VkPipeline& p : m_shadowPipelines) if (p) { vkDestroyPipeline(m_device, p, nullptr); p = VK_NULL_HANDLE; }
@@ -455,7 +456,7 @@ void Device::RecordShadowCaster(uint32_t primitive, uint32_t fvf, uint32_t strid
     // a city (~900 of 4000 casters, user 2026-10-14). (One that sways or carries leaves still casts as drawn: ours
     // stands still.)
     if (VisualKind(m_drawVisualKind) == VisualKind::Static && !(m_drawSway[3] > 0.5f) && !m_drawLeaves &&
-        StatelPieceCasting(m_world, vertexCount, indexCount)) {
+        DrawStatelCasting(vertexCount, indexCount)) {
         ++m_statelCoveredThisFrame;
         return;
     }
@@ -493,8 +494,39 @@ void Device::RecordShadowCaster(uint32_t primitive, uint32_t fvf, uint32_t strid
     ShadowCutout(fvf, &c.texture, &c.texOffset, &c.alphaRef);
     if (std::strncmp(m_drawVisualName, "RCATMesh", 8) == 0 && m_characterSpots.size() < 256)
         m_characterSpots.push_back({m_world.m[3][0], m_world.m[3][1], m_world.m[3][2]});   // (a character's body)
-    uint64_t key = CasterKey(primitive, fvf, stride, vertices, vertexCount, indices, indexCount, c.texture, c.texOffset,
-                             c.boundsMin, c.boundsMax);
+    // Its key and box: kept with its object (the per-object cache, objects.cpp) while CasterKey's other inputs - the
+    // cut-out's kind, whether it sways - stay; its mesh and matrix are the object.
+    ObjectEntry* const object = m_drawObject;
+    uint64_t stamp = 0;
+    if (object) {
+        const uint32_t in[6] = {c.texture ? c.texture->m_width : 0u, c.texture ? c.texture->m_height : 0u,
+                                c.texture ? uint32_t(c.texture->m_format) : ~0u, uint32_t(c.texOffset + 1),
+                                (m_drawSway[3] > 0.5f ? 1u : 0u) | (m_drawLeaves ? 2u : 0u), primitive ^ fvf << 8};
+        stamp = HashBytes(in, sizeof(in), 0xCA57E5ull) | 1u;
+    }
+    uint64_t key;
+    if (object && object->casterStamp == stamp && !m_objectVerify) {
+        key = object->casterKey;
+        std::memcpy(c.boundsMin, object->casterMin, sizeof(c.boundsMin));
+        std::memcpy(c.boundsMax, object->casterMax, sizeof(c.boundsMax));
+    } else {
+        key = CasterKey(primitive, fvf, stride, vertices, vertexCount, indices, indexCount, c.texture, c.texOffset,
+                        c.boundsMin, c.boundsMax);
+        if (object) {
+            if (object->casterStamp == stamp &&      // (RANDYVK_OBJECT_VERIFY: worked out again; must be the same)
+                (object->casterKey != key || std::memcmp(object->casterMin, c.boundsMin, sizeof(c.boundsMin)) != 0 ||
+                 std::memcmp(object->casterMax, c.boundsMax, sizeof(c.boundsMax)) != 0) &&
+                m_objectMismatches++ < 20)
+                Log("object cache: caster key %016llx kept, %016llx now (v %u i %u at %.2f %.2f %.2f)",
+                    (unsigned long long)object->casterKey, (unsigned long long)key, vertexCount, indexCount,
+                    double(m_world.m[3][0]), double(m_world.m[3][1]), double(m_world.m[3][2]));
+            if (object->casterKey != key) object->cached = nullptr;
+            object->casterStamp = stamp;
+            object->casterKey = key;
+            std::memcpy(object->casterMin, c.boundsMin, sizeof(c.boundsMin));
+            std::memcpy(object->casterMax, c.boundsMax, sizeof(c.boundsMax));
+        }
+    }
     c.key = key;
     std::memcpy(c.sway, m_drawSway, sizeof(c.sway));
     c.draw = m_frameDraw;
@@ -508,7 +540,7 @@ void Device::RecordShadowCaster(uint32_t primitive, uint32_t fvf, uint32_t strid
             CheckStatelDraw(m_world, vertexCount, indexCount);   // (statels.cpp: is our placement the game's?)
         // A piece of a placed object, which casts from the playfield's list wherever it is: not remembered (one
         // remembered under another's key is what made the wall's shadow come and go - sun42).
-        if (StatelPieceCasting(m_world, vertexCount, indexCount)) {
+        if (DrawStatelCasting(vertexCount, indexCount)) {
             ++m_statelCoveredThisFrame;
             auto stale = m_casterCache.find(key);
             if (stale != m_casterCache.end())
@@ -516,9 +548,25 @@ void Device::RecordShadowCaster(uint32_t primitive, uint32_t fvf, uint32_t strid
             return;
         }
     }
-    auto cached = m_casterCache.find(key);
-    if (cached != m_casterCache.end()) {
-        CachedCaster& e = cached->second;
+    // Remembered: its entry kept with the object while no remembered caster went (their epoch).
+    CachedCaster* remembered = nullptr;
+    if (object && object->cached && object->cachedEpoch == m_casterCacheEpoch && !m_objectVerify) {
+        remembered = object->cached;
+    } else {
+        auto cached = m_casterCache.find(key);
+        if (cached != m_casterCache.end()) {
+            remembered = &cached->second;
+            if (object && object->cached && object->cachedEpoch == m_casterCacheEpoch && object->cached != remembered &&
+                m_objectMismatches++ < 20)
+                Log("object cache: remembered caster %016llx kept at another entry", (unsigned long long)key);
+            if (object) {
+                object->cached = remembered;
+                object->cachedEpoch = m_casterCacheEpoch;
+            }
+        }
+    }
+    if (remembered) {
+        CachedCaster& e = *remembered;
         double now = m_frameClock;               // per frame: a clock read per caster costs more than it buys
         e.lastSeen = m_frameNumber;
         e.lastSeenTime = now;
@@ -556,11 +604,13 @@ void Device::RecordShadowCaster(uint32_t primitive, uint32_t fvf, uint32_t strid
     }
     CasterStreak& streak = m_casterStreaks[key];
     const float* t = m_world.m[3];
-    if (streak.lastFrame + 1 == m_frameNumber) {
+    // (A new streak has count 0: started below, even on frame 1 - its lastFrame 0 looked like last frame's, its place
+    // (0, 0, 0) like a move, and the caster was never remembered.)
+    if (streak.count && streak.lastFrame + 1 == m_frameNumber) {
         ++streak.count;
         const float dx = t[0] - streak.at[0], dy = t[1] - streak.at[1], dz = t[2] - streak.at[2];
         if (dx * dx + dy * dy + dz * dz > 0.01f * 0.01f) streak.moved = true;
-    } else if (streak.lastFrame != m_frameNumber) {
+    } else if (!streak.count || streak.lastFrame != m_frameNumber) {
         streak.count = 1;
         std::memcpy(streak.at, t, sizeof(streak.at));
         streak.moved = false;
@@ -762,6 +812,7 @@ void Device::ForgetCachedCaster(std::unordered_map<uint64_t, CachedCaster>::iter
 {
     ArenaFree(it->second.chunk, it->second.slot, it->second.slotBytes);   // reused once the GPU is done with it
     m_casterCache.erase(it);
+    ++m_casterCacheEpoch;                        // (the objects' pointers to remembered casters: ObjectEntry::cached)
 }
 
 // The game let a texture go (out of view, it unloads them): the remembered casters cut out by it are kept, solid -

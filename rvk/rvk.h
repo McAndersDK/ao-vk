@@ -1144,6 +1144,7 @@ private:
     void CheckStatelDraw(const d3d::Matrix& world, uint32_t vertexCount, uint32_t indexCount);
     // A drawn piece that is one of ours (same counts, same spot: m_statelLookup) while ours cast.
     bool StatelPieceCasting(const d3d::Matrix& world, uint32_t vertexCount, uint32_t indexCount) const;
+    uint8_t StatelPieceKinds(const d3d::Matrix& world, uint32_t vertexCount, uint32_t indexCount) const;   // (its lookup)
     std::unordered_map<uint64_t, uint8_t> m_statelLookup;   // -> the kinds (bits) of ours there
     uint32_t m_statelCoveredThisFrame = 0, m_statelCoveredLast = 0;
     std::unordered_map<uint64_t, CasterStreak> m_casterStreaks;
@@ -1584,6 +1585,35 @@ private:
     // an unchanged chunk over tiles that already have it is skipped whole.
     struct GrassChunk { float box[4] = {}; bool boxed = false; uint64_t processed = 0, lastSeen = 0, firstSeen = 0; };
     std::unordered_map<uint64_t, GrassChunk> m_grassChunks;
+    // Per-object frame cache (objects.cpp; docs/render-batching-plan.md P1): a static mesh drawn at a world matrix - one
+    // of the game's objects - keeps what its draws work out from those two alone, so its next frames' draws look it up
+    // instead of working it out again (the render thread's per-draw cost over a city).
+    struct ObjectEntry {
+        uint64_t key = 0;                        // its hash; 0: an empty slot
+        uint64_t meshKey = 0;                    // (identity, exactly: the mesh's key and the world matrix)
+        d3d::Matrix world{};
+        uint64_t lastFrame = 0;                  // the frame it was last drawn in
+        bool seenLastFrame = false;              // ... drawn in the frame before that too: it hasn't moved (motion)
+        GrassChunk cover;                        // CaptureCover's record of it
+        uint64_t casterStamp = 0;                // CasterKey's inputs besides the object (cut-out kind, sway); 0: none yet
+        uint64_t casterKey = 0;
+        float casterMin[3] = {}, casterMax[3] = {};
+        CachedCaster* cached = nullptr;          // the caster cache's entry for casterKey, valid while its epoch is
+        uint64_t cachedEpoch = 0;
+        uint64_t statelGen = 0;                  // StatelPieceKinds as of this m_statelLookupGen (0: not looked up)
+        uint8_t statelKinds = 0;
+    };
+    std::vector<ObjectEntry> m_objects;          // open addressing (linear probing), a power of two long
+    size_t m_objectCount = 0;
+    ObjectEntry* m_drawObject = nullptr;         // the current draw's, when it is a static mesh
+    bool m_objectCache = true;                   // RANDYVK_OBJECT_CACHE=0: off (A/B)
+    bool m_objectVerify = false;                 // RANDYVK_OBJECT_VERIFY=1: cached values worked out again and compared
+    uint64_t m_objectHits = 0, m_objectMisses = 0, m_objectMismatches = 0;   // (logged with the caster cache)
+    uint64_t m_casterCacheEpoch = 1;             // a remembered caster went (ObjectEntry::cached no longer valid)
+    uint64_t m_statelLookupGen = 1;              // m_statelLookup changed (ObjectEntry::statelKinds)
+    ObjectEntry* FindObject();
+    void PruneObjects();
+    bool DrawStatelCasting(uint32_t vertexCount, uint32_t indexCount);   // StatelPieceCasting for the current draw
     std::vector<GrassTile*> m_grassChunkGrid;    // CaptureTerrain's scratch: the tiles under a chunk
     uint64_t m_grassTileEpoch = 0;               // the latest tile made or light reset (the chunks' clock)
     int32_t m_grassTileBox[4] = {0, 0, -1, -1};  // the tile range around the camera: x0, z0, x1, z1

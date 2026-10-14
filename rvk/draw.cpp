@@ -2110,6 +2110,7 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
 {
     if (!m_inFrame || !vertexCount)
         return;
+    m_drawObject = nullptr;                      // (found below for a static mesh; none for a shadow-only draw)
     if (m_shadowOnlyDraw) {                      // (a culled static mesh, for its shadow alone: nothing else)
         DrawShadowOnly(primitive, fvf, vertices, vertexCount, indices, indexCount);
         return;
@@ -2249,6 +2250,9 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
         DrawMeshInfo(fvf, layout.stride, vertices, vertexCount, indices, indexCount);
     ProfileDrawSection("draw: setup (mesh info)", since);
     NoteMeshPiece();                             // (mesh ids: which mesh the object drawing is)
+    // The object's entry in the per-object cache (objects.cpp): a static mesh at its world matrix.
+    if (m_objectCache && m_drawMesh && m_drawMeshStatic && !m_external && !m_drawSkin && !m_drawGpu)
+        m_drawObject = FindObject();
     ProfileDrawSection("draw: setup (mesh ids)", since);
     // (A GPU-skinned character has no vertices here: DrawSkinned hands the pick its CPU-skinned ones.)
     if (m_pickActive && !m_shadowOnlyDraw && !m_external && (vertices || m_pickSkinned) && (m_textures[0] || m_drawVisual) &&
@@ -2395,7 +2399,12 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     FrameLightMask(fvf, layout.stride, vertices, vertexCount, dt.lightMask);
     dt.lightMask[2] = swaying && m_grassPush > 0.0f ? PusherMask(1.4f * std::sqrt(m_grassPush) + 0.1f) : 0u;
     ProfileDrawSection("draw: light mask", since);
-    if (motion) {
+    if (motion && m_drawObject && m_drawObject->seenLastFrame) {
+        // An object drawn last frame at this very matrix (the per-object cache): it stood still - its last matrix is
+        // this one (as below's search finds), and it needn't be looked up or kept for the next frame's search. (A
+        // still object that starts moving is a new entry, which searches - and finds nothing of it for that first
+        // frame: no motion vector for one frame.)
+    } else if (motion) {
         // Motion vectors: the same object last frame - same mesh, nearest to where this one is (within 3 units). Not
         // found (new, or a different level of detail): its current matrix, i.e. it moved with the world.
         uint64_t key = MotionKey(primitive, fvf, vertexCount, indices, indexCount);

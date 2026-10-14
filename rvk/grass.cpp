@@ -544,11 +544,16 @@ void Device::CaptureCover(uint32_t primitive, const FvfLayout& layout, const voi
         m_grassCoverFrame = m_frameNumber;
         m_grassCoverMs = 0.0;
     }
-    uint64_t key = uint64_t(reinterpret_cast<uintptr_t>(m_drawMesh)) * 0x9E3779B97F4A7C15ull;
-    const uint32_t* wb = reinterpret_cast<const uint32_t*>(&m_world);
-    for (int i = 0; i < 16; ++i)
-        key = (key ^ wb[i]) * 0x100000001B3ull;
-    GrassChunk& seen = m_grassCovers[key];
+    // The object's record: with its entry in the per-object cache (objects.cpp), else by its mesh and matrix here.
+    GrassChunk* record = m_drawObject ? &m_drawObject->cover : nullptr;
+    if (!record) {
+        uint64_t key = uint64_t(reinterpret_cast<uintptr_t>(m_drawMesh)) * 0x9E3779B97F4A7C15ull;
+        const uint32_t* wb = reinterpret_cast<const uint32_t*>(&m_world);
+        for (int i = 0; i < 16; ++i)
+            key = (key ^ wb[i]) * 0x100000001B3ull;
+        record = &m_grassCovers[key];
+    }
+    GrassChunk& seen = *record;
     if (seen.lastSeen + 1 < m_frameNumber)
         seen.firstSeen = m_frameNumber;          // new, or back after a gap: its still run starts again
     seen.lastSeen = m_frameNumber;

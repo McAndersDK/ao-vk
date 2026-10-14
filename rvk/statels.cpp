@@ -90,6 +90,7 @@ void Device::DestroyStatels()
     m_statelMasks.clear();
     m_statelPieces.clear();
     m_statelLookup.clear();
+    ++m_statelLookupGen;
     m_statelItems.clear();
     m_statelPlaced.clear();
     m_statelCellStart.clear();
@@ -290,6 +291,7 @@ bool Device::LoadStatels(const char* path, uint32_t playfield)
         const StatelPiece& p = m_statelPieces[it.piece];
         m_statelLookup[PieceKey(p.vertexCount, p.indexCount, it.world.m[3])] |= uint8_t(1u << it.kind);
     }
+    ++m_statelLookupGen;
     m_statelPlayfield = playfield;
     m_statelHasKind[0] = m_statelHasKind[1] = false;
     for (const StatelItem& it : m_statelItems)
@@ -397,15 +399,19 @@ bool Device::StatelKindCasting(int kind) const
     return m_statelMode >= 2 || (m_statelVerified[0] > 0 && m_statelVerified[kind] > 0);
 }
 
-bool Device::StatelPieceCasting(const d3d::Matrix& world, uint32_t vertexCount, uint32_t indexCount) const
+uint8_t Device::StatelPieceKinds(const d3d::Matrix& world, uint32_t vertexCount, uint32_t indexCount) const
 {
     if (m_statelLookup.empty())
-        return false;
+        return 0;
     auto found = m_statelLookup.find(PieceKey(vertexCount, indexCount, world.m[3]));
-    if (found == m_statelLookup.end())
-        return false;
+    return found == m_statelLookup.end() ? 0 : found->second;
+}
+
+bool Device::StatelPieceCasting(const d3d::Matrix& world, uint32_t vertexCount, uint32_t indexCount) const
+{
+    const uint8_t kinds = StatelPieceKinds(world, vertexCount, indexCount);
     for (int k = 0; k < 2; ++k)
-        if ((found->second >> k & 1) && StatelKindCasting(k))
+        if ((kinds >> k & 1) && StatelKindCasting(k))
             return true;
     return false;
 }

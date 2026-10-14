@@ -1604,6 +1604,7 @@ void Device::BeginFrame()
     m_cloudsDrawn = false;
     UpdatePushTrail();
     UpdateLeaves();
+    PruneObjects();                              // (the per-object cache: objects.cpp)
     m_tessCharsPrev.swap(m_tessChars);           // characters drawn last frame (their rigid parts: TessellateDraw)
     m_tessChars.clear();
     if (m_frameNumber == 1200)
