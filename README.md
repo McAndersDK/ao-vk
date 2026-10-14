@@ -361,7 +361,8 @@ checkbox, its
 sliders and choices further down, grouped by feature. New, unfinished features sit in their own **Experimental**
 block just under the feature switches, off by default. Changes apply immediately. Edits to the `[Renderer]` section of
 `randy-vk.ini` made while the game runs apply too, within half a second (the options window shows them once
-reopened).
+reopened). A few debugging switches are set in `randy-vk.ini` only and don't appear in the window:
+`RVK_PbrDebug` (also Ctrl+Shift+K), `RVK_ShadowView`, `RVK_Occlusion`, `RVK_TimeOfDay` and `RVK_TimeSpeed`.
 
 Some useful ones:
 

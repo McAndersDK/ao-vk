@@ -1928,7 +1928,6 @@ bool g_smokeGame = false;         // --smoke-game: the source as the game's barr
 float g_smokeDensity = 1.0f;      // --smoke-density X (RVK_SmokeDensity)
 float g_smokeWindScale = 1.0f;    // --smoke-wind X: the game's wind x X
 float g_smokeWisps = 1.0f;        // --smoke-wisps X (RVK_SmokeWisps)
-bool g_smokeExact = false;        // --smoke-exact (RVK_SmokeExact)
 bool g_smokeHalf = true;          // --smoke-full: RVK_SmokeHalf off
 float g_smokeWobble = 0.0f;       // --smoke-wobble A: the source jumps about by up to A each frame (the game's moves with
                                   //  its newest sprites)
@@ -3641,7 +3640,6 @@ int main(int argc, char** argv)
         else if (a == "--smoke-two") g_smokeTwo = true;
         else if (a == "--smoke-opaque" && i + 1 < argc) g_smokeOpaque = float(std::atof(argv[++i]));
         else if (a == "--smoke-wisps" && i + 1 < argc) g_smokeWisps = float(std::atof(argv[++i]));
-        else if (a == "--smoke-exact") g_smokeExact = true;
         else if (a == "--smoke-full") g_smokeHalf = false;
         else if (a == "--smoke-wobble" && i + 1 < argc) g_smokeWobble = float(std::atof(argv[++i]));
         else if (a == "--smoke-wind" && i + 1 < argc) g_smokeWindScale = float(std::atof(argv[++i]));
@@ -3825,7 +3823,6 @@ int main(int argc, char** argv)
         smoke.enable = true;
         smoke.density = g_smokeDensity;
         smoke.detail = g_smokeWisps;
-        smoke.exact = g_smokeExact;
         smoke.half = g_smokeHalf;
         smoke.opacity = g_smokeOpaque;
         dev.SetSmokeParams(smoke);

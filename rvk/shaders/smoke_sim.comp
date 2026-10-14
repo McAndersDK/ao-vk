@@ -47,7 +47,7 @@ layout(push_constant) uniform Params {
                 // z: the source's push up (world / s); w: how fast the density fades (1 / s) - x y z puffing
     vec4 d;     // x: buoyancy; y: vorticity confinement; zw: the wind (world / s, x z)
     vec4 e;     // xyz: the box's move since last frame (box units); w: stage 4: 1 = the first Jacobi step (pressure
-                // from 0; else from the image's - RVK_SmokeExact); stage 0: the step's number (the source's jitter)
+                // from 0; else from the image's); stage 0: the step's number (the source's jitter)
     vec4 f;     // xyz: towards the sun (unit); w: the smoke's extinction (per world unit at density 1)
     vec4 g;     // x: the volume's slot in the bounds; y: stage 11: 1 / the flow image's range (world / s); z: the band
                 // along a box's walls and top its smoke leaves over (box units)

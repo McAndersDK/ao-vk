@@ -868,16 +868,15 @@ void Device::UpdateCasterCache()
     if (m_frameNumber % 300 == 0) {
         Log("caster cache: %zu remembered, %zu streaks; this frame %u streaks started, refused %u far (last %.0f from the "
             "eye (%.1f %.1f %.1f)), %u full, %u without vertices, %u moving or a character's; %u kept "
-            "solid when the game let their texture go; %u shadow-only draws (culled, casting)",
+            "solid when the game let their texture go",
             m_casterCache.size(), m_casterStreaks.size(), m_cacheStreakStarts, m_cacheRefusedFar,
             double(m_cacheRefusedFarD), double(m_frameEye[0]), double(m_frameEye[1]), double(m_frameEye[2]),
-            m_cacheRefusedFull, m_cacheRefusedNoVertices, m_cacheRefusedMoving, m_cacheKeptSolid, m_shadowOnlyDraws);
+            m_cacheRefusedFull, m_cacheRefusedNoVertices, m_cacheRefusedMoving, m_cacheKeptSolid);
         if (!m_statelItems.empty())
             Log("placed objects: playfield %u, %u pieces cast, %u drawn ones not remembered (last frame); placement %s",
                 m_statelPlayfield, m_statelItemsThisFrame, m_statelCoveredLast,
                 StatelPlacementState().c_str());
     }
-    m_shadowOnlyDraws = 0;
     m_cacheStreakStarts = m_cacheRefusedFar = m_cacheRefusedFull = m_cacheRefusedNoVertices = m_cacheRefusedMoving = 0;
     for (auto it = m_casterStreaks.begin(); it != m_casterStreaks.end();)
         it = it->second.lastFrame == m_frameNumber ? std::next(it) : m_casterStreaks.erase(it);
@@ -1084,9 +1083,6 @@ void Device::CollectShadowItems()
     for (auto& [key, e] : m_casterCache) {
         if (m_shadowMemory == 0)
             break;                               // (RVK_ShadowMem off: only what the game drew this frame)
-        if (m_shadowMemory == 3 && std::max({e.boundsMax[0] - e.boundsMin[0], e.boundsMax[1] - e.boundsMin[1],
-                                             e.boundsMax[2] - e.boundsMin[2]}) < 3.0f)
-            continue;                            // (3: only big things)
         if (e.lastSeen == m_frameNumber && std::find(staleKeys.begin(), staleKeys.end(), key) == staleKeys.end())
             continue;                            // drawn this frame: in the list above
         ShadowItem it;
@@ -1099,11 +1095,10 @@ void Device::CollectShadowItems()
         it.stride = e.stride;
         it.vertexCount = e.vertexCount;
         it.indexCount = e.indexCount;
-        const bool solid = m_shadowMemory == 4;  // (4: drawn solid - not cut out by their textures)
-        it.texture = solid ? nullptr : e.texture;
-        it.texOffset = solid ? -1 : e.texOffset;
-        it.alphaRef = solid ? -1.0f : e.alphaRef;
-        it.world = m_shadowMemory == 2 ? e.world : SwayPose(e);   // (2: without the remembered sway)
+        it.texture = e.texture;
+        it.texOffset = e.texOffset;
+        it.alphaRef = e.alphaRef;
+        it.world = SwayPose(e);
         std::memcpy(it.boundsMin, e.boundsMin, sizeof(it.boundsMin));
         std::memcpy(it.boundsMax, e.boundsMax, sizeof(it.boundsMax));
         it.cached = true;

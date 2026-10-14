@@ -8,8 +8,7 @@
 // box's move). A new volume warms up: its first kWarmUp seconds simulated kWarmSpeed times as fast while it fades in,
 // so a source coming into view shows a grown plume, not one growing from nothing. Sources not handed over any more go on until their smoke has faded (about their life x 1.5); the
 // volumes are kept for the next. The velocity and the density are kept in pairs per volume (one read, one written,
-// swapped each step); the curl, the divergence and the pressure are scratch, shared by all (RVK_SmokeExact: each
-// volume keeps its pressure, the next solve starts from it). A volume steps about kSimStep apart whatever the frame
+// swapped each step); the curl, the divergence and the pressure are scratch, shared by all. A volume steps about kSimStep apart whatever the frame
 // rate; its drawing blends its last two states (the look image).
 #include "internal.h"
 
@@ -49,9 +48,6 @@ constexpr uint32_t kSmokeMax = 8;               // volumes
 constexpr uint32_t kSmokeSimMax = 6;            // ... simulated a frame (the nearest)
 constexpr float kSmokeRange = 160.0f;           // simulated and drawn this near only
 constexpr uint32_t kJacobi = 24;                // pressure steps, from 0 (even: the result back in the first image)
-constexpr uint32_t kJacobiExact = 8;            // RVK_SmokeExact: ... from the last step's pressure, near this one's: so
-                                                // closer to the converged pressure than 24 from 0 (its gradient's error
-                                                // 0.24 against 0.72 in the demo; RANDYVK_SMOKE_RESIDUAL measures it)
 constexpr float kWarmUp = 2.0f, kWarmSpeed = 3.0f;
 constexpr float kSimStep = 1.0f / 60.0f;         // a volume steps about this often (s), whatever the frame rate - drawn
 constexpr float kSimFar = 40.0f;                // between its last two states; beyond this (world) half as often
@@ -296,7 +292,6 @@ void Device::DestroySmokeImages()
     };
     for (SmokeVolume& v : m_smokeVolumes) {
         for (int k = 0; k < 2; ++k) { destroy(v.vel[k]); destroy(v.dens[k]); }
-        destroy(v.pressure);
         destroy(v.look);
         destroy(v.flow);
         v.fresh = true;
@@ -673,7 +668,6 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         for (auto& [d, v] : live) {
             if (v->n && v->n != cells(*v)) {
                 for (int k = 0; k < 2; ++k) { destroy(v->vel[k]); destroy(v->dens[k]); }
-                destroy(v->pressure);
                 destroy(v->flow);
                 destroy(v->look);
                 v->n = 0;
@@ -733,13 +727,11 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
     for (auto& [d, v] : live) {
         ok = ok && ensure(v->vel[0], rgba, true, v->n) && ensure(v->vel[1], rgba, true, v->n) &&
              ensure(v->dens[0], rgba, true, v->n) && ensure(v->dens[1], rgba, true, v->n) && ensure(v->look, rgba, true, v->n) &&
-             ensure(v->flow, VK_FORMAT_R8G8B8A8_SNORM, true, v->n / 2) &&
-             (!P.exact || ensure(v->pressure, r32, true, v->n));
+             ensure(v->flow, VK_FORMAT_R8G8B8A8_SNORM, true, v->n / 2);
         if (v->fresh) {
             for (int k = 0; k < 2; ++k) { toClear.push_back(v->vel[k].image); toClear.push_back(v->dens[k].image); }
             toClear.push_back(v->look.image);
             toClear.push_back(v->flow.image);
-            if (v->pressure.image) toClear.push_back(v->pressure.image);
         }
         v->fresh = false;
     }
@@ -955,10 +947,9 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
             if (stageProfile)
                 ProfileMark(kStageNames[stage]);
         };
-        // The pressure: Jacobi steps between the first image and the second; the first the volume's own (RVK_SmokeExact:
-        // kept, the next solve starts from it) or shared (the solve starts from 0).
-        SmokeImage pr[2] = {P.exact ? v.pressure : m_smokePressure[0], m_smokePressure[1]};
-        const uint32_t jacobi = P.exact ? kJacobiExact : kJacobi;
+        // The pressure: Jacobi steps between the two shared images, the solve starting from 0.
+        SmokeImage pr[2] = {m_smokePressure[0], m_smokePressure[1]};
+        const uint32_t jacobi = kJacobi;
         if (!m_smokeNoiseMade) {                 // (once: the wisps' noise)
             p.a[1] = float(kNoiseSize);
             groups = kNoiseSize / 4;
@@ -973,7 +964,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         dispatch(3, v.vel[o], v.dens[c], v.vel[o], v.dens[o], pr[0], pr[1], v.vel[c], 0.0f);   // divergence of vel[c]
         for (uint32_t k = 0; k < jacobi; ++k)                                                   // pressure: pr[0] <-> pr[1]
             dispatch(4, v.vel[o], v.dens[c], v.vel[o], v.dens[o], pr[k & 1], pr[(k & 1) ^ 1], v.vel[c],
-                     k == 0 && !P.exact ? 1.0f : 0.0f);
+                     k == 0 ? 1.0f : 0.0f);
         const SmokeImage& p0 = pr[jacobi & 1];                                                 // (the last written)
         static const uint64_t residualFrame = getenv("RANDYVK_SMOKE_RESIDUAL") ? std::strtoull(getenv("RANDYVK_SMOKE_RESIDUAL"), nullptr, 10) : 0;
         if (residualFrame && m_frameNumber == residualFrame && &v == live.front().second) {

@@ -57,7 +57,7 @@ Setting g_settings[] = {
     {"RVK_PbrAo",      "Occlusion map strength",                                   "Lighting",         Float, 0, 1, 0.1f, 1, nullptr, 0, "RVK_Pbr"},
     {"RVK_PbrProbe",   "Environment probe (with HDR)", "Lighting", Float, 0, 1, 0.1f, 1, nullptr, 0, "RVK_Pbr"},
     {"RVK_PbrGlow",    "Emissive map brightness", "Lighting", Float, 0, 8, 0.25f, 2, nullptr, 0, "RVK_Pbr"},
-    {"RVK_PbrDebug",   "Debug view (Ctrl+Shift+K)", "Lighting", Choice, 0, 9, 1, 0, nullptr, 0, "RVK_Pbr", "0 1 2 3 4 5 6 7 8 9"},
+    {"RVK_PbrDebug",   "Debug view (Ctrl+Shift+K)", "Debug", Choice, 0, 9, 1, 0, nullptr, 0, "RVK_Pbr", "0 1 2 3 4 5 6 7 8 9"},
     {"RVK_Albedo",     "Replacement textures", "Lighting",     Bool,  0, 1, 1, 1, nullptr, 0},
     {"RVK_LeafLightOn","Sunlight through leaves",                                  "Lighting",         Bool,  0, 1, 1, 1, nullptr, 0},
     {"RVK_LeafLight",  "Strength",                                                 "Lighting",         Float, 0.25f, 2, 0.25f, 1, nullptr, 0, "RVK_LeafLightOn"},
@@ -146,21 +146,17 @@ Setting g_settings[] = {
     {"RVK_SmokeBright","Smoke: how light it is",                                   "Experimental",     Float, 0.25f, 3, 0.25f, 1, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeOpaque", "Smoke: how opaque it is drawn",                           "Experimental",     Float, 0.05f, 8, 0.05f, 1, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeHalf",  "Smoke: drawn at half resolution (much cheaper)",          "Experimental",     Bool,  0, 1, 1, 1, nullptr, 0, "RVK_SmokeOn"},
-    {"RVK_SmokeExact", "Smoke: exact flow (cheaper; lower, wider plumes)",       "Experimental",     Bool,  0, 1, 1, 0, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_CloudsOn",   "Volumetric clouds (the game's clouds given depth; needs HDR)", "Experimental", Bool,  0, 1, 1, 0, nullptr, 0},
     {"RVK_CloudThick", "Clouds: how thick",                                        "Experimental",     Float, 0.1f, 4, 0.1f, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudBright", "Clouds: how light",                                       "Experimental",     Float, 0.25f, 3, 0.05f, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudNight",  "Clouds: how light at night (x the above)",                 "Experimental",     Float, 0.25f, 2, 0.05f, 0.8f, nullptr, 0, "RVK_CloudsOn"},
-    // (Off by default: every crash of 2026-10-13/14 - heap corruption found in the grass code - came in a session with
-    // it on, two within minutes of switching it on; RVK_StaticShad casts the placed objects without it.)
-    {"RVK_ShadowAll",   "Shadows of culled meshes drawn for their shadow alone (TESTING ONLY, needs RANDYVK_SHADOW_ALL=1: it damages memory and crashes the game; RVK_StaticShad covers placed objects)", "Experimental", Bool, 0, 1, 1, 0, nullptr, 0, "RVK_SunShadow"},
+    {"RVK_ShadowMem",   "Shadows of things out of view: what stood in view and stands still keeps casting", "Shadows", Bool, 0, 1, 1, 1, nullptr, 0, "RVK_SunShadow"},
     {"RVK_StaticShad",  "Shadows of the playfield's placed objects from its own list - rocks, walls, trees, seen or not (ao-assets statels): 0 off, 1 once their placement is confirmed, 2 always", "Shadows", Int, 0, 2, 1, 1, nullptr, 0, "RVK_SunShadow"},
-    {"RVK_ShadowView",  "Debug: show the sun shadow map's light (white lit, dark shadowed; tint = cascade)", "Experimental", Bool, 0, 1, 1, 0, nullptr, 0},
-    {"RVK_Occlusion",   "The game's culling of what hills hide (off: all in view drawn - whole shadows, more draws)", "Experimental", Bool, 0, 1, 1, 1, nullptr, 0},
-    {"RVK_ShadowMem",   "Shadows of things out of view: 0 off (only what's drawn), 1 on, 2 on without sway, 3 only big things, 4 solid", "Experimental", Int, 0, 4, 1, 1, nullptr, 0},
+    {"RVK_ShadowView",  "Debug: show the sun shadow map's light (white lit, dark shadowed; tint = cascade)", "Debug", Bool, 0, 1, 1, 0, nullptr, 0},
+    {"RVK_Occlusion",   "The game's culling of what hills hide (off: all in view drawn - whole shadows, more draws)", "Debug", Bool, 0, 1, 1, 1, nullptr, 0},
     {"RVK_HillShade",   "The terrain's shade from a low sun (valleys under mountains)", "Experimental", Bool, 0, 1, 1, 1, nullptr, 0},
-    {"RVK_TimeOfDay",   "Testing: the game's time of day set to this hour (-1: the game's own; a day is 27 h)", "Experimental", Float, -1, 27, 0.25f, -1, nullptr, 0},
-    {"RVK_TimeSpeed",   "Testing: how fast the time of day runs, x the game's (0 still; 1 and the hour -1: the game's own)", "Experimental", Float, 0, 500, 0.5f, 1, nullptr, 0},
+    {"RVK_TimeOfDay",   "Testing: the game's time of day set to this hour (-1: the game's own; a day is 27 h)", "Debug", Float, -1, 27, 0.25f, -1, nullptr, 0},
+    {"RVK_TimeSpeed",   "Testing: how fast the time of day runs, x the game's (0 still; 1 and the hour -1: the game's own)", "Debug", Float, 0, 500, 0.5f, 1, nullptr, 0},
     {"RVK_SkyVary",     "Clouds: the sky changes, clear to overcast (0: always some cloud)", "Experimental", Float, 0, 1, 0.1f, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_SkyZones",    "Clouds: each zone its own skies - deserts clearer, coasts and forests cloudier (0: the same everywhere)", "Experimental", Float, 0, 1, 0.1f, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudDetail", "Clouds: billows and wisps (0 smooth)",                    "Experimental",     Float, 0, 2, 0.1f, 1, nullptr, 0, "RVK_CloudsOn"},
@@ -375,17 +371,6 @@ void Apply(const Setting& s, rvk::ThreadedDevice* d)
         if (child.parent && std::strcmp(child.parent, s.name) == 0) ApplyOne(child, d);
 }
 
-// RVK_ShadowAll damages memory (the 2026-10-13/14 crashes, docs/stability-plan.md): it only takes effect for testing,
-// with RANDYVK_SHADOW_ALL=1 in the environment, whatever the setting says.
-bool ShadowAllAllowed()
-{
-    static const bool allowed = [] {
-        char v[8] = "";
-        return GetEnvironmentVariableA("RANDYVK_SHADOW_ALL", v, sizeof(v)) && v[0] == '1';
-    }();
-    return allowed;
-}
-
 // Puts one setting into effect: each device call takes the setting and its partners.
 void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
 {
@@ -394,9 +379,6 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
     auto is = [n](const char* a) { return std::strcmp(n, a) == 0; };
     // Static meshes the game culls cast anyway within the shadows' reach (native mesh.cpp; as the renderer's memory of
     // casters: 1.4 x the shadow distance), meshes under a unit across left out.
-    if (is("RVK_ShadowAll") || is("RVK_SunDist") || is("RVK_SunShadow"))
-        rnative::mesh::SetShadowOnlyRange(V("RVK_ShadowAll") != 0.0f && ShadowAllAllowed() && V("RVK_SunShadow") != 0.0f ? 1.4f * V("RVK_SunDist")
-                                                                                                    : 0.0f, 1.0f);
     if (is("RVK_Enhance")) {                     // every enhancement at its own value or the game's
         for (const Setting& other : g_settings)
             if (&other != &s) Apply(other, d);
@@ -498,7 +480,7 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
     else if (is("RVK_SunBleed")) d->SetSunBleed(V(n));
     else if (is("RVK_ShadowView")) d->SetShadowView(V(n) != 0.0f);
     else if (is("RVK_Occlusion")) rnative::occluder::SetHorizonCulling(V(n) != 0.0f);
-    else if (is("RVK_ShadowMem")) d->SetShadowMemory(uint32_t(std::clamp(V(n), 0.0f, 4.0f) + 0.5f));
+    else if (is("RVK_ShadowMem")) d->SetShadowMemory(V(n) != 0.0f ? 1u : 0u);
     else if (is("RVK_HillShade")) d->SetHillShade(V(n) != 0.0f);
     else if (is("RVK_Contact")) d->SetContactShadows(V(n));
     else if (is("RVK_Ao") || is("RVK_AoRadius")) d->SetAo(V("RVK_Ao"), V("RVK_AoRadius"));
@@ -551,7 +533,6 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
         s.brightness = V("RVK_SmokeBright");
         s.opacity = V("RVK_SmokeOpaque");
         s.half = V("RVK_SmokeHalf") != 0.0f;
-        s.exact = V("RVK_SmokeExact") != 0.0f;
         d->SetSmokeParams(s);
     }
     else if (std::strncmp(n, "RVK_Cloud", 9) == 0 || std::strcmp(n, "RVK_SkyVary") == 0 || std::strcmp(n, "RVK_SkyZones") == 0) {
@@ -835,6 +816,7 @@ constexpr uint32_t kPresetCount = 4;
 
 bool InPresets(const Setting& s)
 {
+    if (std::strcmp(s.section, "Debug") == 0) return false;   // (debug switches: randy-vk.ini only)
     return std::strcmp(s.section, "General") != 0 || std::strcmp(s.name, "RVK_Enhance") == 0;
 }
 
@@ -897,18 +879,30 @@ extern "C" {
 
 uint32_t RvkSettings_Version() { return 2; }
 
+// The settings the Renderer tab shows: all but the "Debug" section's (those are set in randy-vk.ini).
+static const std::vector<uint32_t>& Shown()
+{
+    static const std::vector<uint32_t> shown = [] {
+        std::vector<uint32_t> v;
+        for (uint32_t i = 0; i < kCount; ++i)
+            if (std::strcmp(g_settings[i].section, "Debug") != 0) v.push_back(i);
+        return v;
+    }();
+    return shown;
+}
+
 uint32_t RvkSettings_Count()
 {
     rvk_settings::Load();
-    return kCount;
+    return uint32_t(Shown().size());
 }
 
 int RvkSettings_Get(uint32_t index, RvkSettingInfo* out)
 {
     rvk_settings::Load();
-    if (index >= kCount || !out || out->size < offsetof(RvkSettingInfo, parent))   // version 1 callers: no parent
+    if (index >= Shown().size() || !out || out->size < offsetof(RvkSettingInfo, parent))   // version 1: no parent
         return 0;
-    const Setting& s = g_settings[index];
+    const Setting& s = g_settings[Shown()[index]];
     out->name = s.name;
     out->label = s.label;
     out->section = s.section;

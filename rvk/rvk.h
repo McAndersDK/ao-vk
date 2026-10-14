@@ -449,9 +449,6 @@ public:
     void SetShadowMemory(uint32_t mode) { m_shadowMemory = mode; m_cacheTraceLines = 0; m_memoryTraceFrames = 240; }
     void SetHillShade(bool on) { m_hillShade = on; }
     void SetShadowView(bool on) { m_shadowViewDebug = on; m_frameLightsDirty = true; }   // (debug: RVK_ShadowView)
-    void SetShadowOnlyDraw(bool on) { m_shadowOnlyDraw = on; }   // (the next draws cast only: DrawShadowOnly)
-    void DrawShadowOnly(uint32_t primitive, uint32_t fvf, const void* vertices, uint32_t vertexCount,
-                        const uint16_t* indices, uint32_t indexCount);
     // The game's own sun sprites (its glow, VisualSunRays_t), shown or not.
     void SetGameSun(bool on) { m_gameSun = on; }
     // Tests: the sky weather's clock (seconds, as UTC; < 0 the wall clock).
@@ -585,8 +582,6 @@ public:
         float brightness = 1.0f;                // RVK_SmokeBright: its colour, x
         float opacity = 1.0f;                   // RVK_SmokeOpaque: how opaque it is drawn (<= 1 x; above, as if thicker)
         bool half = true;                        // RVK_SmokeHalf: marched at half size, upsampled by depth
-        bool exact = false;                      // RVK_SmokeExact: the pressure solved closer (from the last step's;
-                                                 // cheaper too - but its plumes rise less high: a look of its own)
     };
     struct SmokeSource {
         float pos[3] = {0, 0, 0};                // world: where it comes from (its box stands round it)
@@ -1101,8 +1096,6 @@ private:
     bool m_shadowViewDebug = false;              // RVK_ShadowView: the sun shadow map's say painted on the scene
     // The next draws only cast (native mesh.cpp: static meshes the game culled, within the shadows' reach): recorded as
     // sun shadow casters, not drawn (Draw). How many this frame (logged).
-    bool m_shadowOnlyDraw = false;
-    uint32_t m_shadowOnlyDraws = 0;
     struct ArenaChunk;
     struct CachedCaster {
         // Its vertices then indices in a slot of the caster arena (shared buffers: casters batch together).
@@ -1859,7 +1852,6 @@ private:
         SmokeImage vel[2], dens[2];
         SmokeImage look;                         // what the drawing reads: R density, G the sunlight reaching it; B A
                                                  // the same a step before (RGBA16F, written by the simulation's last stage)
-        SmokeImage pressure;                     // RVK_SmokeExact: its pressure (each step's solve starts from the last's)
         SmokeImage flow;                         // its velocity for the drawing's wisps: half the cells a side, RGBA8
                                                  // (/ kFlowMax)
     };

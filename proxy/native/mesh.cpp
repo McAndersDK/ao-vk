@@ -30,8 +30,6 @@ namespace rnative::mesh {
 
 namespace {
 
-std::atomic<float> g_shadowOnlyRange{0.0f}, g_shadowOnlyMinRadius{1.0f};   // (SetShadowOnlyRange)
-bool g_shadowOnly = false;                       // a culled mesh being drawn for its shadow (the game's thread)
 
 HMODULE g_orig;
 void* const* g_randy;
@@ -509,66 +507,9 @@ void __fastcall TriMeshProcess(Visual* v)
     orig::RVisual_t_Process(v);
 }
 
-// A culled mesh drawn for its shadow alone (ShadowOnly): each sub-mesh with its material (its texture: the cut-out)
-// and nothing of Rasterize's else - no lights (its light list is from when it was last seen: lights since gone; with
-// Rasterize the game crashed - user, 2026-10-14), no observers, hooks, transparency or fade, no environment or statel
-// pass, its data not marked drawn.
-void ShadowRasterize(Visual* v, void* vp)
-{
-    uint8_t* data = Field<uint8_t*>(v, kData);
-    if (!data) return;
-    // (Each as RenderWithTransparency without a hook: an environment-mapped material through EnvironmentPass, which
-    // puts the second stage back after it - set and left, it stayed on every later draw, the interface's too: all
-    // washed out white - user, 2026-10-14; the material reset after each.)
-    static const uint16_t stages = orig::Randy_t_GetTextureStageCount(Randy());
-    auto& meshes = Meshes(data);
-    for (uint8_t** m = meshes.first; m != meshes.last; ++m) {
-        void* material = Field<void*>(*m, kMaterial);
-        if (!material) continue;
-        const bool env = orig::RMaterial_t_GetEnvTexture(material) && v[kEnvAllowed] && stages >= 2;
-        orig::RViewPort_t_SetMaterial(vp, material);
-        if (env) {
-            EnvironmentPass(v, nullptr, vp, *m);
-        } else {
-            orig::DeviceState_UpdateDevice(Field<void*>(vp, kVpState));
-            MeshRender(*m, nullptr, vp);
-        }
-        orig::RViewPort_t_ResetMaterial(vp);
-    }
-}
-
-// Culled, but within the shadows' reach (SetShadowOnlyRange): its bounding sphere's nearest point that close to
-// the camera, and not too small to matter.
-bool CastsWhileCulled(Visual* v, void* vp)
-{
-    const float range = g_shadowOnlyRange.load(std::memory_order_relaxed);
-    if (range <= 0.0f) return false;
-    uint8_t* data = Field<uint8_t*>(v, kData);
-    void* volumePtr = data ? Field<void*>(data, kDataVolume) : nullptr;
-    void* camera = vp ? Field<void*>(vp, kVpCamera) : nullptr;
-    if (!volumePtr || !camera) return false;
-    const float* volume = &Field<float>(volumePtr, 0);
-    const float radius = volume[5] * WorldScale(v);
-    if (radius < g_shadowOnlyMinRadius.load(std::memory_order_relaxed)) return false;
-    float c[3];
-    xm::Transform(volume + 2, World(v), c);
-    const float* eye = World(camera) + 12;
-    const float dx = c[0] - eye[0], dy = c[1] - eye[1], dz = c[2] - eye[2];
-    const float reach = range + radius;
-    return dx * dx + dy * dy + dz * dz < reach * reach;
-}
-
 void __fastcall TriMeshRender(Visual* v, void*, void* vp)
 {
-    if (!v[kVisibleNow]) {
-        // Shadow-only: drawn for the sun's shadows alone (the renderer records, draws nothing): ShadowRasterize.
-        if (!CastsWhileCulled(v, vp)) return;
-        orig::render_t_SetTransformMatrix(Render(), kWorld, const_cast<float*>(World(v)));
-        g_shadowOnly = true;
-        ShadowRasterize(v, vp);
-        g_shadowOnly = false;
-        return;
-    }
+    if (!v[kVisibleNow]) return;
     if (const uint16_t* colours = Field<const uint16_t*>(v, kColours)) CopyColours(v, nullptr, colours);
     uint8_t* data = Field<uint8_t*>(v, kData);
     Field<uint32_t>(v, kLitBy) =
@@ -865,13 +806,5 @@ void Install(HMODULE orig)
     for (const Entry& e : entries) installed += Replace(orig, e.rva, e.target, e.what) ? 1 : 0;
     Log("meshes: %d of %d functions native", installed, int(sizeof(entries) / sizeof(entries[0])));
 }
-
-void SetShadowOnlyRange(float range, float minRadius)
-{
-    g_shadowOnlyRange.store(range, std::memory_order_relaxed);
-    g_shadowOnlyMinRadius.store(minRadius, std::memory_order_relaxed);
-}
-
-bool ShadowOnly() { return g_shadowOnly; }
 
 }  // namespace rnative::mesh
