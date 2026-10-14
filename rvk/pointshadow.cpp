@@ -249,33 +249,39 @@ void Device::FindCarriers()
     // owner: every test below is within a unit of a point sideways, or of one owner - a light looked through all the
     // frame's items four times (lights x items: ~5% of the render thread over a city at night). Candidates are taken
     // in the items' order, so the same item wins a tie as before.
-    std::vector<std::pair<uint64_t, uint32_t>>& grid = m_carrierGrid;
+    // (Buckets: a cell's items chained through m_carrierNext, newest first - a query sorts what it gathers.)
+    constexpr uint32_t kBuckets = 4096;
+    std::vector<int32_t>& head = m_carrierHead;
+    std::vector<int32_t>& chain = m_carrierNext;
     std::vector<std::pair<uint32_t, uint32_t>>& byOwner = m_carrierOwners;
-    grid.clear();
+    head.assign(kBuckets, -1);
+    chain.resize(m_shadowItems.size());
     byOwner.clear();
-    auto cellKey = [](int32_t x, int32_t z) { return uint64_t(uint32_t(x)) << 32 | uint32_t(z); };
+    auto cellOf = [](float v) { return int32_t(std::floor(v)); };
+    auto bucket = [](int32_t x, int32_t z) { return (uint32_t(x) * 73856093u ^ uint32_t(z) * 19349663u) & (kBuckets - 1); };
     for (uint32_t i = 0; i < m_shadowItems.size(); ++i) {
         const ShadowItem& it = m_shadowItems[i];
         if (it.cached) continue;
         const float x = it.world.m[3][0], z = it.world.m[3][2];
-        if (std::fabs(x) < 1e9f && std::fabs(z) < 1e9f)
-            grid.push_back({cellKey(int32_t(std::floor(x)), int32_t(std::floor(z))), i});
+        if (std::fabs(x) < 1e9f && std::fabs(z) < 1e9f) {
+            const uint32_t b = bucket(cellOf(x), cellOf(z));
+            chain[i] = head[b];
+            head[b] = int32_t(i);
+        }
         if (it.owner) byOwner.push_back({it.owner, i});
     }
-    std::sort(grid.begin(), grid.end());
     std::sort(byOwner.begin(), byOwner.end());
     std::vector<uint32_t>& nearby = m_carrierNear;
     // The drawn items whose origin is within r sideways of (x, z) - a superset: the cells it touches - in item order.
     auto gather = [&](float x, float z, float r, bool clear) {
         if (clear) nearby.clear();
-        const int32_t x0 = int32_t(std::floor(x - r)), x1 = int32_t(std::floor(x + r));
-        const int32_t z0 = int32_t(std::floor(z - r)), z1 = int32_t(std::floor(z + r));
+        const int32_t x0 = cellOf(x - r), x1 = cellOf(x + r), z0 = cellOf(z - r), z1 = cellOf(z + r);
         for (int32_t cx = x0; cx <= x1; ++cx)
-            for (int32_t cz = z0; cz <= z1; ++cz) {
-                const uint64_t k = cellKey(cx, cz);
-                auto at = std::lower_bound(grid.begin(), grid.end(), std::pair<uint64_t, uint32_t>{k, 0u});
-                for (; at != grid.end() && at->first == k; ++at) nearby.push_back(at->second);
-            }
+            for (int32_t cz = z0; cz <= z1; ++cz)
+                for (int32_t i = head[bucket(cx, cz)]; i >= 0; i = chain[size_t(i)]) {
+                    const auto& m = m_shadowItems[size_t(i)].world.m;
+                    if (cellOf(m[3][0]) == cx && cellOf(m[3][2]) == cz) nearby.push_back(uint32_t(i));
+                }
     };
     auto inOrder = [&] {
         std::sort(nearby.begin(), nearby.end());

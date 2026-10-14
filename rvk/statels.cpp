@@ -286,6 +286,7 @@ bool Device::LoadStatels(const char* path, uint32_t playfield)
             for (uint32_t x = x0; x <= x1; ++x) m_statelCellItems[fill[size_t(z) * m_statelGridW + x]++] = i;
     }
     m_statelStamp.assign(m_statelItems.size(), 0);
+    m_statelItemKey.assign(m_statelItems.size(), 0);
     m_statelLookup.reserve(m_statelItems.size());
     for (const StatelItem& it : m_statelItems) {
         const StatelPiece& p = m_statelPieces[it.piece];
@@ -479,6 +480,8 @@ void Device::AddStatelShadowItems()
                 it.leafKey = 0;
                 std::memset(it.sway, 0, sizeof(it.sway));
                 it.cacheKey = 0x5354000000000000ull | i;   // ("ST": a statel piece, for the frame dump)
+                if (!m_statelItemKey[i]) m_statelItemKey[i] = ShadowItemKey(it);   // (the piece's: fixed)
+                it.key = m_statelItemKey[i];
                 m_shadowItems.push_back(it);
                 ++m_statelItemsThisFrame;
             }

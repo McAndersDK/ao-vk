@@ -947,7 +947,7 @@ private:
     };
     static constexpr uint32_t kNoShadowRecord = ~1u;
     std::vector<ShadowItem> m_shadowItems;       // EndFrame: what the shadow passes draw
-    std::vector<std::pair<uint64_t, uint32_t>> m_carrierGrid;   // FindCarriers: drawn items by 1-unit cell
+    std::vector<int32_t> m_carrierHead, m_carrierNext;           // FindCarriers: drawn items by 1-unit cell (buckets)
     std::vector<std::pair<uint32_t, uint32_t>> m_carrierOwners;  // ... by owner
     std::vector<uint32_t> m_carrierNear;                         // ... a query's items
     // What a shadow pass has bound, so unchanged state isn't re-issued.
@@ -1124,6 +1124,8 @@ private:
         float plantSway[4];                      // a plant's wind sway (as ShadowCaster sway)
         uint32_t kind;                           // ShadowCaster kind (VisualKind)
         uint64_t leafKey;                        // ShadowCaster leafKey
+        uint64_t itemKey;                        // its shadow item's batch key (ShadowItemKey), 0: not yet
+        Texture* itemKeyTexture;                 // ... made with this cut-out texture (null: solid)
     };
     static constexpr double kSwayStep = 0.05;
     static constexpr size_t kSwaySamples = 80;
@@ -1144,6 +1146,7 @@ private:
     float m_statelGridOrigin[2] = {};
     uint32_t m_statelGridW = 0, m_statelGridH = 0;
     std::vector<uint32_t> m_statelCellStart, m_statelCellItems, m_statelStamp;
+    std::vector<uint64_t> m_statelItemKey;       // each item's shadow batch key (ShadowItemKey), 0: not yet
     uint32_t m_statelStampNow = 0, m_statelPlayfield = 0, m_statelMode = 1, m_statelItemsThisFrame = 0;
     // The placement, of turned statels [0] and of stretched ones [1] (fences, walls): 1 confirmed, -1 refused, 0 not
     // yet (for the session).
@@ -1185,6 +1188,7 @@ private:
     std::vector<uint32_t> m_shadowOrder;
     std::vector<float> m_shadowOrderBox;         // per m_shadowOrder entry, packed: world box min x, y, z, max x, y, z
                                                  // (the point pass's per-light scan reads these, not the items)
+    std::vector<uint8_t> m_shadowOrderCached;    // ... and whether it is remembered (the cascades' cull reads these)
     static uint64_t ShadowItemKey(const ShadowItem& item);
     // Frame dump: how much the main pass could merge into instanced draws - consecutive static draws with the same
     // snapshot, vertex / index range, format, textures and geometry, differing only in their world / per-draw block.

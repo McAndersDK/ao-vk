@@ -8,6 +8,7 @@
 #include "internal.h"
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <climits>
@@ -1112,6 +1113,11 @@ void Device::CollectShadowItems()
         it.leafKey = e.leafKey;
         std::memcpy(it.sway, e.plantSway, sizeof(it.sway));
         it.cacheKey = key;
+        if (!e.itemKey || e.itemKeyTexture != it.texture) {   // (made again when its texture went: solid now)
+            e.itemKey = ShadowItemKey(it);
+            e.itemKeyTexture = it.texture;
+        }
+        it.key = e.itemKey;
         m_shadowItems.push_back(it);
     }
     AddStatelShadowItems();                      // the playfield's placed objects (statels.cpp)
@@ -1131,27 +1137,64 @@ void Device::CollectShadowItems()
     // texture (a descriptor push), buffers (binds) - then by batch key, so equal batches are contiguous (stable: equal
     // keys keep the game's order). Hash order alone scattered those states: a bind or push between most batches.
     m_shadowOrder.resize(m_shadowItems.size());
-    static std::vector<std::pair<uint64_t, uint64_t>> sortKeys;   // (state order, batch key) per item
-    sortKeys.resize(m_shadowItems.size());
+    // The order: by (state, batch key), equal pairs in the items' order - as a stable sort by the two keys, but by
+    // grouping: a frame's ~6,000 items have a few dozen distinct pairs, so the items are counted into the pairs, the
+    // pairs alone sorted, and the items placed (a sort of all the items was ~2.5% of the render thread over a city).
+    struct Pair { uint64_t state, key; };
+    static std::vector<Pair> pairs;              // the distinct pairs, in order of first appearance
+    static std::vector<uint32_t> pairOf, count, offset, table, sorted;
+    pairs.clear();
+    pairOf.resize(m_shadowItems.size());
+    if (table.size() < 2 * m_shadowItems.size() + 64) table.resize(std::bit_ceil(2 * m_shadowItems.size() + 64));
+    std::fill(table.begin(), table.end(), ~0u);
+    const size_t tableMask = table.size() - 1;
     for (uint32_t i = 0; i < m_shadowItems.size(); ++i) {
         ShadowItem& it = m_shadowItems[i];
-        it.key = ShadowItemKey(it);
-        m_shadowOrder[i] = i;
+        if (!it.key) it.key = ShadowItemKey(it);   // (remembered and placed ones: kept with them)
         uint64_t buffers = (uint64_t(it.buffer) * 0x9E3779B97F4A7C15ull) ^ (uint64_t(it.ibBuffer) * 0xC2B2AE3D27D4EB4Full);
         uint64_t state = uint64_t(it.texture ? 1 : 0) << 63 | uint64_t(it.indexCount != 0) << 62 |
                          uint64_t(it.primitive & 7) << 59 | uint64_t(std::min<uint32_t>(it.stride, 255)) << 51 |
                          uint64_t(uint32_t(it.texOffset + 1) & 0xFF) << 43 |
                          uint64_t((reinterpret_cast<uintptr_t>(it.texture) >> 4) & 0xFFFF) << 27 |
                          ((buffers >> 37) & 0x7FFFFFF);
-        sortKeys[i] = {state, it.key};
+        // (Its pair: found or added - the table at most half full.)
+        size_t h = size_t((state * 0x9E3779B97F4A7C15ull) ^ (it.key * 0xC2B2AE3D27D4EB4Full) ^ (it.key >> 29)) &
+                   tableMask;
+        for (;; h = (h + 1) & tableMask) {
+            const uint32_t b = table[h];
+            if (b == ~0u) {
+                table[h] = uint32_t(pairs.size());
+                pairOf[i] = uint32_t(pairs.size());
+                pairs.push_back({state, it.key});
+                break;
+            }
+            if (pairs[b].state == state && pairs[b].key == it.key) {
+                pairOf[i] = b;
+                break;
+            }
+        }
     }
-    std::stable_sort(m_shadowOrder.begin(), m_shadowOrder.end(),
-                     [](uint32_t a, uint32_t b) { return sortKeys[a] < sortKeys[b]; });
+    sorted.resize(pairs.size());
+    for (uint32_t b = 0; b < pairs.size(); ++b) sorted[b] = b;
+    std::sort(sorted.begin(), sorted.end(), [](uint32_t a, uint32_t b) {
+        return pairs[a].state != pairs[b].state ? pairs[a].state < pairs[b].state : pairs[a].key < pairs[b].key;
+    });
+    count.assign(pairs.size(), 0);
+    for (uint32_t i = 0; i < m_shadowItems.size(); ++i) ++count[pairOf[i]];
+    offset.resize(pairs.size());
+    uint32_t at = 0;
+    for (uint32_t b : sorted) {
+        offset[b] = at;
+        at += count[b];
+    }
+    for (uint32_t i = 0; i < m_shadowItems.size(); ++i) m_shadowOrder[offset[pairOf[i]]++] = i;
     m_shadowOrderBox.resize(m_shadowOrder.size() * 6);
+    m_shadowOrderCached.resize(m_shadowOrder.size());
     for (size_t k = 0; k < m_shadowOrder.size(); ++k) {
         const ShadowItem& it = m_shadowItems[m_shadowOrder[k]];
         std::memcpy(&m_shadowOrderBox[k * 6], it.boundsMin, sizeof(it.boundsMin));
         std::memcpy(&m_shadowOrderBox[k * 6 + 3], it.boundsMax, sizeof(it.boundsMax));
+        m_shadowOrderCached[k] = it.cached ? 1 : 0;
     }
 }
 
@@ -1465,6 +1508,7 @@ void Device::RenderShadowMap(VkCommandBuffer cmd)
         m_shadowItems.clear();
         m_shadowOrder.clear();
         m_shadowOrderBox.clear();
+        m_shadowOrderCached.clear();
         return;
     }
     // The caster records and indirect commands live in this ring generation's arena, reserved by Draw - but the ring
@@ -1547,19 +1591,23 @@ void Device::RenderShadowMap(VkCommandBuffer cmd)
         m_cascadeVisible.clear();
         const bool affine = lightViewProj.m[0][3] == 0.0f && lightViewProj.m[1][3] == 0.0f &&
                             lightViewProj.m[2][3] == 0.0f && lightViewProj.m[3][3] == 1.0f;
-        for (uint32_t i : m_shadowOrder) {       // batch-key order (CollectShadowItems)
-            const ShadowItem& item = m_shadowItems[i];
+        // (Batch-key order, CollectShadowItems; the boxes and flags packed in that order - not the items themselves.)
+        const size_t orderCount = std::min(m_shadowOrder.size(), m_shadowOrderCached.size());
+        for (size_t k = 0; k < orderCount; ++k) {
+            const uint32_t i = m_shadowOrder[k];
+            const float* bmin = &m_shadowOrderBox[k * 6];
+            const float* bmax = bmin + 3;
             // Only casters reaching into this cascade's square (the widest takes every one the game drew).
-            if ((item.cached || !last) &&
-                (affine ? BoxOutsideAffine(item.boundsMin, item.boundsMax, lightViewProj)
-                        : BoxInClip(item.boundsMin, item.boundsMax, lightViewProj, false) == -1)) {
+            if ((m_shadowOrderCached[k] || !last) &&
+                (affine ? BoxOutsideAffine(bmin, bmax, lightViewProj)
+                        : BoxInClip(bmin, bmax, lightViewProj, false) == -1)) {
                 ++m_shadowCulled;
                 continue;
             }
             // Beyond the nearest cascade, casters a few texels across leave no shadow worth drawing (they still
             // cast in the sharper cascades nearer the camera).
             if (c > 0) {
-                float extent = std::max(std::max(item.boundsMax[0] - item.boundsMin[0], item.boundsMax[1] - item.boundsMin[1]), item.boundsMax[2] - item.boundsMin[2]);
+                float extent = std::max(std::max(bmax[0] - bmin[0], bmax[1] - bmin[1]), bmax[2] - bmin[2]);
                 if (extent < 4.0f * texel) {
                     ++m_shadowCulled;
                     continue;
@@ -1647,6 +1695,7 @@ void Device::FinishShadowFrame()
     m_animatedItems.clear();
     m_shadowOrder.clear();
     m_shadowOrderBox.clear();
+    m_shadowOrderCached.clear();
     UpdateCasterCache();
     // The mesh cache: forget meshes not drawn for a while (animated ones leave a fingerprint per frame).
     if ((m_frameNumber & 31) == 0 || m_meshInfo.size() > 60000)
