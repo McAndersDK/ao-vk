@@ -509,6 +509,25 @@ void __fastcall TriMeshProcess(Visual* v)
     orig::RVisual_t_Process(v);
 }
 
+// A culled mesh drawn for its shadow alone (ShadowOnly): each sub-mesh with its material (its texture: the cut-out)
+// and nothing of Rasterize's else - no lights (its light list is from when it was last seen: lights since gone; with
+// Rasterize the game crashed - user, 2026-10-14), no observers, hooks, transparency or fade, no environment or statel
+// pass, its data not marked drawn.
+void ShadowRasterize(Visual* v, void* vp)
+{
+    uint8_t* data = Field<uint8_t*>(v, kData);
+    if (!data) return;
+    auto& meshes = Meshes(data);
+    for (uint8_t** m = meshes.first; m != meshes.last; ++m) {
+        void* material = Field<void*>(*m, kMaterial);
+        if (!material) continue;
+        orig::RViewPort_t_SetMaterial(vp, material);
+        orig::DeviceState_UpdateDevice(Field<void*>(vp, kVpState));
+        MeshRender(*m, nullptr, vp);
+    }
+    orig::RViewPort_t_ResetMaterial(vp);
+}
+
 // Culled, but within the shadows' reach (SetShadowOnlyRange): its bounding sphere's nearest point that close to
 // the camera, and not too small to matter.
 bool CastsWhileCulled(Visual* v, void* vp)
@@ -533,12 +552,11 @@ bool CastsWhileCulled(Visual* v, void* vp)
 void __fastcall TriMeshRender(Visual* v, void*, void* vp)
 {
     if (!v[kVisibleNow]) {
-        // Shadow-only: drawn for the sun's shadows alone (the renderer records, draws nothing) - no lights, no
-        // colours, no render priority change.
+        // Shadow-only: drawn for the sun's shadows alone (the renderer records, draws nothing): ShadowRasterize.
         if (!CastsWhileCulled(v, vp)) return;
         orig::render_t_SetTransformMatrix(Render(), kWorld, const_cast<float*>(World(v)));
         g_shadowOnly = true;
-        Rasterize(v, nullptr, vp, Field<uint8_t*>(v, kData), true, v[kSorted] != 0);
+        ShadowRasterize(v, vp);
         g_shadowOnly = false;
         return;
     }
