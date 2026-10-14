@@ -140,8 +140,8 @@ bool Device::CreateHdrResources(std::string* error)
         return Check(vkCreateDescriptorSetLayout(m_device, &sl, nullptr, out), "post set layout", error);
     };
     auto pipelineLayout = [&](VkDescriptorSetLayout set, VkPipelineLayout* out) {
-        // (160: the tone mapping's air (RVK_Atmos) - past Vulkan's guaranteed 128; desktop GPUs give 256.)
-        VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 160};
+        // (192: the tone mapping's air (RVK_Atmos) and sand haze - past Vulkan's guaranteed 128; desktop GPUs give 256.)
+        VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 192};
         VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         pl.setLayoutCount = 1;
         pl.pSetLayouts = &set;
@@ -149,8 +149,8 @@ bool Device::CreateHdrResources(std::string* error)
         pl.pPushConstantRanges = &push;
         return Check(vkCreatePipelineLayout(m_device, &pl, nullptr, out), "post pipeline layout", error);
     };
-    if (m_props.limits.maxPushConstantsSize < 160)
-        Log("post: this GPU allows %u bytes of push constants, the tone mapping needs 160 (RVK_Atmos): expect errors",
+    if (m_props.limits.maxPushConstantsSize < 192)
+        Log("post: this GPU allows %u bytes of push constants, the tone mapping needs 192 (RVK_Atmos, sand): expect errors",
             m_props.limits.maxPushConstantsSize);
     if (!setLayout(kTonemapInputs, &m_tonemapSetLayout) || !pipelineLayout(m_tonemapSetLayout, &m_tonemapLayout) ||
         !setLayout(4, &m_bloomSetLayout) || !pipelineLayout(m_bloomSetLayout, &m_bloomLayout))
@@ -572,12 +572,13 @@ void Device::TonemapInputsPass(VkCommandBuffer cmd, Texture* dst, VkPipeline pip
         w[i].pImageInfo = &images[i];
     }
     vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_tonemapLayout, 0, kTonemapInputs, w);
-    float push[40] = {};
+    float push[48] = {};
     std::memcpy(push, params, 16 * sizeof(float));
     if (depthView == m_depthView && m_aoProjValid) {
         push[7] = float(int(push[7]) | 16);      // (the depth is the scene's: the grading's distance, the land's haze)
         LandHaze(push + 16);
     }
+    SandHaze(push + 40);                         // (wind.cpp: a sand or ash storm's air)
     vkCmdPushConstants(cmd, m_tonemapLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), push);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRendering(cmd);

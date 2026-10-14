@@ -28,6 +28,10 @@ layout(push_constant) uniform Push {
     vec4 air1;          // xyz: up (view space), w: the sun's glow in the haze, x
     vec4 air2;          // xyz: towards the sun - by night the moon (view space), w: the glow's forward lobe (HG g)
     vec4 air3;          // rgb: the sun's (moon's) light through the air - golden, then red low
+    // A sand or ash storm (rvk wind.cpp SandHaze): the air thick with it, from the game's own storm tint.
+    vec4 dust;          // rgb: its colour (as the scene's light); w: its density (per world unit; 0: none)
+    vec4 dust2;         // x: the wind's clock; y: how much it surges with the gusts; z: the veil at every distance
+                        // (0..1); w: unused
 } P;
 
 // A reduced-resolution image at this pixel: of the 4 nearest texels, those at this pixel's depth (the same surface,

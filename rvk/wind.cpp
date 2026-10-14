@@ -52,6 +52,20 @@ void Device::UpdateWind()
     m_windStrength = 1.0f + cloud + 1.8f * storm;
     m_windGusts = 1.0f + 2.5f * storm;
 
+    // A sand or ash storm: the game's tint, left out in Draw, says its colour and strength; eased in and out.
+    const bool tint = now - m_stormTintSeen < 0.5;
+    const float sandTarget = tint ? float(m_stormTintColour >> 24) / 255.0f : 0.0f;
+    m_sand += (sandTarget - m_sand) * (dt > 0.0f ? 1.0f - std::exp(-dt / 3.0f) : 1.0f);
+    if (m_sand < 1e-3f && sandTarget == 0.0f) m_sand = 0.0f;
+    if (tint) {
+        // Its colour, made linear, then half-way towards its own brightness and a little lighter: the game's sheet is
+        // a third over a greyish frame - at full strength (the horizon) its raw colour is a saturated orange.
+        auto linear = [](uint32_t v) { const float c = float(v & 0xFF) / 255.0f; return c * c; };   // (about sRGB)
+        const float rgb[3] = {linear(m_stormTintColour >> 16), linear(m_stormTintColour >> 8), linear(m_stormTintColour)};
+        const float luma = 0.3f * rgb[0] + 0.59f * rgb[1] + 0.11f * rgb[2];
+        for (int i = 0; i < 3; ++i) m_sandColour[i] = 1.3f * (luma + (rgb[i] - luma) * 0.5f);
+    }
+
     // Its clock: faster in a storm.
     m_windTimePrev = m_windTime;
     m_windTime = std::fmod(m_windTime + double(dt) * (1.0 + 0.9 * double(storm)), 3600.0);
@@ -60,10 +74,24 @@ void Device::UpdateWind()
     if (m_frameNumber % 600 == 0)
     {
         Log("wind: towards %.2f %.2f (%s), strength x%.2f, gusts x%.2f, storm %.2f; the game's storm tint left out %u "
-            "times", double(m_windDir[0]), double(m_windDir[1]), fromGame && gl > 0.05f ? "the game's weather" : "the sky's",
-            double(m_windStrength), double(m_windGusts), double(m_storm), m_stormTintSkipped);
+            "times (colour %08x), sand %.2f", double(m_windDir[0]), double(m_windDir[1]),
+            fromGame && gl > 0.05f ? "the game's weather" : "the sky's", double(m_windStrength), double(m_windGusts),
+            double(m_storm), m_stormTintSkipped, m_stormTintColour, double(m_sand));
         m_stormTintSkipped = 0;
     }
+}
+
+// The tone mapping's sand (occlusion.glsl dust, dust2): the storm's colour; its density - the game's tint at its
+// strength (alpha ~0.38 in its sandstorm) a 50% veil at ~25 units, x RVK_SandHaze; surging with the wind.
+void Device::SandHaze(float out[8]) const
+{
+    for (int i = 0; i < 8; ++i) out[i] = 0.0f;
+    if (m_sand <= 0.0f || m_sandHaze <= 0.0f) return;
+    for (int i = 0; i < 3; ++i) out[i] = m_sandColour[i];
+    out[3] = 0.075f * m_sand * m_sandHaze;
+    out[4] = float(m_windTime);
+    out[5] = 0.12f + 0.25f * std::min(m_storm + m_sand, 1.0f);
+    out[6] = std::min(0.45f * m_sand * m_sandHaze, 0.6f);   // (the game's 0.38: a ~17% veil close by)
 }
 
 }  // namespace rvk

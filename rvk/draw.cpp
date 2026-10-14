@@ -2110,6 +2110,11 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
         (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZRHW && m_textures[0] && m_textures[0]->m_width <= 16 &&
         m_textures[0]->m_height <= 16) {
         ++m_stormTintSkipped;
+        const FvfLayout layout = DecodeFvf(fvf);  // (its colour and strength: our storm's air, wind.cpp SandHaze)
+        if (vertices && layout.offset[2] >= 0) {
+            std::memcpy(&m_stormTintColour, static_cast<const uint8_t*>(vertices) + layout.offset[2], 4);
+            m_stormTintSeen = m_frameClock;
+        }
         return;
     }
     ++m_frameDraw;

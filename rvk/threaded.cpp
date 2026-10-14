@@ -980,6 +980,11 @@ void ThreadedDevice::SetStormTint(bool on)
     Enqueue([this, on](const uint8_t*) { m_device.SetStormTint(on); });
 }
 
+void ThreadedDevice::SetSandHaze(float amount)
+{
+    Enqueue([this, amount](const uint8_t*) { m_device.SetSandHaze(amount); });
+}
+
 void ThreadedDevice::SetSway(float strength)
 {
     Enqueue([this, strength](const uint8_t*) { m_device.SetSway(strength); });

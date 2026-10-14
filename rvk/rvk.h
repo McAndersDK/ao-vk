@@ -321,6 +321,8 @@ public:
     void SetSway(float strength) { m_sway = strength; m_constantsDirty = true; m_frameLightsDirty = true; }
     void SetWindStorm(float scale) { m_windStormScale = scale; }   // RVK_WindStorm (wind.cpp)
     void SetStormTint(bool on) { m_stormTint = on; }               // RVK_StormTint (Draw: the game's storm sheet)
+    void SetSandHaze(float amount) { m_sandHaze = amount; }        // RVK_SandHaze (wind.cpp)
+    void SandHaze(float out[8]) const;                             // the tone mapping's sand: dust, dust2
     // Grass and plants bending out of the way of characters walking through them (0 = off; scales reach and bend).
     void SetGrassPush(float strength) { m_grassPush = strength; m_frameLightsDirty = true; }
     // Plants' big quads split into pieces for smooth bending (0 = off; 1 = pieces about 0.3 units across).
@@ -1839,6 +1841,12 @@ private:
     double m_windClockPrev = -1.0;               // m_frameClock at the last update
     bool m_stormTint = false;                    // RVK_StormTint: the game's storm tint drawn (with the new weather)
     uint32_t m_stormTintSkipped = 0;             // its draws left out (the wind log line)
+    // A sand or ash storm (wind.cpp): its colour and strength from the game's tint, seen left out (Draw).
+    uint32_t m_stormTintColour = 0;              // its vertex colour (ARGB: alpha its strength)
+    double m_stormTintSeen = -1e9;               // when (m_frameClock)
+    float m_sand = 0.0f;                         // 0 .. 1: how thick the storm's air (eased)
+    float m_sandColour[3] = {0.75f, 0.47f, 0.19f};   // its colour (linear)
+    float m_sandHaze = 1.0f;                     // RVK_SandHaze: x
     float m_rainWind[3] = {0, 0, 0};
     double m_rainClock = 0.0;                    // the rain's own time (s), for the drops' fall
     double m_rainLastClock = -1.0;

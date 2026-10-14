@@ -109,6 +109,17 @@ void main()
             }
         }
     }
+    // A sand or ash storm (rvk wind.cpp): the air thick with sand to the horizon - the sky wholly, the land through a
+    // veil that thickens with distance, surging with the wind.
+    if (P.dust.w > 0.0) {
+        float dist = d < 1.0 ? P.proj.y / min(d - P.proj.x, -1e-9) : 1e5;
+        vec2 uv = gl_FragCoord.xy / vec2(textureSize(scene, 0));
+        float surge = 1.0 + P.dust2.y * (0.6 * sin(P.dust2.x * 0.9 + uv.x * 5.0) + 0.4 * sin(P.dust2.x * 2.3 - uv.y * 7.0 + uv.x * 3.0));
+        // (Sand in the air right in front too: a veil at every distance, P.dust2.z, under the haze that thickens
+        // with it.)
+        float through = exp(-P.dust.w * dist * max(surge, 0.2)) * (1.0 - P.dust2.z * clamp(surge, 0.5, 1.5));
+        c = mix(P.dust.rgb, c, clamp(through, 0.0, 1.0));
+    }
     c = max((c + Volumetric() + glow) * P.params.y, vec3(0.0));
     // Night (RVK_NightDark x how much it is night): darker - the darks and middle tones down, the sky more; what is
     // bright kept (lamps, windows, the moon, stars, moonlit cloud edges), so it stands out of the dark.
