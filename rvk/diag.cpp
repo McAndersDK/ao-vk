@@ -159,6 +159,22 @@ void Device::EndFrameDump()
                              " %u)\n", m_batchRuns, m_batchMerged, m_batchMaxRun);
     std::fprintf(m_dumpFile, "# M3 batching: %u indirect calls for %u draws (%u single); %u indexed draws left direct\n",
                  m_groupCalls, m_groupDraws, m_singleDraws, m_frameDraw - m_groupDraws);
+    {
+        static const char* const rewhy[kRewhy] = {"state set", "new arena", "fvf", "textures", "terrain", "label",
+                                                  "carried light", "bump base", "foliage lod", "normal map", "character",
+                                                  "opaque texture", "texture holes", "sky scenery", "blend"};
+        static const char* const split[kSplitParts + 2] = {"constants", "pipeline", "primitive", "fvf", "vb", "ib",
+                                                           "prev positions", "smooth normals", "frame lights",
+                                                           "prepassed", "backdrop", "cull", "z", "blend", "discard/label",
+                                                           "terrain pass", "ended elsewhere", "not batchable"};
+        std::fprintf(m_dumpFile, "# constant blocks made again, by what changed:");
+        for (int i = 0; i < kRewhy; ++i)
+            if (m_rewriteWhy[i]) std::fprintf(m_dumpFile, " %s %u", rewhy[i], m_rewriteWhy[i]);
+        std::fprintf(m_dumpFile, "\n# batches ended, by what differed:");
+        for (int i = 0; i < kSplitParts + 2; ++i)
+            if (m_splitWhy[i]) std::fprintf(m_dumpFile, " %s %u", split[i], m_splitWhy[i]);
+        std::fprintf(m_dumpFile, "\n");
+    }
     std::fprintf(m_dumpFile, "# mesh info: %u draws identified by static snapshot, %u by a content hash\n",
                  m_meshStaticDraws, m_meshHashedDraws);
     if (m_lightMaskVerify)

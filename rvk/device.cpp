@@ -1645,6 +1645,8 @@ void Device::BeginFrame()
     m_profileConstBlocks += m_constCount;
     m_profileConstReused += m_constantsReused;
     m_groupCalls = m_groupDraws = m_singleDraws = m_constantsReused = 0;
+    std::memset(m_rewriteWhy, 0, sizeof(m_rewriteWhy));
+    std::memset(m_splitWhy, 0, sizeof(m_splitWhy));
     m_shadowGroupCalls = m_shadowGroupDraws = 0;
     m_casterViews.clear();
     m_frameLightsDirty = true;

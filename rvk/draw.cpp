@@ -2620,6 +2620,17 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
                    m_constantsCharacter != m_drawIsCharacter || m_constantsOpaque != cutoutTexture ||
                    m_constantsHoles != textureHoles || m_constantsSkyScenery != skyScenery ||
                    m_constantsBlend != m_rs[d3d::RS_ALPHABLENDENABLE];
+    if (m_dumpFile && rewrite) {                 // (frame dump: what made it so)
+        const bool why[kRewhy] = {m_constantsDirty, m_constantsGeneration != m_ringGeneration, m_constantsFvf != fvf,
+                                  m_constantsTexMask != texMask, m_constantsTerrain != terrain,
+                                  m_constantsLabel != m_drawIsLabel, m_constantsCarrier != carrier,
+                                  m_constantsBumpBase != m_drawBumpBase, m_constantsFoliageLod != foliageLod,
+                                  m_constantsNormalMap != normalMap, m_constantsCharacter != m_drawIsCharacter,
+                                  m_constantsOpaque != cutoutTexture, m_constantsHoles != textureHoles,
+                                  m_constantsSkyScenery != skyScenery,
+                                  m_constantsBlend != m_rs[d3d::RS_ALPHABLENDENABLE]};
+        for (int i = 0; i < kRewhy; ++i) m_rewriteWhy[i] += why[i];
+    }
     uint32_t constIndex = m_constIndex;
     bool sameArena = m_constantsGeneration == m_ringGeneration && m_constIndex < m_constCount;   // m_constIndex valid
     if (rewrite) {
@@ -3026,6 +3037,21 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
              (m_rs[d3d::RS_ALPHABLENDENABLE] ? uint64_t(m_rs[d3d::RS_SRCBLEND]) << 32 |
                                                    uint64_t(m_rs[d3d::RS_DESTBLEND]) << 48 : 0));
         groupKey = k ? k : 1;
+        if (m_dumpFile) {                        // (frame dump: which parts ended the batch)
+            const uint64_t parts[kSplitParts] = {
+                constIndex, pipelineClass, primitive, fvf, uint64_t(vb), uint64_t(ib), uint64_t(prevPositionsBuffer) ^ prevPositionsOffset ^ prevPositionsBytes,
+                uint64_t(smoothBuffer) ^ smoothOffset ^ smoothBytes, frameLightsOffset, m_drawPrepassed ? 1u : 0u,
+                m_drawBackdrop ? 1u : 0u, m_rs[d3d::RS_CULLMODE], uint64_t(m_rs[d3d::RS_ZWRITEENABLE] != 0) | uint64_t(m_rs[d3d::RS_ZFUNC]) << 8,
+                m_rs[d3d::RS_ALPHABLENDENABLE], uint64_t(m_drawMayDiscard) | uint64_t(m_drawIsLabel) << 1 | uint64_t(m_drawOverbright2x) << 2,
+                uint64_t(m_drawTerrainBase) | uint64_t(m_drawTerrainLight) << 1};
+            if (m_group.active && groupKey != m_group.key)
+                for (int i = 0; i < kSplitParts; ++i) m_splitWhy[i] += parts[i] != m_lastGroupParts[i];
+            else if (!m_group.active)
+                ++m_splitWhy[kSplitParts];       // (the batch was ended elsewhere: a flush, edges, a pass)
+            std::memcpy(m_lastGroupParts, parts, sizeof(parts));
+        }
+    } else if (m_dumpFile) {
+        ++m_splitWhy[kSplitParts + 1];           // (not batchable)
     }
     if (m_group.active && (groupKey == 0 || groupKey != m_group.key))
         FlushGroup();                                // the pending group's state is about to change
