@@ -119,3 +119,15 @@ passes a 120-byte overrun); ASan for i386 needs clang_rt.asan_dynamic-i386.dll, 
 
 Waiting on in-game data (rc050b): the zone-load freeze (hang report), ben's AI-mission crash, kerri's planet-map
 spike, the chat-scroll numbers, cirassel's attack stutter (slow-frame lines).
+
+## Status (2026-10-14, afternoon)
+
+- Planet map hitch (kerri; user confirmed: ~120 ms frames each time the map opened): ~110 PNG tiles a open, stb decode
+  0.25 ms + D3DX's conversion core 0.35-0.4 ms each (the same in 0.3.1 and the original). Fixed for re-opens by
+  caches of decoded images (lbitmap.cpp) and D3DX's converted levels (texture_stream.cpp): 67 -> 8 ms, bit-exact
+  (harness --map-tiles checksum over 880 levels). The first open per session still ~70 ms; porting D3DX's conversion
+  core (FUN_100694e6 / the bilinear resampler FUN_1006bfc1) natively would cut that too.
+- RVK_ShadowAll gated behind RANDYVK_SHADOW_ALL=1 (heap damage).
+- F10 hitch: not measured yet - the options window's widgets (our tabs add 220 settings) are the suspect;
+  tools/profile-hitches.sh while opening F10 a few times.
+- 0.5.0 packaged locally (~/Downloads/ao-vk-0.5.0, DLL = staged randy31-rc050d.dll), not tagged or pushed.
