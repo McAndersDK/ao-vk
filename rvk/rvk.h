@@ -307,6 +307,11 @@ public:
     // Mesh ids (meshids.cpp): ao-assets' table of the static meshes' piece geometries (mesh-ids.bin) - which mesh a
     // draw is. False (logged) when there is none.
     bool LoadMeshIds(const char* path);
+    // Placed objects' shadows (statels.cpp): the playfield's pack (ao-assets statels: <client>/randy-vk/statels/
+    // <playfield>.bin; "" none) - its static objects cast whether the game draws them or not. Mode 0 off, 1 once the
+    // placement is confirmed against the game's draws, 2 always.
+    bool LoadStatels(const char* path, uint32_t playfield);
+    void SetStatelMode(uint32_t mode);
     // Wind for small plants (grass, bushes, flowers): 0 = still.
     void SetSway(float strength) { m_sway = strength; m_constantsDirty = true; m_frameLightsDirty = true; }
     // Grass and plants bending out of the way of characters walking through them (0 = off; scales reach and bend).
@@ -1106,6 +1111,26 @@ private:
     // (at: where it stood when the streak began; moved: it has moved since - a thing that moves isn't remembered.)
     struct CasterStreak { uint64_t lastFrame = 0; uint32_t count = 0; float at[3] = {}; bool moved = false; };
     std::unordered_map<uint64_t, CachedCaster> m_casterCache;
+    // Placed objects (statels.cpp): every piece of the playfield's static objects, placed; a grid (x, z) over them.
+    struct StatelPiece { uint32_t firstVertex, vertexCount, firstIndex, indexCount; Texture* texture; float alphaRef; };
+    struct StatelItem { d3d::Matrix world; float boundsMin[3], boundsMax[3]; uint32_t piece, statel; };
+    struct StatelPlaced { float x, y, z; int yaw, pitch, roll; float scale; uint32_t mesh; };   // (for the log)
+    std::vector<StatelPiece> m_statelPieces;
+    std::vector<StatelItem> m_statelItems;
+    std::vector<StatelPlaced> m_statelPlaced;
+    std::vector<Texture*> m_statelMasks;
+    VkBuffer m_statelBuffer = VK_NULL_HANDLE;    // vertices (position, uv: 20 bytes), then the indices
+    VmaAllocation_T* m_statelAllocation = nullptr;
+    VkDeviceSize m_statelIndexBase = 0;
+    float m_statelGridOrigin[2] = {};
+    uint32_t m_statelGridW = 0, m_statelGridH = 0;
+    std::vector<uint32_t> m_statelCellStart, m_statelCellItems, m_statelStamp;
+    uint32_t m_statelStampNow = 0, m_statelPlayfield = 0, m_statelMode = 1, m_statelItemsThisFrame = 0;
+    int m_statelVerified = 0;                    // the placement: 1 confirmed, -1 refused, 0 not yet (a session's)
+    uint32_t m_statelMatched = 0, m_statelMismatched = 0;
+    void DestroyStatels();
+    void AddStatelShadowItems();
+    void CheckStatelDraw(const d3d::Matrix& world, uint32_t vertexCount, uint32_t indexCount);
     std::unordered_map<uint64_t, CasterStreak> m_casterStreaks;
     std::vector<std::pair<uint64_t, std::pair<VkBuffer, VmaAllocation_T*>>> m_deadBuffers;
     d3d::Matrix m_frameViewProj{};               // the frame's camera, at its first shadow caster

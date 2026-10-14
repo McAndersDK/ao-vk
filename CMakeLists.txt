@@ -16,7 +16,7 @@ target_compile_definitions(randy_native PRIVATE _CRT_SECURE_NO_WARNINGS)
 
 # Drop-in randy31.dll. Exports not implemented here forward to the original, renamed randy31_orig.dll.
 add_library(randy31 SHARED proxy/dllmain.cpp proxy/trace.cpp proxy/ddraw/com_trace.cpp proxy/ddraw/com_trace_detail.cpp
-            proxy/ddraw/rvk_ddraw.cpp proxy/ddraw/rvk_surface.cpp proxy/ddraw/rvk_device.cpp proxy/ddraw/rvk_settings.cpp proxy/ddraw/rvk_particles.cpp proxy/ddraw/rvk_weather.cpp proxy/ddraw/rvk_smoke.cpp proxy/ddraw/rvk_time.cpp
+            proxy/ddraw/rvk_ddraw.cpp proxy/ddraw/rvk_surface.cpp proxy/ddraw/rvk_device.cpp proxy/ddraw/rvk_settings.cpp proxy/ddraw/rvk_particles.cpp proxy/ddraw/rvk_weather.cpp proxy/ddraw/rvk_smoke.cpp proxy/ddraw/rvk_time.cpp proxy/ddraw/rvk_statels.cpp
             proxy/ddraw/rvk_materials.cpp proxy/exports.gen.cpp proxy/randy31.def)
 target_include_directories(randy31 PRIVATE proxy third_party)
 target_compile_definitions(randy31 PRIVATE _CRT_SECURE_NO_WARNINGS)
@@ -84,7 +84,7 @@ foreach(entry "leaf.vert|ffp.vert|RVK_LEAF" "leaf_shadow.vert|shadow.vert|RVK_LE
     list(APPEND RVK_SHADER_INCS "${out}")
 endforeach()
 
-add_library(rvk STATIC rvk/vk.cpp rvk/vma.cpp rvk/device.cpp rvk/resources.cpp rvk/draw.cpp rvk/diag.cpp rvk/shadow.cpp rvk/pointshadow.cpp rvk/hdr.cpp rvk/particles.cpp rvk/grading.cpp rvk/profile.cpp rvk/skin.cpp rvk/skin_gpu.cpp rvk/static_gpu.cpp rvk/prepass.cpp rvk/threaded.cpp rvk/interface.cpp rvk/grass.cpp rvk/leaves.cpp rvk/water.cpp rvk/rain.cpp rvk/smoke.cpp rvk/clouds.cpp rvk/meshids.cpp rvk/night.cpp rvk/sky.cpp rvk/mist.cpp rvk/sun.cpp rvk/terrain_sun.cpp ${RVK_SHADER_INCS})
+add_library(rvk STATIC rvk/vk.cpp rvk/vma.cpp rvk/device.cpp rvk/resources.cpp rvk/draw.cpp rvk/diag.cpp rvk/shadow.cpp rvk/pointshadow.cpp rvk/hdr.cpp rvk/particles.cpp rvk/grading.cpp rvk/profile.cpp rvk/skin.cpp rvk/skin_gpu.cpp rvk/static_gpu.cpp rvk/prepass.cpp rvk/threaded.cpp rvk/interface.cpp rvk/grass.cpp rvk/leaves.cpp rvk/water.cpp rvk/rain.cpp rvk/smoke.cpp rvk/clouds.cpp rvk/meshids.cpp rvk/statels.cpp rvk/night.cpp rvk/sky.cpp rvk/mist.cpp rvk/sun.cpp rvk/terrain_sun.cpp ${RVK_SHADER_INCS})
 target_include_directories(rvk PUBLIC rvk PRIVATE "${RVK_SHADER_OUT}")
 # Vulkan headers and VMA come from the SDK; /imsvc keeps their warnings quiet.
 target_compile_options(rvk PUBLIC "/imsvc${VULKAN_SDK_DIR}/include")

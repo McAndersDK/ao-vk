@@ -97,6 +97,8 @@ public:
     void SetGrading(float saturation, float contrast, float warmth, float lutAmount, float nightTint, float vignette);
     void SetColorLut(uint32_t slot, uint32_t size, const uint8_t* rgba);   // copied
     void LoadMeshIds(const char* path);                                       // (the path copied)
+    void LoadStatels(const char* path, uint32_t playfield);                   // (the path copied)
+    void SetStatelMode(uint32_t mode);
     void SetSway(float strength);
     void SetGrassPush(float strength);
     void SetPlantDetail(float detail);

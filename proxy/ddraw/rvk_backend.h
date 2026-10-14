@@ -24,6 +24,7 @@ void ParticleFrame();                             // each presented frame (rvk_p
 void WeatherFrame();                              // each presented frame (rvk_weather.cpp)
 void SmokeFrame();                                // each presented frame (rvk_smoke.cpp)
 void TimeFrame();                                 // each presented frame (rvk_time.cpp: RVK_TimeOfDay)
+void StatelFrame();                               // each presented frame (rvk_statels.cpp: the playfield's pack)
 bool PatchSlot(HMODULE module, uint32_t vtable, uint32_t slot, uint32_t expected, void* hook, void** original,
                const char* what);                 // (rvk_particles.cpp) module-relative vtable, expected entry
 void* PatchImport(HMODULE module, const char* dll, const char* function, void* hook);   // (com_trace.cpp) the old target

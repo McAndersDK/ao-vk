@@ -155,6 +155,8 @@ void ImageBarrier(VkCommandBuffer cmd, VkImage image, VkImageAspectFlags aspect,
 d3d::Matrix Identity();
 d3d::Matrix MulMatrix(const d3d::Matrix& a, const d3d::Matrix& b);   // D3D order: v * a * b
 bool InvertMatrix(const d3d::Matrix& m, d3d::Matrix* out);
+// A model-space box through a matrix: the world box around it (shadow.cpp).
+void TransformBounds(const float mn[3], const float mx[3], const d3d::Matrix& m, float outMin[3], float outMax[3]);
 VkPrimitiveTopology TopologyOf(uint32_t d3dPrimitive);
 uint32_t TopologyClassOf(uint32_t d3dPrimitive);   // 0 points, 1 lines, 2 triangles
 // Whether a mesh is one plane (a sign, a poster: draw.cpp), positions first in its vertices.

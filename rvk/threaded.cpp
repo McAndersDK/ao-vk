@@ -930,6 +930,17 @@ void ThreadedDevice::LoadMeshIds(const char* path)
     Enqueue([this, p](const uint8_t*) { m_device.LoadMeshIds(p.c_str()); });
 }
 
+void ThreadedDevice::LoadStatels(const char* path, uint32_t playfield)
+{
+    std::string p(path ? path : "");
+    Enqueue([this, p, playfield](const uint8_t*) { m_device.LoadStatels(p.c_str(), playfield); });
+}
+
+void ThreadedDevice::SetStatelMode(uint32_t mode)
+{
+    Enqueue([this, mode](const uint8_t*) { m_device.SetStatelMode(mode); });
+}
+
 void ThreadedDevice::SetColorLut(uint32_t slot, uint32_t size, const uint8_t* rgba)
 {
     std::vector<uint8_t> data;

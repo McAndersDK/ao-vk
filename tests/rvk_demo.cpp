@@ -2405,6 +2405,69 @@ Matrix Offset()
     return m;
 }
 
+// Placed objects' shadows (--statel-test PACK PLAYFIELD X Y Z [--statel-mode M]): a playfield's pack (ao-assets
+// statels) loaded as in the game, the camera above (X, Y, Z), a flat lit ground at Y and one cube of the "game's"
+// (shadows need a caster drawn) - the placed objects' shadows fall on the ground though nothing draws them.
+// Mode 2 (the default here: the demo draws none of them to confirm the placement), 0 for the scene without them.
+std::string g_statelPack;
+uint32_t g_statelPlayfield = 0, g_statelMode = 2;
+float g_statelAt[3] = {};
+
+template <typename D>
+void RunStatelTest(D& dev, int frames, const std::string& shot, const std::string& dump)
+{
+    auto groundPixels = Checker(64, 8, 0xFFC8C0B0, 0xFFA09888);
+    Texture* ground = dev.CreateTexture(64, 64, groundPixels.data());
+    dev.SetStatelMode(g_statelMode);
+    dev.LoadStatels(g_statelPack.c_str(), g_statelPlayfield);
+    const float x = g_statelAt[0], y = g_statelAt[1], z = g_statelAt[2];
+    std::vector<VtxMesh> cube;
+    std::vector<uint16_t> cubeIdx;
+    AddCube(cube, cubeIdx, x - 6.0f, y + 0.5f, z - 6.0f, 0.5f);
+    for (int frame = 0; frame < frames; ++frame) {
+        if (frame == frames - 1) {
+            dev.RequestScreenshot(shot);
+            if (!dump.empty()) dev.RequestFrameDump(dump);
+        }
+        dev.BeginFrame();
+        dev.SetViewport({0, 0, g_width, g_height, 0.0f, 1.0f});
+        dev.Clear(CLEAR_TARGET | CLEAR_ZBUFFER, 0xFF6080A0, 1.0f);
+        dev.SetTransform(View, LookAtLH({x - 22.0f, y + 16.0f, z - 22.0f}, {x, y, z}, {0, 1, 0}));
+        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.5f, 600.0f));
+        dev.SetTransform(World, Identity());
+        dev.SetRenderState(RS_ZENABLE, 1);
+        dev.SetRenderState(RS_ZWRITEENABLE, 1);
+        dev.SetRenderState(RS_ZFUNC, CMP_LESSEQUAL);
+        dev.SetRenderState(RS_CULLMODE, CULL_NONE);
+        dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
+        dev.SetRenderState(RS_ALPHATESTENABLE, 0);
+        dev.SetRenderState(RS_AMBIENT, 0xFF505050);
+        dev.SetRenderState(RS_DIFFUSEMATERIALSOURCE, MCS_MATERIAL);
+        Material mat{{1, 1, 1, 1}, {1, 1, 1, 1}, {0, 0, 0, 0}, {0, 0, 0, 0}, 0.0f};
+        dev.SetMaterial(mat);
+        Light sun{};
+        sun.type = LIGHT_DIRECTIONAL;
+        sun.diffuse = {0.9f, 0.85f, 0.75f, 1};
+        sun.direction = {0.55f, -0.7f, 0.45f};
+        dev.SetLight(0, sun);
+        dev.LightEnable(0, true);
+        dev.SetTextureStageState(0, TSS_COLOROP, TOP_MODULATE);
+        dev.SetTextureStageState(0, TSS_COLORARG1, TA_TEXTURE);
+        dev.SetTextureStageState(0, TSS_COLORARG2, TA_DIFFUSE);
+        dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG1);
+        dev.SetTextureStageState(0, TSS_ALPHAARG1, TA_TEXTURE);
+        dev.SetTexture(0, ground);
+        dev.SetRenderState(RS_LIGHTING, 1);
+        const float r = 120.0f;
+        VtxMesh q[4] = {{x - r, y, z - r, 0, 1, 0, 0xFFFFFFFF, 0, 0}, {x + r, y, z - r, 0, 1, 0, 0xFFFFFFFF, 60, 0},
+                        {x + r, y, z + r, 0, 1, 0, 0xFFFFFFFF, 60, 60}, {x - r, y, z + r, 0, 1, 0, 0xFFFFFFFF, 0, 60}};
+        dev.DrawPrimitive(TriangleFan, kFvfMesh, q, 4);
+        dev.DrawIndexedPrimitive(TriangleList, kFvfMesh, cube.data(), uint32_t(cube.size()), cubeIdx.data(),
+                                 uint32_t(cubeIdx.size()));
+        dev.EndFrame();
+    }
+}
+
 // Point light shadow test (--point-shadow-test): night, a lamp among cubes. Left half: lit ground (per-pixel); right
 // half: the ground the way Anarchy Online draws it (unlit base pass + lightmap and lights multiplying pass). A small
 // cube around the lamp (its housing) must not cast; the cubes around it must, in every direction (all cube faces).
@@ -3041,6 +3104,13 @@ int main(int argc, char** argv)
         else if (a == "--light-override") lightOverride = true;
         else if (a == "--shadows") shadows = true;
         else if (a == "--shadow-test") shadowTest = shadows = true;
+        else if (a == "--statel-test" && i + 5 < argc) {
+            g_statelPack = argv[++i];
+            g_statelPlayfield = uint32_t(std::atoi(argv[++i]));
+            for (int k = 0; k < 3; ++k) g_statelAt[k] = float(std::atof(argv[++i]));
+            shadows = true;
+        }
+        else if (a == "--statel-mode" && i + 1 < argc) g_statelMode = uint32_t(std::atoi(argv[++i]));
         else if (a == "--point-shadow-test") pointShadowTest = true;
         else if (a == "--world-offset" && i + 3 < argc) { for (int k = 0; k < 3; ++k) g_off[k] = float(std::atof(argv[++i])); }
         else if (a == "--point-shadow-slab") g_slabTest = pointShadowTest = pointShadowSun = shadows = true;
@@ -3385,7 +3455,7 @@ int main(int argc, char** argv)
         std::printf("rendered; screenshot %s\n", shot.c_str());
         return 0;
     }
-    if (!dump.empty() && !shadowTest && g_leafTrees.empty()) dev.RequestFrameDump(dump);
+    if (!dump.empty() && !shadowTest && g_leafTrees.empty() && g_statelPack.empty()) dev.RequestFrameDump(dump);
     std::printf("GPU: %s (Vulkan %u.%u), driver %s\n", dev.Info().gpu.c_str(), VK_API_VERSION_MAJOR(dev.Info().apiVersion),
                 VK_API_VERSION_MINOR(dev.Info().apiVersion), dev.Info().driver.c_str());
 
@@ -3416,6 +3486,8 @@ int main(int argc, char** argv)
         if (!dump.empty() && !shadowTest) tdev.RequestFrameDump(dump);
         if (shadowTest) RunShadowTest(tdev, frames, shot, cacheTest, frameMs, dump);
         else RunDemo(tdev, windowed, stress, frames, shot);
+    } else if (!g_statelPack.empty()) {
+        RunStatelTest(dev, frames, shot, dump);
     } else if (!g_leafTrees.empty()) {
         RunLeafScene(dev, frames, shot, dump);
     } else if (g_grassBench) {

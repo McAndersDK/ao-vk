@@ -488,6 +488,8 @@ void Device::RecordShadowCaster(uint32_t primitive, uint32_t fvf, uint32_t strid
     c.kind = m_drawVisualKind;
     c.leafKey = m_drawLeaves ? m_drawLeafKey : 0;
     m_casters.push_back(c);
+    if (m_statelVerified == 0 && VisualKind(c.kind) == VisualKind::Static)
+        CheckStatelDraw(m_world, vertexCount, indexCount);   // (statels.cpp: is our placement the game's?)
     auto cached = m_casterCache.find(key);
     if (cached != m_casterCache.end()) {
         CachedCaster& e = cached->second;
@@ -916,7 +918,7 @@ void Device::CaptureSun(const d3d::Light& l)
 }
 
 // A model-space box through a matrix: the world-space box around it.
-static void TransformBounds(const float mn[3], const float mx[3], const d3d::Matrix& m, float outMin[3], float outMax[3])
+void detail::TransformBounds(const float mn[3], const float mx[3], const d3d::Matrix& m, float outMin[3], float outMax[3])
 {
     for (int j = 0; j < 3; ++j) {
         float c = m.m[3][j], e = 0.0f;
@@ -1008,6 +1010,7 @@ void Device::CollectShadowItems()
         it.cacheKey = key;
         m_shadowItems.push_back(it);
     }
+    AddStatelShadowItems();                      // the playfield's placed objects (statels.cpp)
     // The drawn-static tally and the animated subset: the point-light pass asks "is anything animated in range?" once
     // per cube, and only animated casters (characters) can answer yes, so static casters need not be scanned.
     m_shadowItemsCount = uint32_t(m_shadowItems.size());

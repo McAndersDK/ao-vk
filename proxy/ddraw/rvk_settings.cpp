@@ -152,6 +152,7 @@ Setting g_settings[] = {
     {"RVK_CloudBright", "Clouds: how light",                                       "Experimental",     Float, 0.25f, 3, 0.05f, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudNight",  "Clouds: how light at night (x the above)",                 "Experimental",     Float, 0.25f, 2, 0.05f, 0.8f, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_ShadowAll",   "Shadows of everything near, seen or not (things the game leaves undrawn still cast)", "Shadows", Bool, 0, 1, 1, 1, nullptr, 0, "RVK_SunShadow"},
+    {"RVK_StaticShad",  "Shadows of the playfield's placed objects from its own list - rocks, walls, trees, seen or not (ao-assets statels): 0 off, 1 once their placement is confirmed, 2 always", "Shadows", Int, 0, 2, 1, 1, nullptr, 0, "RVK_SunShadow"},
     {"RVK_ShadowView",  "Debug: show the sun shadow map's light (white lit, dark shadowed; tint = cascade)", "Experimental", Bool, 0, 1, 1, 0, nullptr, 0},
     {"RVK_Occlusion",   "The game's culling of what hills hide (off: all in view drawn - whole shadows, more draws)", "Experimental", Bool, 0, 1, 1, 1, nullptr, 0},
     {"RVK_ShadowMem",   "Shadows of things out of view: 0 off (only what's drawn), 1 on, 2 on without sway, 3 only big things, 4 solid", "Experimental", Int, 0, 4, 1, 1, nullptr, 0},
@@ -415,6 +416,7 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
         d->SetTessellation(V("RVK_Tess"), V("RVK_TessDist"), uint32_t(V("RVK_TessLevel")));
     else if (is("RVK_PtLight") || is("RVK_CharLight")) d->SetPointLightIntensity(V("RVK_PtLight"), V("RVK_CharLight"));
     else if (is("RVK_SunShadow")) d->SetShadows(V(n) != 0.0f);
+    else if (is("RVK_StaticShad")) d->SetStatelMode(uint32_t(V(n)));
     else if (is("RVK_SunRes") || is("RVK_PtRes"))
         d->SetShadowResolution(uint32_t(V("RVK_SunRes")), uint32_t(V("RVK_PtRes")));
     else if (is("RVK_SunStrength") || is("RVK_SunDist") || is("RVK_SunCascade"))
