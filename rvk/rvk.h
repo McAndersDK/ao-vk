@@ -1136,6 +1136,7 @@ private:
     // yet (for the session).
     int m_statelVerified[2] = {};
     uint32_t m_statelMatched[2] = {}, m_statelMismatched[2] = {};
+    bool m_statelHasKind[2] = {};                // the playfield has statels of the kind
     bool StatelKindCasting(int kind) const;
     std::string StatelPlacementState() const;
     void DestroyStatels();

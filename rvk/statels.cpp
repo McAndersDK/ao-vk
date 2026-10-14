@@ -291,6 +291,9 @@ bool Device::LoadStatels(const char* path, uint32_t playfield)
         m_statelLookup[PieceKey(p.vertexCount, p.indexCount, it.world.m[3])] |= uint8_t(1u << it.kind);
     }
     m_statelPlayfield = playfield;
+    m_statelHasKind[0] = m_statelHasKind[1] = false;
+    for (const StatelItem& it : m_statelItems)
+        m_statelHasKind[it.kind] = true;
     for (int k = 0; k < 2; ++k)
         if (m_statelVerified[k] == 0)
             m_statelMatched[k] = m_statelMismatched[k] = 0;
@@ -307,7 +310,10 @@ bool Device::LoadStatels(const char* path, uint32_t playfield)
 // with the same counts should have the draw's matrix.
 void Device::CheckStatelDraw(const d3d::Matrix& world, uint32_t vertexCount, uint32_t indexCount)
 {
-    if ((m_statelVerified[0] != 0 && m_statelVerified[1] != 0) || m_statelItems.empty())
+    // (Each kind until it is decided, if the playfield has any; once the turned ones are, the rest - fences, seldom
+    // in view - on one frame in eight: the check walks the draw's grid cell.)
+    const bool open[2] = {m_statelVerified[0] == 0 && m_statelHasKind[0], m_statelVerified[1] == 0 && m_statelHasKind[1]};
+    if ((!open[0] && !open[1]) || m_statelItems.empty() || (!open[0] && (m_frameNumber & 7) != 0))
         return;
     const float x = world.m[3][0], y = world.m[3][1], z = world.m[3][2];
     const float cx = std::floor((x - m_statelGridOrigin[0]) / kStatelCell);
@@ -318,6 +324,8 @@ void Device::CheckStatelDraw(const d3d::Matrix& world, uint32_t vertexCount, uin
     const StatelItem* sameSpot = nullptr;
     for (uint32_t k = m_statelCellStart[cell]; k < m_statelCellStart[cell + 1]; ++k) {
         const StatelItem& it = m_statelItems[m_statelCellItems[k]];
+        if (m_statelVerified[it.kind] != 0)
+            continue;                            // (that kind decided: neither counted nor compared again)
         const StatelPiece& p = m_statelPieces[it.piece];
         if (p.vertexCount != vertexCount || p.indexCount != indexCount)
             continue;

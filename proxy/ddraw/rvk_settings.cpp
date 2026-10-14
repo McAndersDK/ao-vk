@@ -151,7 +151,9 @@ Setting g_settings[] = {
     {"RVK_CloudThick", "Clouds: how thick",                                        "Experimental",     Float, 0.1f, 4, 0.1f, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudBright", "Clouds: how light",                                       "Experimental",     Float, 0.25f, 3, 0.05f, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudNight",  "Clouds: how light at night (x the above)",                 "Experimental",     Float, 0.25f, 2, 0.05f, 0.8f, nullptr, 0, "RVK_CloudsOn"},
-    {"RVK_ShadowAll",   "Shadows of everything near, seen or not (things the game leaves undrawn still cast)", "Shadows", Bool, 0, 1, 1, 1, nullptr, 0, "RVK_SunShadow"},
+    // (Off by default: every crash of 2026-10-13/14 - heap corruption found in the grass code - came in a session with
+    // it on, two within minutes of switching it on; RVK_StaticShad casts the placed objects without it.)
+    {"RVK_ShadowAll",   "Shadows of culled meshes drawn by the game for their shadow alone (UNSTABLE: has crashed the game; RVK_StaticShad covers placed objects)", "Experimental", Bool, 0, 1, 1, 0, nullptr, 0, "RVK_SunShadow"},
     {"RVK_StaticShad",  "Shadows of the playfield's placed objects from its own list - rocks, walls, trees, seen or not (ao-assets statels): 0 off, 1 once their placement is confirmed, 2 always", "Shadows", Int, 0, 2, 1, 1, nullptr, 0, "RVK_SunShadow"},
     {"RVK_ShadowView",  "Debug: show the sun shadow map's light (white lit, dark shadowed; tint = cascade)", "Experimental", Bool, 0, 1, 1, 0, nullptr, 0},
     {"RVK_Occlusion",   "The game's culling of what hills hide (off: all in view drawn - whole shadows, more draws)", "Experimental", Bool, 0, 1, 1, 1, nullptr, 0},
