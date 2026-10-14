@@ -1602,6 +1602,7 @@ private:
     // The terrain's shade from a low sun (terrain_sun.cpp): the game's terrain heights in a grid round the eye, each
     // cell's height to see the sun over it (a map, FL.terrainSun), the eye's own; weighted in low in the sky.
     std::vector<float> m_tsHeights;
+    std::unordered_set<uint64_t> m_tsChunks;      // the terrain chunks read into it since it last moved
     int m_tsOrigin[2] = {0, 0};
     float m_tsMapOrigin[2] = {0.0f, 0.0f}, m_tsSunUsed[3] = {0.0f, 0.0f, 0.0f};
     float m_tsEye = 1.0f, m_tsWeight = 0.0f;

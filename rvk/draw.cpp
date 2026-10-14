@@ -2240,12 +2240,14 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
         (fvf & d3d::FVF_POSITION_MASK) == d3d::FVF_XYZ && m_rs[d3d::RS_ALPHABLENDENABLE] && !IsTerrain(fvf) &&
         VisualKind(m_drawVisualKind) != VisualKind::Sky)
         DrawGrassTiles(cmd);
+    ProfileDrawSection("draw: setup (sky, terrain notes, grass tiles)", since);
     FvfLayout layout = DecodeFvf(fvf);
     // RVK_GrassOn: the terrain's ground heights feed the procedural grass (grass.cpp CaptureTerrain / RenderGrassField).
     if (m_grassOn && !m_external && vertices && IsTerrain(fvf))
         CaptureTerrain(primitive, layout, vertices, vertexCount, indices, indexCount);
     if (!m_shadowOnlyDraw)
         DrawMeshInfo(fvf, layout.stride, vertices, vertexCount, indices, indexCount);
+    ProfileDrawSection("draw: setup (mesh info)", since);
     NoteMeshPiece();                             // (mesh ids: which mesh the object drawing is)
     // (A GPU-skinned character has no vertices here: DrawSkinned hands the pick its CPU-skinned ones.)
     if (m_pickActive && !m_shadowOnlyDraw && !m_external && (vertices || m_pickSkinned) && (m_textures[0] || m_drawVisual) &&
@@ -2264,6 +2266,7 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
             CaptureCover(primitive, layout, vertices, vertexCount, indices, indexCount);
     }
     PushCandidateDraw(fvf);
+    ProfileDrawSection("draw: setup (mesh ids, pick, grass cover)", since);
     // A canopy (leaves.cpp): its leaves, baked the first time it is seen, drawn just before it (DrawLeaves). A solid
     // draw may be a tree's trunk (where its fallen leaves lie).
     CanopyParams(primitive, fvf, layout, vertices, vertexCount, indices, indexCount);
@@ -2281,6 +2284,7 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
         if (vertices != before || indices != indicesBefore)
             m_drawStaticIndexBuffer = VK_NULL_HANDLE;
     }
+    ProfileDrawSection("draw: setup (canopy, plants)", since);
     // Retained indices only with the retained vertices (one static draw path).
     const VkBuffer staticIb = m_drawStaticBuffer && indices ? m_drawStaticIndexBuffer : VK_NULL_HANDLE;
 

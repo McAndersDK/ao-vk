@@ -25,15 +25,29 @@ constexpr float kTsReach = 3200.0f;              // how far towards the sun a hi
 // The terrain's base pass: its vertices into the grid (each cell its highest).
 void Device::NoteTerrainSun(uint32_t fvf, const void* vertices, uint32_t vertexCount)
 {
-    if (!vertices || vertexCount == 0)
+    if (!vertices || vertexCount == 0 || !m_hillShade)
+        return;
+    // Each terrain chunk once while the grid stays where it is: its heights don't change, and reading every terrain
+    // vertex of every frame cost the render thread a millisecond and more over a city (user, 2026-10-14). (A chunk:
+    // its vertices' address, count and first position - a new chunk at a freed one's address differs in those.)
+    float first[3];
+    const FvfLayout layout = DecodeFvf(fvf);
+    const uint8_t* base = static_cast<const uint8_t*>(vertices);
+    std::memcpy(first, base + layout.offset[0], sizeof(first));
+    uint64_t chunk = uint64_t(reinterpret_cast<uintptr_t>(vertices)) * 0x9E3779B97F4A7C15ull ^ vertexCount;
+    for (float v : first) {
+        uint32_t bits;
+        std::memcpy(&bits, &v, 4);
+        chunk = (chunk ^ bits) * 0x100000001B3ull;
+    }
+    if (!m_tsHeights.empty() && !m_tsChunks.insert(chunk).second)
         return;
     if (m_tsHeights.empty()) {
         m_tsHeights.assign(size_t(kTsCells) * kTsCells, -1e9f);
         m_tsOrigin[0] = int(std::floor(m_frameEye[0] / kTsCell)) - kTsCells / 2;
         m_tsOrigin[1] = int(std::floor(m_frameEye[2] / kTsCell)) - kTsCells / 2;
     }
-    const FvfLayout layout = DecodeFvf(fvf);
-    const uint8_t* base = static_cast<const uint8_t*>(vertices);
+    m_tsChunks.insert(chunk);
     for (uint32_t i = 0; i < vertexCount; ++i) {
         float p[3];
         std::memcpy(p, base + size_t(i) * layout.stride + layout.offset[0], sizeof(p));
@@ -65,6 +79,7 @@ void Device::RecentreTerrainSun()
                     moved[size_t(z) * kTsCells + x] = m_tsHeights[size_t(oz) * kTsCells + ox];
             }
     m_tsHeights.swap(moved);
+    m_tsChunks.clear();                          // (the new edge: every chunk read again)
     m_tsOrigin[0] = ex;
     m_tsOrigin[1] = ez;
     m_tsDirty = true;
