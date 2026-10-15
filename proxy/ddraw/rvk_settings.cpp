@@ -101,6 +101,7 @@ Setting g_settings[] = {
     {"RVK_LeafCore",   "Canopy cut to an inner core", "Experimental", Float, 0, 1, 0.1f, 0.6f, nullptr, 0, "RVK_LeafOn"},
     {"RVK_LeafWind",   "Branches swaying in the wind",                              "Experimental",     Float, 0, 3, 0.25f, 1, nullptr, 0, "RVK_LeafOn"},
     {"RVK_LeafFlutter","Leaves fluttering",                                         "Experimental",     Float, 0, 3, 0.25f, 1, nullptr, 0, "RVK_LeafOn"},
+    {"RVK_LeafOwn",    "Trees: our own canopies where there is leaf art (randy-vk\\materials\\*_leaves.png), not the game's cards", "Experimental", Bool, 0, 1, 1, 1, nullptr, 0, "RVK_LeafOn"},
     {"RVK_LeafTrees",  "Leaves on trees",                                           "Experimental",     Bool,  0, 1, 1, 1, nullptr, 0, "RVK_LeafOn"},
     {"RVK_LeafShrubs", "Leaves on shrubs and bushes",                               "Experimental",     Bool,  0, 1, 1, 1, nullptr, 0, "RVK_LeafOn"},
     {"RVK_LeafPalms",  "Palm fronds bending in the wind",                           "Experimental",     Bool,  0, 1, 1, 1, nullptr, 0, "RVK_LeafOn"},
@@ -464,6 +465,7 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
         l.wind = V("RVK_LeafWind");
         l.flutter = V("RVK_LeafFlutter");
         l.trees = V("RVK_LeafTrees") != 0.0f;
+        l.own = V("RVK_LeafOwn") != 0.0f;
         l.shrubs = V("RVK_LeafShrubs") != 0.0f;
         l.palms = V("RVK_LeafPalms") != 0.0f;
         l.shadows = V("RVK_LeafShadow") != 0.0f;

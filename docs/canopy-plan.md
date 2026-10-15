@@ -102,6 +102,23 @@ The first two are 77% of the leafy trees placed, these ten ~98%. The tail (23 te
 profile. Name-sort errors to remember: potteplant_branch1 is a leafy plant, smushroom_texture_deadleaf a giant
 mushroom's leaf (not a crown).
 
+## Phase 2 (2026-10-15): our own canopy drawn
+
+- Art: rvk/material_maps.h + proxy rvk_materials.cpp - <type>_<id>_leaves.png / _leaves_n.png in randy-vk\materials\
+  (ao-assets `leaf-art --install`), decoded off-thread, Device::SetLeafArt on the canopy texture (hot reload as the
+  other maps).
+- leaves.cpp BakeOwnCanopy: a Tree-kind canopy whose texture has art (RVK_LeafOwn, default on): sprigs where the
+  game's cards have leaves (alpha >= 0.5), size 0.11 x the crown's height (1 - 3.2 world, x RVK_LeafSize), 4.5 x
+  RVK_LeafDensity / (0.45 size^2) per card area; twig base on the card, reaching out of the crown's ellipsoid and
+  lying 15-45 degrees off its surface, drooping; a random atlas cell.
+- draw.cpp: a second record for the leaf pass (texIdx = atlas, its normal; no PBR maps); leafSet[1] bit 31 = own.
+  ffp.vert: the cards thinned by LeafKeep (none near; a dithered crossfade out to RVK_LeafDist), the sprigs' flutter
+  at their tip, no round mask. Shadows: the cards' shadow thinned alike (origin.w), the sprigs cast with the atlas.
+- Fixed on the way: the cut-out depth pre-pass ignored the canopy thinning mask - dropped card pixels hid what was
+  behind (sky-coloured blocks through the trunk; the old core thinning had a few too).
+- Demo: --leaf-art ATLAS[,NORMAL], --leaf-no-own. 25 trees (jungle 6273 + 13147, 1751 sprigs each): scene GPU
+  0.33 -> 0.66 ms. Falling leaves off for own canopies (a whole sprig would fall) - later.
+
 ## Phases
 
 0. Inventory: a log line per tree canopy type met in game (texture id, mesh name, size, count) and an ao-assets scan of

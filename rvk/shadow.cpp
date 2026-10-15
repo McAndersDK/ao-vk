@@ -1425,6 +1425,17 @@ void Device::DrawShadowItem(VkCommandBuffer cmd, ShadowBind& bind, ShadowItem& i
                 r.origin[1] = item.world.m[3][2];
                 r.origin[2] = wind[2];
                 r.origin[3] = m_leaf.core;
+                if (set->second.art) {           // our own canopy: the cards thinned out as the sprigs come in
+                    float d2 = 0.0f;             // (none left near: CoreThin = 0.35 x this)
+                    for (int j = 0; j < 3; ++j) {
+                        float d = std::max(std::max(item.boundsMin[j] - m_frameEye[j], m_frameEye[j] - item.boundsMax[j]), 0.0f);
+                        d2 += d * d;
+                    }
+                    const float reach = std::max(m_leaf.distance, 1.0f);
+                    const float keep = std::clamp((reach - std::sqrt(d2)) / (0.5f * reach), 0.0f, 1.0f);
+                    r.origin[3] = keep * keep / 0.35f;
+                    r.alpha[3] = 1.0f;           // (its sprigs: leaf_shadow.vert, no round mask)
+                }
                 r.leafWind[0] = wind[0];
                 r.leafWind[1] = wind[1];
                 r.leafWind[2] = m_leaf.wind * wind[3];

@@ -3167,6 +3167,8 @@ float g_leafCamHeight = -1.0f;     // --leaf-cam-height H: ... this high (defaul
 float g_leafCamYaw = 0.0f;         // --leaf-cam-yaw R: ... turned R radians about the row's middle
 int g_leafFilm = 0;                // --leaf-film N: ~60 frames a second, a screenshot every N frames (film_NNN.bmp)
 int g_leafForest = 0;              // --leaf-forest N: an N x N grid of the trees (12 units apart), seen from eye height
+std::string g_leafArt;             // --leaf-art ATLAS.png[,NORMAL.png]: a tree type's own leaf art (ao-assets leaf-art)
+                                   // on every canopy (cut-out part) of the trees - leaves.cpp BakeOwnCanopy
 
 struct TreePart {
     uint32_t flags = 0, alphaRef = 128;
@@ -3241,6 +3243,19 @@ void RunLeafScene(D& dev, int frames, const std::string& shot, const std::string
         std::string path = g_leafTrees.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
         Tree t;
         if (!path.empty() && LoadTree(dev, path, t)) trees.push_back(std::move(t));
+        if (!trees.empty() && !g_leafArt.empty() && path.size()) {   // (on this tree's canopies)
+            size_t c = g_leafArt.find(',');
+            rvk::maps::MipChain atlas, normal;
+            rvk::maps::NormalSpread spread;
+            std::string err;
+            if (!rvk::maps::DecodeAlbedoMap(g_leafArt.substr(0, c), &atlas, &err))
+                std::printf("leaf art: %s\n", err.c_str());
+            if (c != std::string::npos && !rvk::maps::DecodeNormalMap(g_leafArt.substr(c + 1), &normal, &spread, &err))
+                std::printf("leaf art: %s\n", err.c_str());
+            for (TreePart& part : trees.back().parts)
+                if (part.flags & 3)
+                    dev.SetLeafArt(part.texture, rvk::maps::Upload(dev, atlas), rvk::maps::Upload(dev, normal));
+        }
         start = comma == std::string::npos ? g_leafTrees.size() : comma + 1;
     }
     if (trees.empty()) return;
@@ -3660,6 +3675,8 @@ int main(int argc, char** argv)
         else if (a == "--grass-bench") { g_grassFieldOn = g_grassBench = true; hdr = true; }
         else if (a == "--leaf-tree" && i + 1 < argc) g_leafTrees = argv[++i];
         else if (a == "--leaf-off") g_leafSettings.on = false;
+        else if (a == "--leaf-art" && i + 1 < argc) g_leafArt = argv[++i];
+        else if (a == "--leaf-no-own") g_leafSettings.own = false;
         else if (a == "--leaf-shadow-off") g_leafSettings.shadows = false;
         else if (a == "--leaf-fall" && i + 1 < argc) g_leafSettings.fall = float(std::atof(argv[++i]));
         else if (a == "--leaf-density" && i + 1 < argc) g_leafSettings.density = float(std::atof(argv[++i]));

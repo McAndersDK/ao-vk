@@ -513,7 +513,7 @@ void main()
     // Depth only where the pixel is fully opaque in the end (prepass_cutout.frag): the same alpha as the cut-out test
     // below (texture stages; the lit diffuse keeps the vertex alpha).
     vec4 p0 = Sample(0u), p1 = C.stageA[0].x != 1u ? Sample(1u) : vec4(0.0);
-    float pa = Cascade(p0, p1, 1.0).a;
+    float pa = Cascade(p0, p1, 1.0).a * leafMask;   // (a canopy's thinned cards: none where they are dropped)
     // Where the alpha test passes and, blended (only two-pass foliage's core comes here blended: prepass.cpp), where
     // the core is - its edges write no depth.
     if (((C.flags.x & F_ALPHATEST) != 0u && !AlphaPass(pa)) ||

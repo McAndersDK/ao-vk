@@ -155,6 +155,7 @@ public:
     void SetMaterialMaps(Texture* texture, Texture* orm, Texture* albedo);   // ... and these
     void SetTextureRdbId(Texture* texture, uint32_t id);
     void SetEmissiveMap(Texture* texture, Texture* emissive);               // ... and this
+    void SetLeafArt(Texture* texture, Texture* atlas, Texture* normal);     // ... and these
     void RequestPick(float x, float y);
     Device::PickResult LastPick() const { return m_device.LastPick(); }   // (thread-safe)
     void SetPickHighlight(Texture* t);

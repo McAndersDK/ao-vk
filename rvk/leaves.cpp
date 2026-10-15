@@ -197,10 +197,15 @@ void Device::CanopyParams(uint32_t primitive, uint32_t fvf, const FvfLayout& lay
         m_drawLeafKey = key;
         return;
     }
-    if (!set.baked || set.texVersion != tex->m_alphaVersion || set.settingsVersion != m_leafVersion) {
+    // A tree with its own leaf art (RVK_LeafOwn): baked from it (again when the art changes - hot reload).
+    Texture* art = set.kind == Canopy::Tree && m_leaf.own ? tex->m_leafArt : nullptr;
+    if (!set.baked || set.texVersion != tex->m_alphaVersion || set.settingsVersion != m_leafVersion || set.art != art ||
+        (art && set.artVersion != tex->m_leafArtVersion)) {
         if (m_leafBakesThisFrame >= kBakesPerFrame)
             return;                              // next frame
         ++m_leafBakesThisFrame;
+        set.art = art;
+        set.artVersion = art ? tex->m_leafArtVersion : 0;
         if (!BakeLeaves(set, primitive, layout, vertices, vertexCount, indices, indexCount))
             return;
     }
@@ -220,7 +225,7 @@ void Device::CanopyParams(uint32_t primitive, uint32_t fvf, const FvfLayout& lay
     m_drawLeafKey = key;
     m_drawLeafCount = uint32_t(float(set.count) * keep * keep);
     // Falling leaves: a few slots a tree (one a shrub), each now and then a leaf drifting down (ffp.vert FallingLeaf).
-    if (m_drawLeafCount && m_leaf.fall > 0.0f) {
+    if (m_drawLeafCount && m_leaf.fall > 0.0f && !set.art) {   // (our own canopy: a whole sprig would fall - later)
         m_drawLeafFall = std::min<uint32_t>(uint32_t(std::lround((set.kind == Canopy::Shrub ? 1.0f : 5.0f) * m_leaf.fall * keep)), 60u);
         m_drawLeafGround = LeafGround(set);
     }
@@ -287,6 +292,102 @@ float Device::LeafGround(const LeafSet& set)
     return bottom - 0.5f * e[1];                 // no trunk found: a little under the crown
 }
 
+// A tree with its own leaf art (docs/canopy-plan.md phase 2): sprigs from the type's atlas in place of the game's cards,
+// where the cards have leaves (the crown the artist made). Each a small branch: its twig's base on the card, reaching
+// out of the crown and lying mostly along its surface (so a crown seen from outside shows the sprigs' faces), a little
+// drooping; a random one of the atlas' 16. About a twelfth of the crown's height, x RVK_LeafSize; RVK_LeafDensity x
+// enough to cover the cards' leafy part about twice over. (LeafRecord: half u across the sprig, half v towards its base
+// - the texture's v grows down the cell, to the twig's base.)
+void Device::BakeOwnCanopy(LeafSet& set, uint32_t primitive, const FvfLayout& layout, const void* vertices,
+                           uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount, void* outLeaves)
+{
+    auto& leaves = *static_cast<std::vector<LeafRecord>*>(outLeaves);
+    Texture* tex = m_textures[0];
+    const auto& mask = tex->m_alphaMask;
+    const uint32_t mw = tex->m_alphaW, mh = tex->m_alphaH;
+    const uint8_t* base = static_cast<const uint8_t*>(vertices);
+    const uint32_t stride = layout.stride, uvOffset = uint32_t(layout.offset[4]);
+    auto pos = [&](uint32_t i) {
+        float p[3];
+        std::memcpy(p, base + size_t(i) * stride, 12);
+        return V3{p[0], p[1], p[2]};
+    };
+    auto uvAt = [&](uint32_t i, float out[2]) { std::memcpy(out, base + size_t(i) * stride + uvOffset, 8); };
+    // The model's scale and its up (the world's y in model space: the world matrix's second column).
+    const auto& w = m_world.m;
+    const float scale = std::max(std::sqrt(w[0][0] * w[0][0] + w[0][1] * w[0][1] + w[0][2] * w[0][2]), 1e-6f);
+    const V3 up = Normalize(V3{w[0][1], w[1][1], w[2][1]});
+    const float* lo = m_drawMesh->boundsMin;
+    const float* hi = m_drawMesh->boundsMax;
+    const V3 centre{set.centre[0], set.centre[1], set.centre[2]};
+    const V3 half{std::max(0.5f * (hi[0] - lo[0]), 0.05f), std::max(0.5f * (hi[1] - lo[1]), 0.05f),
+                  std::max(0.5f * (hi[2] - lo[2]), 0.05f)};
+    const float heightW = 2.0f * std::fabs(Dot(half, V3{std::fabs(up.x), std::fabs(up.y), std::fabs(up.z)})) * scale;
+    const float sizeW = std::clamp(0.11f * heightW, 1.0f, 3.2f) * std::clamp(m_leaf.size, 0.25f, 3.5f);
+    const float size = sizeW / scale;            // model units
+    const float perArea = 4.5f * std::clamp(m_leaf.density, 0.1f, 4.0f) / (0.45f * size * size);
+    Rng rng(m_drawMeshKey ^ 0xC0A0B7ull);
+    const uint32_t count = indices ? indexCount : vertexCount;
+    const uint32_t triangles = primitive == d3d::TriangleList ? count / 3 : (count >= 3 ? count - 2 : 0);
+    auto unorm16 = [](float x) { return uint32_t(std::clamp(x, 0.0f, 1.0f) * 65535.0f + 0.5f); };
+    for (uint32_t t = 0; t < triangles && leaves.size() < 4 * kMaxLeavesPerSet; ++t) {
+        uint32_t k[3];
+        if (primitive == d3d::TriangleList) { k[0] = 3 * t; k[1] = 3 * t + 1; k[2] = 3 * t + 2; }
+        else if (primitive == d3d::TriangleStrip) { k[0] = t; k[1] = t + 1; k[2] = t + 2; }
+        else { k[0] = 0; k[1] = t + 1; k[2] = t + 2; }
+        uint32_t vi[3];
+        for (int j = 0; j < 3; ++j) vi[j] = indices ? indices[k[j]] : k[j];
+        if (vi[0] >= vertexCount || vi[1] >= vertexCount || vi[2] >= vertexCount)
+            continue;
+        V3 p0 = pos(vi[0]), p1 = pos(vi[1]), p2 = pos(vi[2]);
+        float t0[2], t1[2], t2[2];
+        uvAt(vi[0], t0);
+        uvAt(vi[1], t1);
+        uvAt(vi[2], t2);
+        V3 e1 = p1 - p0, e2 = p2 - p0;
+        const float area = 0.5f * Length(Cross(e1, e2));
+        if (area < 1e-8f)
+            continue;
+        float want = area * perArea;
+        uint32_t tries = uint32_t(want) + (rng.Unit() < want - std::floor(want) ? 1u : 0u);
+        tries = std::min<uint32_t>(tries, 8192);
+        for (uint32_t c = 0; c < tries; ++c) {
+            float r1 = rng.Unit(), r2 = rng.Unit();
+            if (r1 + r2 > 1.0f) { r1 = 1.0f - r1; r2 = 1.0f - r2; }
+            float u = t0[0] + (t1[0] - t0[0]) * r1 + (t2[0] - t0[0]) * r2;
+            float v = t0[1] + (t1[1] - t0[1]) * r1 + (t2[1] - t0[1]) * r2;
+            if (MaskAlpha(mask, mw, mh, u, v) < 0.5f)
+                continue;
+            V3 p = p0 + e1 * r1 + e2 * r2;
+            // Out of the crown (an ellipsoid's normal there), a direction along its surface, the sprig between.
+            V3 d = p - centre;
+            V3 n = Normalize(V3{d.x / (half.x * half.x), d.y / (half.y * half.y), d.z / (half.z * half.z)});
+            V3 r{rng.Unit() - 0.5f, rng.Unit() - 0.5f, rng.Unit() - 0.5f};
+            V3 tangent = Normalize(r - n * Dot(r, n));
+            float lean = 0.25f + 0.55f * rng.Unit();
+            V3 reach = Normalize(tangent * std::cos(lean) + n * std::sin(lean) - up * (0.3f * rng.Unit()));
+            V3 across = Cross(reach, n);
+            if (Length(across) < 1e-4f)
+                across = Cross(reach, up);
+            across = Normalize(across);
+            V3 hu = across * (0.5f * size), hv = reach * (-0.5f * size);   // (v: towards the twig's base)
+            V3 mid = p + reach * (0.45f * size);
+            const uint32_t cell = rng.Next() % 16u;
+            LeafRecord rec{};
+            rec.centre[0] = mid.x;
+            rec.centre[1] = mid.y;
+            rec.centre[2] = mid.z;
+            rec.halfUxy = Halves(hu.x, hu.y);
+            rec.halfUzVx = Halves(hu.z, hv.x);
+            rec.halfVyz = Halves(hv.y, hv.z);
+            rec.uv = unorm16((float(cell % 4u) + 0.5f) * 0.25f) | unorm16((float(cell / 4u) + 0.5f) * 0.25f) << 16;
+            const uint32_t uh = 2046;            // (0.125: the cell's half, a hair inside it)
+            rec.uvHalfPhase = uh | uh << 12 | (rng.Next() >> 24) << 24;
+            leaves.push_back(rec);
+        }
+    }
+}
+
 // Bakes a canopy's leaves (see the top of the file) into the pool.
 bool Device::BakeLeaves(LeafSet& set, uint32_t primitive, const FvfLayout& layout, const void* vertices,
                         uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount)
@@ -316,7 +417,9 @@ bool Device::BakeLeaves(LeafSet& set, uint32_t primitive, const FvfLayout& layou
     Rng rng(m_drawMeshKey ^ 0x5EEDull);
     const uint32_t count = indices ? indexCount : vertexCount;
     const uint32_t triangles = primitive == d3d::TriangleList ? count / 3 : (count >= 3 ? count - 2 : 0);
-    for (uint32_t t = 0; t < triangles; ++t) {
+    if (set.art)
+        BakeOwnCanopy(set, primitive, layout, vertices, vertexCount, indices, indexCount, &leaves);
+    for (uint32_t t = 0; t < (set.art ? 0u : triangles); ++t) {
         uint32_t k[3];
         if (primitive == d3d::TriangleList) { k[0] = 3 * t; k[1] = 3 * t + 1; k[2] = 3 * t + 2; }
         else if (primitive == d3d::TriangleStrip) { k[0] = t; k[1] = t + 1; k[2] = t + 2; }
@@ -614,7 +717,8 @@ void Device::DrawLeafShadows(VkCommandBuffer cmd)
             vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipelineLayout, 0, 1, &w);
             bound = true;
         }
-        VkDescriptorImageInfo image{SamplerFor(0), item.texture->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        Texture* drawn = set.art ? set.art : item.texture;   // (our own canopy: its atlas)
+        VkDescriptorImageInfo image{SamplerFor(0), drawn->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         w.dstBinding = 0;
         w.descriptorCount = 1;

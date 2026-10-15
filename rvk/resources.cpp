@@ -560,7 +560,8 @@ void Device::DestroyTexture(Texture* texture)
     ForgetCasterTexture(texture);
     for (const CloudPuff& p : m_cloudPuffsLast)
         if (p.texture == texture) { m_cloudPuffsLast.clear(); break; }   // (kept for frames without the sky's puffs)
-    for (Texture** map : {&texture->m_normalMap, &texture->m_ormMap, &texture->m_albedoMap, &texture->m_emissiveMap})
+    for (Texture** map : {&texture->m_normalMap, &texture->m_ormMap, &texture->m_albedoMap, &texture->m_emissiveMap,
+                          &texture->m_leafArt, &texture->m_leafArtNormal})
         if (*map) {
             DestroyTexture(*map);
             *map = nullptr;
@@ -600,6 +601,18 @@ void Device::SetEmissiveMap(Texture* texture, Texture* emissive)
         DestroyTexture(texture->m_emissiveMap);
     texture->m_emissiveMap = emissive;
     m_constantsDirty = true;
+}
+
+void Device::SetLeafArt(Texture* texture, Texture* atlas, Texture* normal)
+{
+    if (!texture)
+        return;
+    for (auto [map, now] : {std::pair{&texture->m_leafArt, atlas}, std::pair{&texture->m_leafArtNormal, normal}})
+        if (*map != now) {
+            if (*map) DestroyTexture(*map);
+            *map = now;
+        }
+    ++texture->m_leafArtVersion;
 }
 
 void Device::SetPbr(const PbrSettings& s)

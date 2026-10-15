@@ -2367,7 +2367,8 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     PrepareDrawArenas();
     // The arrays are full (a frame with more unique states or draws than reserved): submit what is recorded, wait,
     // and start over. Rare; the targets double for the next frames.
-    if (m_constCount >= m_constCapacity || m_recordCount + 2 > m_recordCapacity) {   // (two-pass foliage: 2 records)
+    if (m_constCount >= m_constCapacity || m_recordCount + 3 > m_recordCapacity) {   // (two-pass foliage: 2 records;
+                                                                                   // a tree's own canopy: 1 more)
         m_constWanted = std::min(m_constWanted * 2u, kMaxDrawConstCapacity);
         m_recordWanted = std::min(m_recordWanted * 2u, kMaxDrawRecordCapacity);
         FlushDrawArenas();
@@ -2394,7 +2395,8 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
         dt.leaf[2] = m_drawLeaves->centre[2];
         dt.leaf[3] = m_drawLeaves->kind == Canopy::Palm ? -m_drawLeaves->radius : m_drawLeaves->radius;
         dt.leafSet[0] = m_drawLeaves->first;
-        dt.leafSet[1] = m_drawLeafCount | m_drawLeafFall << 16;
+        dt.leafSet[1] = m_drawLeafCount | m_drawLeafFall << 16 | (m_drawLeaves->art ? 0x80000000u : 0u);   // (bit 31:
+                                                 // our own canopy - its cards fade out, ffp.vert)
         dt.leafSet[2] = m_drawLeaves->count;
         std::memcpy(&dt.leafSet[3], &m_drawLeafGround, 4);
     }
@@ -3048,6 +3050,17 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     // GPU-driven M2: this draw's record, and the frame's two arrays (bindings 0 = constants, 12 = records) pushed
     // once per frame's command buffer. The record index travels in firstInstance (gl_InstanceIndex).
     uint32_t recordIndex = AppendRecord(constIndex, dt);
+    // A tree's own canopy (leaves.cpp): its sprigs drawn with the type's atlas - their own record, the canopy's but for
+    // the textures (its material maps are laid on the game's cards, not on the atlas).
+    uint32_t leafRecord = recordIndex;
+    if (m_drawLeafCount && m_drawLeaves->art) {
+        DrawTransform ld = dt;
+        ld.texIdx[0] = BindlessImage(m_drawLeaves->art);
+        Texture* artNormal = m_textures[0] ? m_textures[0]->m_leafArtNormal : nullptr;   // (the canopy texture's)
+        ld.texIdx[3] = BindlessImage(artNormal ? artNormal : m_flatNormal);
+        ld.mat[2] &= ~(kMatPbr | kMatAlbedo | kMatEmissive);
+        leafRecord = AppendRecord(constIndex, ld);
+    }
     if (m_drawSplit) {                           // the edges, queued: the same draw, its own record (motion.w = 2)
         DrawTransform edge = dt;
         edge.motion[3] = 2.0f;
@@ -3129,7 +3142,7 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
 
     // A canopy's leaves (leaves.cpp), before the canopy itself: its state is set up now; DrawLeaves puts it back.
     if (m_drawLeafCount)
-        DrawLeaves(cmd, recordIndex, primitive, fvf, layout.stride, frameLightsOffset, prevPositionsBuffer,
+        DrawLeaves(cmd, leafRecord, primitive, fvf, layout.stride, frameLightsOffset, prevPositionsBuffer,
                    prevPositionsOffset, prevPositionsBytes, smoothBuffer, smoothOffset, smoothBytes);
 
     // Would an instanced batch cover this draw together with the one before it? Only static snapshots share their

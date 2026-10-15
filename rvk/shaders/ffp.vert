@@ -248,7 +248,8 @@ void LeafVertex(vec2 originXZ)
     float gust = Gust(originXZ, FL.wind.xy, FL.wind.z) * FL.leaves.z;
     float gustPrev = Gust(originXZ, FL.wind.xy, FL.taa.w) * FL.leaves.z;
     float f = FL.leaves.y * size;
-    float tip = 0.5 + 0.5 * corner.y;
+    // (Flapping most at the far edge: the old sprigs' top; our own canopy's sprigs' tip, their twig's base at +v.)
+    float tip = (D.leafSet.y & 0x80000000u) != 0u ? 0.5 - 0.5 * corner.y : 0.5 + 0.5 * corner.y;
     inPos = vec4(pos + n * f * LeafFlutter(phase, tip, FL.wind.z, gust), 1.0);
     gLeafPrev = pos + n * f * LeafFlutter(phase, tip, FL.taa.w, gustPrev);
     // Lit as part of a rounded crown, not as a flat card: its normal leans out from the crown's centre.
@@ -348,9 +349,13 @@ void main()
             float keep = LeafKeep();
             crownShade = mix(1.0, CrownShade(modelPos), keep);
 #ifndef RVK_LEAF
-            modelPos = mix(modelPos, D.leaf.xyz, CoreShrink(FL.leaves.w, keep));
-            crownShade *= 1.0 - 0.1 * FL.leaves.w * keep;
-            leafThin = CoreThin(FL.leaves.w, keep);
+            if ((D.leafSet.y & 0x80000000u) != 0u) {
+                leafThin = keep;                 // our own canopy (leaves.cpp BakeOwnCanopy): the cards fade out as
+            } else {                             // its sprigs come in - none left near
+                modelPos = mix(modelPos, D.leaf.xyz, CoreShrink(FL.leaves.w, keep));
+                crownShade *= 1.0 - 0.1 * FL.leaves.w * keep;
+                leafThin = CoreThin(FL.leaves.w, keep);
+            }
 #endif
         }
         vec4 posW = D.world * vec4(modelPos, 1.0);
@@ -464,6 +469,8 @@ void main()
     vSet0 = inTex0.xy;
 #ifdef RVK_LEAF
     vSet0 = gLeafCorner;                         // where on the leaf's card (ffp_main.glsl LeafMask)
+    if ((D.leafSet.y & 0x80000000u) != 0u)
+        vSet0 = vec2(0.0, 3.0);                  // (our own canopy's sprigs: the atlas has their outline)
 #else
     if (D.leaf.w > 0.0 && (fvf & 0xEu) != 4u)
         vSet0 = vec2(leafThin, 2.0);                 // the canopy's core: how much it is thinned out

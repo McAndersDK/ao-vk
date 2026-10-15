@@ -96,6 +96,11 @@ private:
     Texture* m_ormMap = nullptr;       // PBR material: R occlusion, G roughness, B metallic (owned; SetMaterialMaps)
     Texture* m_albedoMap = nullptr;    // drawn instead of this texture's own pixels (owned; SetMaterialMaps)
     Texture* m_emissiveMap = nullptr;  // light the surface gives off, added to it (owned; SetEmissiveMap)
+    // A tree canopy's own leaf art (leaves.cpp; owned; SetLeafArt): an atlas of 4 x 4 sprigs (twig base at each cell's
+    // bottom middle) drawn in place of this canopy texture's cards, and its normal map; m_leafArtVersion counts changes.
+    Texture* m_leafArt = nullptr;
+    Texture* m_leafArtNormal = nullptr;
+    uint32_t m_leafArtVersion = 0;
     uint32_t m_rdbId = 0;              // the game's RDB texture it holds (SetTextureRdbId; 0: not known)
     uint32_t m_bindless = ~0u;         // its slot in the bindless image array (M1)
     // (Frame dump: its uploads, the frame of the last, and the non-zero bytes of the last whole level 0 - 256 x 256 or
@@ -232,6 +237,7 @@ public:
     // `emissive`: the light a texture's surface gives off (its colour, any resolution), added after the lighting and
     // as bright as PbrSettings::emissive - into the bloom with HDR. Owned by the device as above; null removes it.
     void SetEmissiveMap(Texture* texture, Texture* emissive);
+    void SetLeafArt(Texture* texture, Texture* atlas, Texture* normal);   // (leaves.cpp: a tree type's own canopy)
     // Picking (the proxy's Ctrl+Shift+I textures, Ctrl+Shift+M meshes): the next frame's 3D scene draws are tested on
     // the CPU against the point (x, y: 0..1 across the target, y down) - GPU-skinned characters with their skinned
     // vertices - and the nearest one's stage 0 texture, visual and owning character (SetDrawVisual) are kept; LastPick
@@ -377,10 +383,11 @@ public:
         bool trees = true, shrubs = true, palms = true;
         bool shadows = true;           // the leaves cast the sun's shadow (dappled light under the trees)
         float fall = 1.0f;             // leaves coming off and drifting down (more in gusts), lying a while (0 = none)
+        bool own = true;               // trees with leaf art (ao-assets leaf-art): our own canopy in place of the cards
     };
     void SetLeaves(const LeafSettings& s)
     {
-        if (s.density != m_leaf.density || s.size != m_leaf.size)
+        if (s.density != m_leaf.density || s.size != m_leaf.size || s.own != m_leaf.own)
             m_leafDirty = true;
         m_leaf = s;
         m_frameLightsDirty = true;
@@ -2098,6 +2105,9 @@ private:
         uint64_t lastFrame = 0;
         float centre[3] = {}, radius = 0.0f;     // the crown (model space)
         bool baked = false;
+        // A tree with its own leaf art (the canopy texture's m_leafArt, RVK_LeafOwn): our sprigs in place of its cards.
+        Texture* art = nullptr;
+        uint32_t artVersion = 0;
     };
     std::unordered_map<uint64_t, LeafSet> m_leafSets;   // by mesh key and texture
     LeafSettings m_leaf;
@@ -2139,6 +2149,8 @@ private:
                       const uint16_t* indices, uint32_t indexCount);
     void CanopyParams(uint32_t primitive, uint32_t fvf, const detail::FvfLayout& layout, const void* vertices,
                       uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount);
+    void BakeOwnCanopy(LeafSet& set, uint32_t primitive, const detail::FvfLayout& layout, const void* vertices,
+                       uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount, void* outLeaves);
     bool BakeLeaves(LeafSet& set, uint32_t primitive, const detail::FvfLayout& layout, const void* vertices,
                     uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount);
     bool GrowLeafPool(uint32_t minLeaves);
