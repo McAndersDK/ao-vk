@@ -348,7 +348,12 @@ void Device::BakeOwnCanopy(LeafSet& set, uint32_t primitive, const FvfLayout& la
     const float sizeW = std::clamp(0.11f * heightW, 1.0f, 3.2f) * std::clamp(m_leaf.size, 0.25f, 3.5f);
     const float size = sizeW / scale;            // model units
     const float perArea = 4.5f * std::clamp(m_leaf.density, 0.1f, 4.0f) / (0.45f * size * size);
-    Rng rng(ContentSeed(vertices, stride, vertexCount, indices, indexCount) ^ 0xC0A0B7ull);
+    // Random numbers of their own for each triangle, each sample and each cluster (from the mesh's content and where
+    // they are), not one sequence: the canopy's texture arrives at low quality first and is baked again at full - one
+    // sample landing otherwise shifted every number after it, and the whole crown changed (the user: turned off and on,
+    // the branches came out different).
+    const uint64_t seed = ContentSeed(vertices, stride, vertexCount, indices, indexCount) ^ 0xC0A0B7ull;
+    double wantTotal = 0.0;
     const uint32_t count = indices ? indexCount : vertexCount;
     const uint32_t triangles = primitive == d3d::TriangleList ? count / 3 : (count >= 3 ? count - 2 : 0);
     auto unorm16 = [](float x) { return uint32_t(std::clamp(x, 0.0f, 1.0f) * 65535.0f + 0.5f); };
@@ -371,9 +376,12 @@ void Device::BakeOwnCanopy(LeafSet& set, uint32_t primitive, const FvfLayout& la
         if (area < 1e-8f)
             continue;
         float want = area * perArea;
-        uint32_t tries = uint32_t(want) + (rng.Unit() < want - std::floor(want) ? 1u : 0u);
+        wantTotal += want;
+        Rng tr(seed ^ (uint64_t(t) + 1) * 0x9E3779B97F4A7C15ull);
+        uint32_t tries = uint32_t(want) + (tr.Unit() < want - std::floor(want) ? 1u : 0u);
         tries = std::min<uint32_t>(tries, 8192);
         for (uint32_t c = 0; c < tries; ++c) {
+            Rng rng(seed ^ ((uint64_t(t) << 24) ^ c) * 0xD6E8FEB86659FD93ull ^ 0x51ull);
             float r1 = rng.Unit(), r2 = rng.Unit();
             if (r1 + r2 > 1.0f) { r1 = 1.0f - r1; r2 = 1.0f - r2; }
             float u = t0[0] + (t1[0] - t0[0]) * r1 + (t2[0] - t0[0]) * r2;
@@ -415,10 +423,20 @@ void Device::BakeOwnCanopy(LeafSet& set, uint32_t primitive, const FvfLayout& la
     // into clusters (k-means: a branch's end each), a limb from the top of the trunk (under the crown's middle) to each,
     // arching up a little, and from each cluster twigs to a few of its sprigs. Each piece two crossed cards of the
     // atlas' last cell (a stick, wide at its base); a limb as thick as the sprigs it carries.
-    const uint32_t clusters = std::clamp<uint32_t>(uint32_t(bases.size() / 35), 4u, 48u);
+    // (How many, and where they start: from the crown's shape - not the samples that happened to land on leaf.)
+    const uint32_t clusters = std::clamp<uint32_t>(uint32_t(wantTotal / 90.0), 4u, 48u);
     std::vector<V3> mean(clusters);
     std::vector<uint32_t> of(bases.size(), 0), members(clusters, 0);
-    for (uint32_t c = 0; c < clusters; ++c) mean[c] = bases[rng.Next() % bases.size()];
+    for (uint32_t c = 0; c < clusters; ++c) {    // (the sprig nearest each of points spread over the crown)
+        const float z = 1.0f - 2.0f * (float(c) + 0.5f) / float(clusters), r = std::sqrt(std::max(1.0f - z * z, 0.0f));
+        const float phi = 2.3999632f * float(c);
+        const V3 target = centre + V3{half.x * r * std::cos(phi), half.y * z, half.z * r * std::sin(phi)} * 0.7f;
+        float best = 1e30f;
+        for (const V3& b : bases) {
+            V3 d = b - target;
+            if (Dot(d, d) < best) { best = Dot(d, d); mean[c] = b; }
+        }
+    }
     for (int iteration = 0; iteration < 6; ++iteration) {
         std::vector<V3> sum(clusters, V3{0, 0, 0});
         std::fill(members.begin(), members.end(), 0u);
@@ -539,6 +557,7 @@ void Device::BakeOwnCanopy(LeafSet& set, uint32_t primitive, const FvfLayout& la
         curve(from, bend, mean[c], thick, thick * 0.55f, pieces, &limbs[c]);
         // Twigs to a few of its sprigs: off the limb's last part, thin and even, stopping short of the sprig's own.
         const Limb& l = limbs[c];
+        Rng rng(seed ^ (uint64_t(c) + 1) * 0x2545F4914F6CDD1Dull);
         uint32_t twigs = 0;
         for (size_t i = 0; i < bases.size() && twigs < 4; ++i)
             if (of[i] == c && rng.Unit() < 4.0f / float(members[c] + 1)) {
