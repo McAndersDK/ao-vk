@@ -1327,6 +1327,7 @@ private:
     // ... and for cut-outs: depth only where the pixel ends up fully opaque (prepass_cutout.frag). Null: cut-outs stay
     // out of the pre-pass (RANDYVK_PREPASS_CUTOUT=0, or the pipeline failed).
     VkPipeline m_prepassCutoutPipeline = VK_NULL_HANDLE;
+    VkPipeline m_leafPrepassPipeline = VK_NULL_HANDLE;   // ... leaf.vert + prepass_cutout.frag (our own canopy's sprigs)
     bool m_prepassSway = true;                   // swaying plants in the pre-pass too (RANDYVK_PREPASS_SWAY=0: not)
     struct PrepassCache {
         bool bound = false;                      // pipeline, front face, depth state, arrays, set 1
@@ -1344,7 +1345,10 @@ private:
     uint32_t m_prepassIndirectCount = 0;
     uint64_t m_prepassCalls = 0;                 // (draw calls it issued: logged with its draws)
     void FlushPrepassGroup();
-    bool CreatePrepassPipeline(VkShaderModule vert);   // false: the pre-pass stays off
+    bool CreatePrepassPipeline(VkShaderModule vert, VkShaderModule leafVert);   // false: the pre-pass stays off
+    // Our own canopy's sprigs into the pre-pass (their solid middles' depth; prepass.cpp): true if recorded.
+    bool PrepassLeaves(uint32_t recordIndex, uint32_t first, uint32_t count, VkDeviceSize frameLightsOffset,
+                       VkBuffer prevBuffer, VkDeviceSize prevOffset, VkDeviceSize prevBytes);
     uint64_t m_prepassDraws = 0, m_prepassSegments = 0;   // logged every 600 frames (PrepassLog)
     // Why a scene draw isn't in the pre-pass (PrepassCheck; counted for the log), and why segments end.
     enum PrepassWhy : uint32_t {
@@ -2125,6 +2129,7 @@ private:
     std::vector<LeafTrash> m_leafTrash;
     VkPipeline m_leafPipelines[2] = {};          // 8-bit target, HDR scene (leaf.vert + ffp.frag)
     uint32_t m_leafBakes = 0, m_leafBakedLeaves = 0;   // counters (logged with the foliage line)
+    uint32_t m_leafPrepassed = 0;                // ... leaf draws whose sprigs went into the depth pre-pass
     double m_leafBakeMs = 0.0;
     uint64_t m_leafDraws = 0, m_leafDrawn = 0;   // leaf draws and leaves drawn (the log's 600 frames)
     uint64_t m_canopyCount[4] = {};              // canopy draws by kind (the log's 600 frames)
