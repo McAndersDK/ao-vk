@@ -236,7 +236,7 @@ float SandInflow(vec3 uvw)
     if (above < 0.0) return 0.0;
     float streak = Streaks(uvw);
     return SD.air.x * (1.0 - SandShelter(uvw)) *                        // (none blowing in where it is held off)
-           (1.8 * streak * exp(-above / 0.6) + 0.4 * (0.35 + 0.65 * streak) * exp(-above / max(SD.air.y, 0.1)));
+           (1.8 * streak * exp(-above / 0.6) + 0.25 * (0.35 + 0.65 * streak) * exp(-above / max(SD.air.y, 0.1)));
 }
 // The density (and temperature) at a point: the image's, or beyond the walls what the storm brings.
 vec2 DensAt(vec3 at)
@@ -267,7 +267,7 @@ void main()
         float speed = length(SD.wind.xy);
         uint step_ = uint(P.e.w) / 8u;
         ivec3 eddy = id / 3;
-        v += speed * 1.5 * dt * vec3(Jitter(eddy, step_), 0.6 * Jitter(eddy, step_ + 31u), Jitter(eddy, step_ + 7919u));
+        v += speed * 0.8 * dt * vec3(Jitter(eddy, step_), 0.35 * Jitter(eddy, step_ + 31u), Jitter(eddy, step_ + 7919u));
         // A dust devil: whirling round its axis (fastest at its radius), drawn in and lifted at its foot.
         if (SD.devil.w > 0.0) {
             vec2 r = (uvw.xz - SD.devil.xz) * size;
@@ -404,7 +404,8 @@ void main()
             // more where the ground is sand - at a dust devil's foot, and where characters' feet kick it up.
             float feed, above = AboveGround(uvw, feed);
             float held = SandShelter(uvw);
-            dens.r *= exp(-(P.c.w + 2.5 * held) * dt);                  // (sheltered: what blew in settles out)
+            dens.r *= exp(-(P.c.w + 2.5 * held + 0.5 * smoothstep(1.0, 4.0, above)) * dt);   // (sheltered: settling
+                                                                     // out; high up too - sand hugs the ground)
             float level = 0.0;
             if (above >= 0.0 && above < 0.8)
                 level = SD.air.z * feed * (0.1 + 0.9 * Streaks(uvw)) * (1.0 - above / 0.8) * (1.0 - held);
@@ -518,8 +519,10 @@ void main()
         int half_ = n / 2;
         if (any(greaterThanEqual(id, ivec3(half_))))
             return;
-        vec3 v = texture(velIn, (vec3(id) + 0.5) / float(half_)).xyz;
-        imageStore(flowOut, id, vec4(clamp(v * P.g.y, -1.0, 1.0), 0.0));
+        vec3 at = (vec3(id) + 0.5) / float(half_);
+        vec3 v = texture(velIn, at).xyz;
+        float feed, above = IsSand() ? AboveGround(at, feed) : 0.0;   // (the sand's: the drawing's ground layer)
+        imageStore(flowOut, id, vec4(clamp(v * P.g.y, -1.0, 1.0), clamp(above / 4.0, -1.0, 1.0)));
     } else if (stage == 7) {
         if (gl_LocalInvocationIndex == 0u) {
             sLow[0] = sLow[1] = sLow[2] = 0xFFFFFFFFu;
