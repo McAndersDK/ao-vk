@@ -172,6 +172,13 @@ void Device::SandHaze(float out[8]) const
     out[6] = std::min(0.45f * m_sand * m_sandHaze, 0.6f);   // (the game's 0.38: a ~17% veil close by)
     out[6] *= 1.0f - 0.75f * m_sandEyeShelter;               // (in a hill's or a wall's lee: the air near clears)
     out[7] = (SmokeCoverValid() ? 1.0f : 0.0f) + (m_sandFogValid ? 2.0f : 0.0f);   // (the fog: RenderSandFog)
+    // (With the fog, z: how much the light on the land takes the dust's colour - the sun's light the storm takes on
+    // its way down comes to the land scattered by the dust, its colour - x RVK_SandTint.)
+    if (m_sandFogValid) {
+        float frame[4];
+        WindFrame(frame);
+        out[6] = frame[2] * std::clamp(m_sandTint, 0.0f, 1.0f);
+    }
 }
 
 }  // namespace rvk

@@ -348,6 +348,7 @@ public:
     void SetSandGusts(float s) { m_sandGusts = s; }                // RVK_SandGusts
     void SetSandFog(float s) { m_sandFog = s; }                    // RVK_SandFog (sand_fog.frag; 0: the flat haze)
     void SetSandSun(float s) { m_sandSun = s; }                    // RVK_SandSun (sand_fog.frag)
+    void SetSandTint(float s) { m_sandTint = s; }                  // RVK_SandTint (tonemap.frag)
     bool SandFogOn() const { return m_sandFog > 0.0f && m_sand > 0.01f && m_sandHaze > 0.0f; }
     bool SmokeCoverValid() const { return m_smokeHalf && m_smokeHalfFrame == m_frameNumber; }
     // Grass and plants bending out of the way of characters walking through them (0 = off; scales reach and bend).
@@ -1957,6 +1958,7 @@ private:
     float m_sandGusts = 1.0f;                    // RVK_SandGusts: the distant gusts in the haze (0 none)
     float m_sandFog = 0.0f;                      // RVK_SandFog: the storm's air a lit volume (docs/sand-fog-plan.md)
     float m_sandSun = 0.9f;                      // RVK_SandSun: how clearly the sun shows through the fog (0 .. 1)
+    float m_sandTint = 0.6f;                     // RVK_SandTint: the light under the fog the dust's colour (0 .. 1)
     double m_sandFarCarried = 0.0;               // how far the wind has carried them (world; wrapped at 1e6)
     void UpdateSandMap();
     void RasterSandItem(SandMap& m, uint32_t item);

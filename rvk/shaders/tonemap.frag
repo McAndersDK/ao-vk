@@ -173,6 +173,13 @@ void main()
         // What shows through reddened: the dust takes blue first (exp(-k tau) = T^k per colour) - distant hills go
         // red-brown in the storm, not just paler (the user; at 0.6 / 1.6 the nearer hills went strangely red).
         vec3 Tc = pow(vec3(max(T, 1e-6)), vec3(0.8, 1.0, 1.25));
+        // The light on the land under the storm the dust's colour (as bright): the sun's light the dust took on its
+        // way down reaches the land scattered by it - orange under an orange sky, not the sun's own white (the user).
+        // The sky's pixels not: the fog holds them.
+        if (d < 1.0 && P.dust2.z > 0.0) {
+            vec3 tint = P.dust.rgb / max(dot(P.dust.rgb, vec3(0.3, 0.59, 0.11)), 1e-4);
+            Tc *= mix(vec3(1.0), min(tint, vec3(2.5)), P.dust2.z);
+        }
         if (smokeNear) {
             vec4 smoke = texture(smokeCover, gl_FragCoord.xy / vec2(textureSize(scene, 0)));
             float a = clamp(smoke.a, 0.0, 1.0);

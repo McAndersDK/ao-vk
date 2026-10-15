@@ -149,6 +149,7 @@ Setting g_settings[] = {
     {"RVK_SandGusts",  "Sand and ash storms: distant gusts - billows of dust drifting through the haze beyond the near sand (0 = none)", "Experimental", Float, 0, 2, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_SandFog",    "Sand and ash storms: the storm's air as a lit fog - shaded by dunes and walls, glowing towards the sun (off: the flat haze)", "Experimental", Bool, 0, 1, 1, 0, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_SandSun",    "Sand and ash storms, with the sand fog: how clearly the sun shows through the storm, dim and red (0: hidden as the dust)", "Experimental", Float, 0, 1, 0.05f, 0.9f, nullptr, 0, "RVK_WeatherOn"},
+    {"RVK_SandTint",   "Sand and ash storms, with the sand fog: the light under the storm the dust's colour - the sun behind it lights the land orange (0: the sun's own)", "Experimental", Float, 0, 1, 0.05f, 0.6f, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_SandBlow",   "Sand and ash storms: sand blowing round you, simulated - streaks, eddies, dust devils, kicked up by feet (x; 0: none)", "Experimental", Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
 
     {"RVK_SmokeOn",    "Simulated smoke (needs HDR)",  "Experimental",    Bool,  0, 1, 1, 0, nullptr, 0},
@@ -491,6 +492,7 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
     else if (is("RVK_SandGusts")) d->SetSandGusts(V(n));
     else if (is("RVK_SandFog")) d->SetSandFog(V(n));
     else if (is("RVK_SandSun")) d->SetSandSun(V(n));
+    else if (is("RVK_SandTint")) d->SetSandTint(V(n));
     else if (is("RVK_SandForce") || is("RVK_SandAsh")) d->SetSandForce(V("RVK_SandForce"), V("RVK_SandAsh") != 0.0f);
     else if (is("RVK_Saturation") || is("RVK_Contrast") || is("RVK_Warmth") || is("RVK_NightTint") ||
              is("RVK_Vignette") || is("RVK_LutAmount"))

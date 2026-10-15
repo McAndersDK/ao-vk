@@ -34,7 +34,8 @@ layout(push_constant) uniform Push {
     vec4 air3;          // rgb: the sun's (moon's) light through the air - golden, then red low
     // A sand or ash storm (rvk wind.cpp SandHaze): the air thick with it, from the game's own storm tint.
     vec4 dust;          // rgb: its colour (as the scene's light); w: its density (per world unit; 0: none)
-    vec4 dust2;         // x: the wind's clock; y: how much it surges with the gusts; z: the veil at every distance;
+    vec4 dust2;         // x: the wind's clock; y: how much it surges with the gusts; z: the veil at every distance
+                        // (with the fog - w bit 2 -: how much the land's light takes the dust's colour);
                         // w: + 1 = smokeCover holds this frame's smoke (blowing sand: near, not behind the sky's
                         // veil), + 2 = sandFog holds the storm's air (RVK_SandFog: in place of the flat haze)
     // The storm's distant gusts (rvk wind.cpp SandGusts; tonemap.frag): beyond the simulated sand round the camera,
