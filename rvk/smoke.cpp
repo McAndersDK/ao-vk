@@ -68,7 +68,11 @@ constexpr float kSandBox = 32.0f;               // its box (world units a side)
 // m_sandOffset's wrap (world, along and across): the simulation's streak noise repeats over them (4096 lattice cells of
 // 24 and 6 world), the drawn grain over 32 and 16 (smoke.frag SandGrain).
 constexpr double kSandOffsetWrap[2] = {98304.0, 24576.0};
-constexpr float kSandSettle = 0.35f;            // how fast its sand settles (world / s)
+constexpr float kSandSettle = 0.35f;
+// The sand volume's columns (smoke_sim.comp SandBlock.ground, three vec4 each): its top, sand given off, the shelter
+// heights; how far the air arriving was pushed aside (x z, world), the wind's direction there (a unit wind's); the
+// nearest obstacle's top (box units), 1 = the flow round it known.
+constexpr size_t kSandColumnFloats = 12;            // how fast its sand settles (world / s)
 
 // The sand volume's block (smoke_sim.comp Sand, std430), then its columns' ground (2 floats each); a smoke volume's
 // all 0.
@@ -697,7 +701,7 @@ void Device::UpdateSmokeDrift(double now)
 // much sand it gives (bare ground all, green ground a quarter).
 void Device::MakeSandGround(const float corner[3], float size, uint32_t n)
 {
-    m_sandGround.assign(size_t(n) * n * 4, 0.0f);
+    m_sandGround.assign(size_t(n) * n * kSandColumnFloats, 0.0f);
     const float h = size / float(n);
     float guess = 0.0f;                          // (unknown ground: as high as the floor's estimate)
     for (const SmokeVolume& v : m_smokeVolumes)
@@ -712,14 +716,21 @@ void Device::MakeSandGround(const float corner[3], float size, uint32_t n)
                 const float r = float((colour >> 16) & 0xFF), g = float((colour >> 8) & 0xFF), b = float(colour & 0xFF);
                 if (g > r * 1.05f && g > b) feed = 0.25f;
             }
-            float* c = &m_sandGround[(size_t(z) * n + x) * 4];
+            float* c = &m_sandGround[(size_t(z) * n + x) * kSandColumnFloats];
             // The shelter map (sand_map.cpp): its ground where the grass has none, the solid tops over the column (a
             // trunk thinner than the column still in it: solid in the simulation, the sand goes round), no sand
             // given off on top of things, the shelter heights (none: as low as the column's top).
             const float wx = corner[0] + (float(x) + 0.5f) * h, wz = corner[2] + (float(z) + 0.5f) * h;
             SandColumn col;
             float top = y, shelterSolid = -1e9f, shelterCrown = -1e9f;
+            bool flow = false;
             if (SandMapAt(wx, wz, &col)) {
+                flow = col.nearTop > -1e8f;
+                c[4] = col.offset[0];
+                c[5] = col.offset[1];
+                c[6] = col.flow[0];
+                c[7] = col.flow[1];
+                c[8] = flow ? (col.nearTop - corner[1]) / size : -1.0f;
                 if (!known) top = col.ground;    // (GroundAt had nothing: the map's)
                 const float solid = SandMapSolidIn(wx - 0.5f * h, wz - 0.5f * h, wx + 0.5f * h, wz + 0.5f * h);
                 if (solid > top + 0.3f) {
@@ -733,6 +744,7 @@ void Device::MakeSandGround(const float corner[3], float size, uint32_t n)
             c[1] = feed;
             c[2] = (std::max(shelterSolid, top - 10.0f) - corner[1]) / size;
             c[3] = (std::max(shelterCrown, top - 10.0f) - corner[1]) / size;
+            c[9] = flow ? 1.0f : 0.0f;
         }
     std::memcpy(m_sandGroundCorner, corner, sizeof(m_sandGroundCorner));
     m_sandGroundN = n;
@@ -1071,7 +1083,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
     for (float& s : sun) s /= sl;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_smokeSimPipeline);
     uint32_t groups = 0;
-    EnsureRingSpace(live.size() * (sizeof(SmokeBodies) + sizeof(SandHeader) + 512) + kSandCellsMax * kSandCellsMax * 16u + 1024);
+    EnsureRingSpace(live.size() * (sizeof(SmokeBodies) + sizeof(SandHeader) + 512) + kSandCellsMax * kSandCellsMax * kSandColumnFloats * 4u + 1024);
     Frame& f = m_frames[m_frameIndex];
     // Which volumes step this frame: warming up ones every frame; of the others those due, the most overdue first, as
     // many as keep them all stepping every kSimStep or so - each frame about the same work, not two volumes' steps in

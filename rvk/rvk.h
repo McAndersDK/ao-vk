@@ -1906,22 +1906,49 @@ private:
     struct SandMap {
         int origin[2] = {0, 0};                  // its first cell (world cells)
         std::vector<float> ground, solid, crownLo, crownHi, feed, shelterSolid, shelterCrown;
+        // The flow round solid obstacles (SandFlow): the wind's direction there (x z, a unit wind's), how far the air
+        // arriving there was pushed aside on its way (x z, world), the nearest obstacle's top (world y).
+        std::vector<float> flowX, flowZ, offsetX, offsetZ, nearTop;
+        std::vector<float> nearDX, nearDZ;       // ... from the nearest solid cell to this one (world; SandNearest)
+        bool anySolid = false;
         bool valid = false;
         double built = -1e9;
         uint32_t statelGen = 0;
     };
-    struct SandMapJob { bool active = false; uint32_t row = 0; size_t item = 0; std::vector<uint32_t> items; };
-    struct SandColumn { float ground, top, shelterSolid, shelterCrown, feed; };
+    // A shelter and flow sweep for a wind (sand_map.cpp StepSandSweep: in slices, then swapped into its map).
+    struct SandSweep {
+        bool active = false;
+        int stage = 0, row = 0;
+        float wind[2] = {0, 0};
+        std::vector<float> solid, crown, flowX, flowZ, offX, offZ;
+    };
+    struct SandMapJob {
+        bool active = false, nearest = false, swept = false;
+        uint32_t row = 0;
+        size_t item = 0;
+        std::vector<uint32_t> items;
+        SandSweep sweep;                         // (the new map's, before it is swapped in)
+    };
+    SandSweep m_sandSweep;                       // the current map's, the wind having turned
+    struct SandColumn { float ground, top, shelterSolid, shelterCrown, feed, flow[2], offset[2], nearTop; };
     SandMap m_sandMap, m_sandMapNext;
     SandMapJob m_sandMapJob;
     std::vector<float> m_sandCoarseShelter;      // the terrain grid's (terrain_sun.cpp) shelter heights
+    std::vector<float> m_sandCoarsePending;      // ... being swept (32 rows a frame)
+    bool m_sandCoarseJob = false;
+    int m_sandCoarseRow = 0, m_sandCoarseJobOrigin[2] = {0, 0};
+    float m_sandCoarseJobWind[2] = {0, 0};
     int m_sandCoarseOrigin[2] = {0, 0};
     float m_sandCoarseWind[2] = {0, 0}, m_sandShelterWind[2] = {0, 0};   // the wind they were swept for
-    double m_sandCoarseMade = -1e9, m_sandMapMs = 0.0;
+    double m_sandCoarseMade = -1e9, m_sandMapMs = 0.0, m_sandMapMaxMs = 0.0, m_sandShelterMade = -1e9;
     uint32_t m_sandShelterGen = 0, m_sandGroundShelterGen = ~0u;
     float m_sandEyeShelter = 0.0f;               // the camera's (eased): the near haze held off
     void UpdateSandMap();
     void RasterSandItem(SandMap& m, uint32_t item);
+    void SandFlowCells(const SandMap& m, SandSweep& j);
+    void SandOffsetRows(SandSweep& j, int from, int to);
+    bool StepSandSweep(SandSweep& j, SandMap& m, double deadline);
+    void SandNearest(SandMap& m);
     float CoarseTerrainAt(float x, float z) const;
     float CoarseShelterAt(float x, float z) const;
     bool SandMapAt(float x, float z, SandColumn* out) const;

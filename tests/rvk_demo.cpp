@@ -1158,6 +1158,7 @@ bool g_grassBenchStill = false;   // --grass-bench-still: the camera stays where
 bool g_terrainPbr = false;        // --terrain-pbr: the bench's ground texture gets a PBR material (a glossy path through
                                   // rough grass), per-pixel lighting, no grass field: the ground's PBR (MAT_BASE) path
 int g_grassBenchFilm = 0;         // --grass-bench-film N: ~60 frames a second, a screenshot every N (film_NNN.bmp)
+float g_grassBenchRise = 0.0f;    // --grass-bench-rise H: the camera H units higher
 float g_grassBenchPitch = -1.0f;  // --grass-bench-pitch R: the camera looking R radians down, raised to match (top-down)
 bool g_grassFieldTex = true;   // --grass-field-any: over every ground, not only where the ground texture is green
 bool g_grassFieldTan = false;  // --grass-field-tan: leave the terrain's tan ground (a filter that must reject it)
@@ -1369,7 +1370,7 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
         const float ex = -60.0f + 0.06f * t, ez = 10.0f * std::sin(t * 0.004f);
         const float yaw = 0.6f * std::sin(t * 0.007f) + g_grassBenchYaw;
         const float pitch = g_grassBenchPitch >= 0.0f ? std::min(g_grassBenchPitch, 1.5f) : 0.197f;
-        const float ey = height(ex, ez) + 1.0f + 6.0f * std::sin(pitch);
+        const float ey = height(ex, ez) + 1.0f + 6.0f * std::sin(pitch) + g_grassBenchRise;
         const float fwd = 6.0f * std::cos(pitch);
         dev.SetTransform(View, LookAtLH({ex, ey, ez}, {ex + fwd * std::cos(yaw), ey - 6.0f * std::sin(pitch), ez + fwd * std::sin(yaw)},
                                         {0, 1, 0}));
@@ -3867,6 +3868,7 @@ int main(int argc, char** argv)
         else if (a == "--grass-bench-night") g_grassBenchNight = true;
         else if (a == "--grass-bench-lamp") g_grassBenchLamp = true;
         else if (a == "--grass-bench-still") g_grassBenchStill = true;
+        else if (a == "--grass-bench-rise" && i + 1 < argc) g_grassBenchRise = float(std::atof(argv[++i]));
         else if (a == "--terrain-pbr") { g_terrainPbr = g_grassBench = g_grassBenchStill = true; hdr = true; }
         else if (a == "--grass-bench-storm") g_grassBenchStorm = true;
         else if (a == "--sand-obstacles") g_sandObstacles = true;

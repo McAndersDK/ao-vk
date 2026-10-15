@@ -77,15 +77,17 @@ bool TriangleTouchesBox(const float a[2], const float b[2], const float c[2], fl
 // upwind - the fall). Along the wind's larger axis, the cells two upwind are always done before (their bilinear corners
 // lie a whole cell or more back along it). `edge`: the value upwind of the grid at a world x, z (or kUnknown).
 template <typename Top, typename Edge>
-void ShelterSweep(int n, float cell, const float w[2], float fallPerCell, Top top, Edge edge, std::vector<float>& out)
+void ShelterSweep(int n, float cell, const float w[2], float fallPerCell, Top top, Edge edge, std::vector<float>& out,
+                  int rowFrom = 0, int rowTo = -1)
 {
-    out.assign(size_t(n) * n, kUnknown);
+    if (rowFrom == 0) out.assign(size_t(n) * n, kUnknown);
+    if (rowTo < 0) rowTo = n;
     const bool alongX = std::fabs(w[0]) >= std::fabs(w[1]);
     const int dirMajor = (alongX ? w[0] : w[1]) >= 0.0f ? 1 : -1;
     const float bx = -2.0f * w[0], bz = -2.0f * w[1];   // (two cells upwind)
     const float fall = 2.0f * fallPerCell;
     auto at = [&](int x, int z) { return out[size_t(z) * n + x]; };
-    for (int i = 0; i < n; ++i) {
+    for (int i = rowFrom; i < rowTo; ++i) {
         const int major = dirMajor > 0 ? i : n - 1 - i;
         for (int minor = 0; minor < n; ++minor) {
             const int x = alongX ? major : minor, z = alongX ? minor : major;
@@ -166,12 +168,24 @@ void Device::UpdateSandMap()
         // The placed objects, an item at a time.
         while (job.row >= uint32_t(kMapN) && job.item < job.items.size() && NowMs() - start < kBudgetMs)
             RasterSandItem(m, job.items[job.item++]);
-        if (job.row >= uint32_t(kMapN) && job.item >= job.items.size()) {
+        if (job.row >= uint32_t(kMapN) && job.item >= job.items.size() && !job.swept) {
+            if (!job.nearest) {
+                SandNearest(m);
+                job.nearest = true;
+                job.sweep = SandSweep{};
+                job.sweep.active = true;
+                std::memcpy(job.sweep.wind, m_windDir, sizeof(job.sweep.wind));
+            }
+            job.swept = StepSandSweep(job.sweep, m, start + kBudgetMs);
+        }
+        if (job.swept) {
+            std::memcpy(m_sandShelterWind, job.sweep.wind, sizeof(m_sandShelterWind));
+            ++m_sandShelterGen;
+            m_sandSweep.active = false;          // (one for the old map: dropped)
             m.valid = true;
             m.built = m_frameClock;
             std::swap(m_sandMap, m_sandMapNext);
             job.active = false;
-            m_sandShelterWind[0] = m_sandShelterWind[1] = 0.0f;   // (swept again below)
             static uint32_t logged = 0;
             if (logged < 8 && ++logged) {
                 size_t solid = 0, crown = 0, ground = 0;
@@ -188,45 +202,219 @@ void Device::UpdateSandMap()
             }
         }
     }
-    // The coarse terrain's shelter (the hills upwind of the map), at most once a second.
     const float* w = m_windDir;
-    auto turned = [&](const float a[2]) { return a[0] * w[0] + a[1] * w[1] < 0.99985f; };   // (a degree)
-    if (!m_tsHeights.empty() && (turned(m_sandCoarseWind) || m_sandCoarseOrigin[0] != m_tsOrigin[0] ||
-                                 m_sandCoarseOrigin[1] != m_tsOrigin[1] || m_tsDirty) &&
-        m_frameClock - m_sandCoarseMade > 1.0) {
-        ShelterSweep(kCoarseN, kCoarseCell, w, kCoarseCell / kSolidLee,
-                     [&](int x, int z) { return m_tsHeights[size_t(z) * kCoarseN + x]; },
-                     [](float, float) { return kUnknown; }, m_sandCoarseShelter);
-        m_sandCoarseOrigin[0] = m_tsOrigin[0];
-        m_sandCoarseOrigin[1] = m_tsOrigin[1];
-        std::memcpy(m_sandCoarseWind, w, sizeof(m_sandCoarseWind));
+    auto turned = [&](const float a[2]) { return a[0] * w[0] + a[1] * w[1] < 0.99939f; };   // (two degrees)
+    // The coarse terrain's shelter (the hills upwind of the map): again when the wind has turned five degrees or the
+    // grid moved or filled (at most every three seconds), 32 rows a frame into a pending grid, swapped in when done.
+    auto turnedBy = [&](const float a[2], float cosine) { return a[0] * w[0] + a[1] * w[1] < cosine; };
+    if (!m_tsHeights.empty() && !m_sandCoarseJob &&
+        (turnedBy(m_sandCoarseWind, 0.9962f) || m_sandCoarseOrigin[0] != m_tsOrigin[0] ||
+         m_sandCoarseOrigin[1] != m_tsOrigin[1] || m_tsDirty) &&
+        m_frameClock - m_sandCoarseMade > 3.0) {
+        m_sandCoarseJob = true;
+        m_sandCoarseRow = 0;
+        std::memcpy(m_sandCoarseJobWind, w, sizeof(m_sandCoarseJobWind));
+        m_sandCoarseJobOrigin[0] = m_tsOrigin[0];
+        m_sandCoarseJobOrigin[1] = m_tsOrigin[1];
         m_sandCoarseMade = m_frameClock;
-        m_sandShelterWind[0] = m_sandShelterWind[1] = 0.0f;
     }
-    // The map's shelter.
-    if (m_sandMap.valid && turned(m_sandShelterWind)) {
-        SandMap& m = m_sandMap;
-        const float ox = float(m.origin[0]) * kMapCell, oz = float(m.origin[1]) * kMapCell;
-        auto top = [&](int x, int z) {
-            const size_t c = size_t(z) * kMapN + x;
-            return std::max(m.ground[c], m.solid[c]);
-        };
-        auto edge = [&](float lx, float lz) {     // (upwind of the map: the coarse terrain's, a unit lower - its cells
-            return CoarseShelterAt(ox + lx, oz + lz) - 1.0f;   // hold their highest point)
-        };
-        ShelterSweep(kMapN, kMapCell, w, kMapCell / kSolidLee, top, edge, m.shelterSolid);
-        auto crown = [&](int x, int z) { return m.crownHi[size_t(z) * kMapN + x]; };
-        ShelterSweep(kMapN, kMapCell, w, kMapCell / kCrownLee, crown, [](float, float) { return kUnknown; },
-                     m.shelterCrown);
-        std::memcpy(m_sandShelterWind, w, sizeof(m_sandShelterWind));
+    if (m_sandCoarseJob) {
+        if (m_sandCoarseJobOrigin[0] != m_tsOrigin[0] || m_sandCoarseJobOrigin[1] != m_tsOrigin[1]) {
+            m_sandCoarseJob = false;             // (the grid moved meanwhile: started again later)
+        } else {
+            const int to = std::min(m_sandCoarseRow + 32, kCoarseN);
+            ShelterSweep(kCoarseN, kCoarseCell, m_sandCoarseJobWind, kCoarseCell / kSolidLee,
+                         [&](int x, int z) { return m_tsHeights[size_t(z) * kCoarseN + x]; },
+                         [](float, float) { return kUnknown; }, m_sandCoarsePending, m_sandCoarseRow, to);
+            m_sandCoarseRow = to;
+            if (to >= kCoarseN) {
+                m_sandCoarseShelter.swap(m_sandCoarsePending);
+                m_sandCoarseOrigin[0] = m_sandCoarseJobOrigin[0];
+                m_sandCoarseOrigin[1] = m_sandCoarseJobOrigin[1];
+                std::memcpy(m_sandCoarseWind, m_sandCoarseJobWind, sizeof(m_sandCoarseWind));
+                m_sandCoarseJob = false;
+                m_sandShelterWind[0] = m_sandShelterWind[1] = 0.0f;   // (the map's swept again with it)
+            }
+        }
+    }
+    // The map's shelter and flow, again when the wind has turned two degrees (at most twice a second), in slices.
+    if (m_sandMap.valid && !m_sandSweep.active && turned(m_sandShelterWind) && m_frameClock - m_sandShelterMade > 0.5) {
+        m_sandSweep = SandSweep{};
+        m_sandSweep.active = true;
+        std::memcpy(m_sandSweep.wind, w, sizeof(m_sandSweep.wind));
+        m_sandShelterMade = m_frameClock;
+    }
+    if (m_sandSweep.active && StepSandSweep(m_sandSweep, m_sandMap, start + kBudgetMs)) {   // (the one budget)
+        std::memcpy(m_sandShelterWind, m_sandSweep.wind, sizeof(m_sandShelterWind));
         ++m_sandShelterGen;
     }
-    m_sandMapMs += NowMs() - start;
+    const double took = NowMs() - start;
+    m_sandMapMs += took;
+    m_sandMapMaxMs = std::max(m_sandMapMaxMs, took);
     if (m_frameNumber % 600 == 300) {
-        Log("sand map: %.3f ms a frame (build, shelter: last 600 frames); eye's shelter %.2f", m_sandMapMs / 600.0,
-            double(m_sandEyeShelter));
-        m_sandMapMs = 0.0;
+        Log("sand map: %.3f ms a frame, at most %.2f (build, shelter, flow: last 600 frames); eye's shelter %.2f",
+            m_sandMapMs / 600.0, m_sandMapMaxMs, double(m_sandEyeShelter));
+        m_sandMapMs = m_sandMapMaxMs = 0.0;
     }
+}
+
+// The flow round solid obstacles: each cell's nearest one (a distance transform: the nearest solid cell carried along
+// in two passes), and near it (within kFlowReach) the wind's part heading into it taken away and as much added along
+// its side - the air going round a trunk, a wall's end, a boulder; then one sweep along the wind adds up how far the
+// air arriving at each cell was pushed aside on its way (relaxing over kFlowRelax), so the sand's streaks part round an
+// obstacle and close behind it. All up to the obstacle's top (the shader: below nearTop).
+void Device::SandNearest(SandMap& m)
+{
+    const size_t cells = size_t(kMapN) * kMapN;
+    std::vector<int16_t> sx(cells, -1), sz(cells, -1);
+    for (int z = 0; z < kMapN; ++z)
+        for (int x = 0; x < kMapN; ++x) {
+            const size_t c = size_t(z) * kMapN + x;
+            if (m.ground[c] > kUnknown * 0.5f && m.solid[c] > m.ground[c] + 0.3f) { sx[c] = int16_t(x); sz[c] = int16_t(z); }
+        }
+    auto relax = [&](int x, int z, int nx, int nz) {
+        if (nx < 0 || nz < 0 || nx >= kMapN || nz >= kMapN) return;
+        const size_t c = size_t(z) * kMapN + x, n = size_t(nz) * kMapN + nx;
+        if (sx[n] < 0) return;
+        const int dx = x - sx[n], dz = z - sz[n];
+        if (sx[c] >= 0) {
+            const int ox = x - sx[c], oz = z - sz[c];
+            if (ox * ox + oz * oz <= dx * dx + dz * dz) return;
+        }
+        sx[c] = sx[n];
+        sz[c] = sz[n];
+    };
+    for (int z = 0; z < kMapN; ++z)
+        for (int x = 0; x < kMapN; ++x) {
+            relax(x, z, x - 1, z); relax(x, z, x, z - 1); relax(x, z, x - 1, z - 1); relax(x, z, x + 1, z - 1);
+        }
+    for (int z = kMapN - 1; z >= 0; --z)
+        for (int x = kMapN - 1; x >= 0; --x) {
+            relax(x, z, x + 1, z); relax(x, z, x, z + 1); relax(x, z, x + 1, z + 1); relax(x, z, x - 1, z + 1);
+        }
+    m.nearTop.assign(cells, kUnknown);
+    m.nearDX.assign(cells, 1e9f);
+    m.nearDZ.assign(cells, 1e9f);
+    m.anySolid = false;
+    for (size_t c = 0; c < cells; ++c) {
+        if (sx[c] < 0) continue;
+        const size_t s = size_t(sz[c]) * kMapN + sx[c];
+        m.nearTop[c] = m.solid[s];
+        m.nearDX[c] = float(int(c % kMapN) - sx[c]) * kMapCell;   // (from it to here, world)
+        m.nearDZ[c] = float(int(c / kMapN) - sz[c]) * kMapCell;
+        m.anySolid = true;
+    }
+}
+
+namespace {
+constexpr float kFlowReach = 3.0f, kFlowRelax = 12.0f;
+}
+
+// The wind's direction round solid obstacles, every cell (into the sweep's own vectors).
+void Device::SandFlowCells(const SandMap& m, SandSweep& j)
+{
+    const float* w = j.wind;
+    const size_t cells = size_t(kMapN) * kMapN;
+    j.flowX.assign(cells, w[0]);
+    j.flowZ.assign(cells, w[1]);
+    if (!m.anySolid || m.nearDX.size() != cells)
+        return;
+    for (size_t c = 0; c < cells; ++c) {
+        const float d = std::hypot(m.nearDX[c], m.nearDZ[c]);
+        if (d >= kFlowReach) continue;
+        if (d < 1e-3f) { j.flowX[c] = j.flowZ[c] = 0.0f; continue; }   // (in it)
+        const float nx = m.nearDX[c] / d, nz = m.nearDZ[c] / d;         // (away from it)
+        float k = 1.0f - d / kFlowReach;
+        k = k * k * (3.0f - 2.0f * k);
+        float vx = w[0], vz = w[1];
+        const float vn = vx * nx + vz * nz;
+        if (vn < 0.0f) {                         // (heading into it: that part taken away, as much added sideways)
+            vx -= nx * vn * k;
+            vz -= nz * vn * k;
+            float tx = vx, tz = vz;
+            const float tl = std::hypot(tx, tz);
+            if (tl > 1e-4f) { tx /= tl; tz /= tl; }
+            vx += tx * (-vn) * k * 0.6f;
+            vz += tz * (-vn) * k * 0.6f;
+        }
+        j.flowX[c] = vx;
+        j.flowZ[c] = vz;
+    }
+}
+
+// How far the air was pushed aside, rows [from, to) of the sweep along the wind (two cells a step, as the shelter's).
+void Device::SandOffsetRows(SandSweep& j, int from, int to)
+{
+    const float* w = j.wind;
+    const size_t cells = size_t(kMapN) * kMapN;
+    if (from == 0) {
+        j.offX.assign(cells, 0.0f);
+        j.offZ.assign(cells, 0.0f);
+    }
+    const float decay = std::exp(-2.0f * kMapCell / kFlowRelax), step = 2.0f * kMapCell;
+    const bool alongX = std::fabs(w[0]) >= std::fabs(w[1]);
+    const int dirMajor = (alongX ? w[0] : w[1]) >= 0.0f ? 1 : -1;
+    for (int i = from; i < to; ++i) {
+        const int major = dirMajor > 0 ? i : kMapN - 1 - i;
+        for (int minor = 0; minor < kMapN; ++minor) {
+            const int x = alongX ? major : minor, z = alongX ? minor : major;
+            const size_t c = size_t(z) * kMapN + x;
+            const float px = float(x) - 2.0f * w[0], pz = float(z) - 2.0f * w[1];
+            float ox = 0.0f, oz = 0.0f;
+            if (px >= 0.0f && pz >= 0.0f && px <= float(kMapN - 1) && pz <= float(kMapN - 1)) {
+                const int x0 = int(px), z0 = int(pz), x1 = std::min(x0 + 1, kMapN - 1), z1 = std::min(z0 + 1, kMapN - 1);
+                const float fx = px - float(x0), fz = pz - float(z0);
+                auto lerp = [&](const std::vector<float>& a) {
+                    return (a[size_t(z0) * kMapN + x0] * (1 - fx) + a[size_t(z0) * kMapN + x1] * fx) * (1 - fz) +
+                           (a[size_t(z1) * kMapN + x0] * (1 - fx) + a[size_t(z1) * kMapN + x1] * fx) * fz;
+                };
+                ox = lerp(j.offX) * decay;
+                oz = lerp(j.offZ) * decay;
+            }
+            j.offX[c] = ox + (j.flowX[c] - w[0]) * step;
+            j.offZ[c] = oz + (j.flowZ[c] - w[1]) * step;
+        }
+    }
+}
+
+// A map's shelter and flow for a wind, a slice at a time (rows of kMapN; until `deadline`): the solid shelter, the
+// see-through one, the flow, the push aside. True when done - then they are the map's (the old kept till then: no
+// flicker while it is made).
+bool Device::StepSandSweep(SandSweep& j, SandMap& m, double deadline)
+{
+    constexpr int kRows = 16;
+    const float ox = float(m.origin[0]) * kMapCell, oz = float(m.origin[1]) * kMapCell;
+    auto top = [&](int x, int z) {
+        const size_t c = size_t(z) * kMapN + x;
+        return std::max(m.ground[c], m.solid[c]);
+    };
+    auto edge = [&](float lx, float lz) {         // (upwind of the map: the coarse terrain's, a unit lower - its cells
+        return CoarseShelterAt(ox + lx, oz + lz) - 1.0f;   // hold their highest point)
+    };
+    auto crown = [&](int x, int z) { return m.crownHi[size_t(z) * kMapN + x]; };
+    auto none = [](float, float) { return kUnknown; };
+    while (NowMs() < deadline) {
+        const int to = std::min(j.row + kRows, kMapN);
+        if (j.stage == 0) ShelterSweep(kMapN, kMapCell, j.wind, kMapCell / kSolidLee, top, edge, j.solid, j.row, to);
+        else if (j.stage == 1) ShelterSweep(kMapN, kMapCell, j.wind, kMapCell / kCrownLee, crown, none, j.crown, j.row, to);
+        else {
+            if (j.row == 0) SandFlowCells(m, j);
+            SandOffsetRows(j, j.row, to);
+        }
+        j.row = to;
+        if (j.row < kMapN) continue;
+        j.row = 0;
+        if (++j.stage < 3) continue;
+        m.shelterSolid.swap(j.solid);
+        m.shelterCrown.swap(j.crown);
+        m.flowX.swap(j.flowX);
+        m.flowZ.swap(j.flowZ);
+        m.offsetX.swap(j.offX);
+        m.offsetZ.swap(j.offZ);
+        j.active = false;
+        return true;
+    }
+    return false;
 }
 
 // A placed piece rasterised into the map from above.
@@ -323,6 +511,12 @@ bool Device::SandMapAt(float x, float z, SandColumn* out) const
     out->shelterSolid = m.shelterSolid[c];
     out->shelterCrown = m.shelterCrown[c];
     out->feed = m.feed[c];
+    const bool flow = m.flowX.size() == m.ground.size();
+    out->flow[0] = flow ? m.flowX[c] : 0.0f;
+    out->flow[1] = flow ? m.flowZ[c] : 0.0f;
+    out->offset[0] = flow ? m.offsetX[c] : 0.0f;
+    out->offset[1] = flow ? m.offsetZ[c] : 0.0f;
+    out->nearTop = flow ? m.nearTop[c] : kUnknown;
     return out->ground > kUnknown * 0.5f;
 }
 
@@ -411,6 +605,33 @@ void Device::DumpSandMap(const std::string& path) const
             o[0] = uint8_t(std::clamp(b, 0.0f, 1.0f) * 255.0f);
             o[1] = uint8_t(std::clamp(gr, 0.0f, 1.0f) * 255.0f);
             o[2] = uint8_t(std::clamp(r, 0.0f, 1.0f) * 255.0f);
+        }
+        std::fwrite(row.data(), 1, row.size(), file);
+    }
+    std::fclose(file);
+    // ... and the flow round obstacles (<dump>-flow.bmp): how far the air was pushed aside, x red, z green (grey: none),
+    // the obstacles blue.
+    if (m.offsetX.size() != m.ground.size())
+        return;
+    std::string flowPath = path;
+    const size_t at = flowPath.rfind("-sand.bmp");
+    if (at == std::string::npos)
+        return;
+    flowPath.replace(at, 9, "-flow.bmp");
+    file = std::fopen(flowPath.c_str(), "wb");
+    if (!file)
+        return;
+    std::fwrite(header, 1, 54, file);
+    for (int py = 0; py < wpx; ++py) {
+        const int z = py / s;
+        for (int px = 0; px < wpx; ++px) {
+            const size_t c = size_t(z) * kMapN + px / s;
+            uint8_t* o = &row[size_t(px) * 3];
+            const bool solid = m.solid[c] > m.ground[c] + 0.3f;
+            o[0] = solid ? 255 : 128;
+            o[1] = uint8_t(std::clamp(0.5f + m.offsetZ[c] / 3.0f, 0.0f, 1.0f) * 255.0f);
+            o[2] = uint8_t(std::clamp(0.5f + m.offsetX[c] / 3.0f, 0.0f, 1.0f) * 255.0f);
+            if (solid) o[1] = o[2] = 40;
         }
         std::fwrite(row.data(), 1, row.size(), file);
     }

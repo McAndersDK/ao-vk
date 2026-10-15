@@ -73,9 +73,11 @@ layout(set = 0, binding = 15, std430) readonly buffer SandBlock {
     vec4 devil3;        // xy: how it travels (world / s, x z)
     vec4 streaks;       // the streak pattern (rvk Device::m_sandPivot): xy its pivot (world x z), zw its offset (along,
                         // across)
-    vec4 ground[];      // a column's (z n + x): its top - the ground's height or a solid's over it (box units) -, how
-                        // much sand it gives (0..1), the heights the wind is held off under by solid obstacles upwind
-                        // and by see-through ones (box units; rvk sand_map.cpp)
+    vec4 ground[];      // a column's (z n + x), three vec4: its top - the ground's height or a solid's over it (box
+                        // units) -, how much sand it gives (0..1), the heights the wind is held off under by solid
+                        // obstacles upwind and by see-through ones (box units); how far the air arriving there was
+                        // pushed aside by obstacles (x z, world), the wind's direction there (a unit wind's, x z); the
+                        // nearest obstacle's top (box units), 1 = that flow known (rvk sand_map.cpp)
 } SD;
 shared uint sLow[3], sHigh[3];
 
@@ -128,9 +130,20 @@ float AboveGround(vec3 uvw, out float feed)
 {
     int n = int(P.a.y);
     ivec2 c = clamp(ivec2(floor(uvw.xz * float(n))), ivec2(0), ivec2(n - 1));
-    vec4 g = SD.ground[c.y * n + c.x];
+    vec4 g = SD.ground[(c.y * n + c.x) * 3];
     feed = g.y;
     return (uvw.y - g.x) * P.a.w;
+}
+// The column's flow round obstacles (vec4: pushed aside x z, direction x z) and how much of it applies at this height
+// (below the nearest obstacle's top; 0 where not known).
+vec4 SandFlowAt(vec3 uvw, out float below)
+{
+    int n = int(P.a.y);
+    ivec2 c = clamp(ivec2(floor(uvw.xz * float(n))), ivec2(0), ivec2(n - 1));
+    int i = (c.y * n + c.x) * 3;
+    vec4 e = SD.ground[i + 2];
+    below = e.y > 0.5 ? 1.0 - smoothstep(e.x - 0.5 / P.a.w, e.x + 1.0 / P.a.w, uvw.y) : 0.0;
+    return SD.ground[i + 1];
 }
 // How sheltered from the storm's wind a point is (0 open .. 1 held off): under a shelter height standing over its
 // column's top - a hill's, a wall's, a rock's upwind lee - by how far (a band of half the excess, 0.3..3 world units);
@@ -139,7 +152,7 @@ float SandShelter(vec3 uvw)
 {
     int n = int(P.a.y);
     ivec2 c = clamp(ivec2(floor(uvw.xz * float(n))), ivec2(0), ivec2(n - 1));
-    vec4 g = SD.ground[c.y * n + c.x];
+    vec4 g = SD.ground[(c.y * n + c.x) * 3];
     float size = P.a.w, y = uvw.y * size, top = g.x * size;
     float held = 0.0;
     for (int k = 0; k < 2; ++k) {
@@ -153,7 +166,9 @@ float SandShelter(vec3 uvw)
 // Streaks of blowing sand (0..1): long along the wind, narrow across, carried by it.
 float Streaks(vec3 uvw)
 {
-    vec2 w = SD.corner.xz + uvw.xz * P.a.w;
+    float below;
+    vec4 f = SandFlowAt(uvw, below);
+    vec2 w = SD.corner.xz + uvw.xz * P.a.w - f.xy * below;   // (where the air came from: parted round obstacles)
     float speed = length(SD.wind.xy);
     vec2 along = speed > 1e-3 ? SD.wind.xy / speed : vec2(1.0, 0.0), across = vec2(-along.y, along.x);
     float t = SD.wind.w;
@@ -165,7 +180,9 @@ float Streaks(vec3 uvw)
 // A point's place along and across the storm's wind (world units), in the streaks' frame (carried by the wind).
 vec2 WindPlace(vec3 uvw)
 {
-    vec2 w = SD.corner.xz + uvw.xz * P.a.w;
+    float below;
+    vec4 f = SandFlowAt(uvw, below);
+    vec2 w = SD.corner.xz + uvw.xz * P.a.w - f.xy * below;
     float speed = length(SD.wind.xy);
     vec2 along = speed > 1e-3 ? SD.wind.xy / speed : vec2(1.0, 0.0), across = vec2(-along.y, along.x);
     vec2 r = w - SD.streaks.xy;
@@ -202,7 +219,10 @@ vec3 SandWind(vec3 uvw)
     if (above < 0.0) return vec3(0.0);
     float k = clamp(0.65 + 0.35 * sqrt(above / 4.0), 0.65, 1.0);
     k *= 1.0 - 0.85 * SandShelter(uvw);                                  // (still air in a lee)
-    return vec3(SD.wind.x * k, 0.0, SD.wind.y * k);
+    float below;
+    vec4 f = SandFlowAt(uvw, below);
+    vec2 wind = mix(SD.wind.xy, f.zw * length(SD.wind.xy), below);      // (round obstacles, below their tops)
+    return vec3(wind.x * k, 0.0, wind.y * k);
 }
 // The sand blowing in over the walls, in streaks: most of it a thick layer hopping along the ground (the bottom
 // world unit), over it a thinner dust thinning with height.
