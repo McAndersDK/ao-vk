@@ -73,6 +73,46 @@ bool TriangleTouchesBox(const float a[2], const float b[2], const float c[2], fl
     return true;
 }
 
+// The heights a triangle has over the cell [x0, x1] x [z0, z1] (its part over the cell: clipped against the cell's four
+// sides) - false when none of it is over the cell. (A wall's triangle beside an arch's opening reaches down to the ground
+// only where it stands, not over the opening.)
+bool TriangleHeightsOverBox(const float a[3], const float b[3], const float c[3], float x0, float z0, float x1, float z1,
+                            float* lo, float* hi)
+{
+    float poly[2][9][3];
+    int count = 3, cur = 0;
+    std::memcpy(poly[0][0], a, 12);
+    std::memcpy(poly[0][1], b, 12);
+    std::memcpy(poly[0][2], c, 12);
+    for (int plane = 0; plane < 4 && count; ++plane) {
+        const int axis = plane < 2 ? 0 : 2;
+        const float bound = plane == 0 ? x0 : plane == 1 ? x1 : plane == 2 ? z0 : z1;
+        const float sign = (plane & 1) ? -1.0f : 1.0f;           // (inside: sign * (v - bound) >= 0)
+        int out = 0;
+        for (int i = 0; i < count && out < 8; ++i) {
+            const float* p = poly[cur][i];
+            const float* q = poly[cur][(i + 1) % count];
+            const float dp = sign * (p[axis] - bound), dq = sign * (q[axis] - bound);
+            if (dp >= 0.0f) std::memcpy(poly[cur ^ 1][out++], p, 12);
+            if ((dp >= 0.0f) != (dq >= 0.0f) && out < 8) {
+                const float t = dp / (dp - dq);
+                for (int k = 0; k < 3; ++k) poly[cur ^ 1][out][k] = p[k] + (q[k] - p[k]) * t;
+                ++out;
+            }
+        }
+        count = out;
+        cur ^= 1;
+    }
+    if (!count) return false;
+    *lo = 1e30f;
+    *hi = -1e30f;
+    for (int i = 0; i < count; ++i) {
+        *lo = std::min(*lo, poly[cur][i][1]);
+        *hi = std::max(*hi, poly[cur][i][1]);
+    }
+    return true;
+}
+
 // The shelter sweep over a grid (n x n, `cell` world units, the wind `w` towards x, z): out = max(top, out two cells
 // upwind - the fall). Along the wind's larger axis, the cells two upwind are always done before (their bilinear corners
 // lie a whole cell or more back along it). `edge`: the value upwind of the grid at a world x, z (or kUnknown).
@@ -138,6 +178,8 @@ void Device::UpdateSandMap()
             m.ground.assign(cells, kUnknown);
             m.solid.assign(cells, kUnknown);
             m.crownLo.assign(cells, 1e9f);
+            m.wallLo.assign(cells, 1e9f);
+            m.floor.assign(cells, kUnknown);
             m.crownHi.assign(cells, kUnknown);
             m.feed.assign(cells, 1.0f);
             m.statelGen = m_statelGeneration;
@@ -170,6 +212,7 @@ void Device::UpdateSandMap()
             RasterSandItem(m, job.items[job.item++]);
         if (job.row >= uint32_t(kMapN) && job.item >= job.items.size() && !job.swept) {
             if (!job.nearest) {
+                FinishSandCells(m);
                 SandNearest(m);
                 job.nearest = true;
                 job.sweep = SandSweep{};
@@ -255,6 +298,18 @@ void Device::UpdateSandMap()
         Log("sand map: %.3f ms a frame, at most %.2f (build, shelter, flow: last 600 frames); eye's shelter %.2f",
             m_sandMapMs / 600.0, m_sandMapMaxMs, double(m_sandEyeShelter));
         m_sandMapMs = m_sandMapMaxMs = 0.0;
+    }
+}
+
+// Once a map's pieces are in: the floors raise the ground; a cell is solid only where walls reach down to its foot
+// (within 1.5 units of its ground) - under an arch, a bridge, a roof the air and the sand go through (the user: the
+// storm stopped at an arch); a room shut in by walls is sheltered by them instead.
+void Device::FinishSandCells(SandMap& m)
+{
+    for (size_t c = 0; c < m.ground.size(); ++c) {
+        if (m.floor[c] > m.ground[c]) m.ground[c] = m.floor[c];
+        const bool blocks = m.ground[c] > kUnknown * 0.5f && m.wallLo[c] <= m.ground[c] + 1.5f;
+        if (!blocks) m.solid[c] = kUnknown;
     }
 }
 
@@ -447,18 +502,32 @@ void Device::RasterSandItem(SandMap& m, uint32_t index)
         const int z1 = std::min(int(std::floor(std::max({a2[1], b2[1], c2[1]}) / kMapCell)), kMapN - 1);
         if (x0 > x1 || z0 > z1)
             continue;
-        const float hi = std::max({a[1], b[1], c[1]}), lo = std::min({a[1], b[1], c[1]});
+        // Flat (a floor, a roof) or not (a wall, a slope, an arch's curve).
+        const float e1[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]}, e2[3] = {c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+        const float nx = e1[1] * e2[2] - e1[2] * e2[1], ny = e1[2] * e2[0] - e1[0] * e2[2], nz = e1[0] * e2[1] - e1[1] * e2[0];
+        const float nl = std::sqrt(nx * nx + ny * ny + nz * nz);
+        const bool flat = nl > 1e-9f && std::fabs(ny) > 0.8f * nl;
         for (int z = z0; z <= z1; ++z)
             for (int x = x0; x <= x1; ++x) {
                 if (!TriangleTouchesBox(a2, b2, c2, float(x) * kMapCell, float(z) * kMapCell, float(x + 1) * kMapCell,
                                         float(z + 1) * kMapCell))
                     continue;
+                float lo, hi;
+                if (!TriangleHeightsOverBox(a, b, c, ox + float(x) * kMapCell, oz + float(z) * kMapCell,
+                                            ox + float(x + 1) * kMapCell, oz + float(z + 1) * kMapCell, &lo, &hi)) {
+                    // (A wall exactly along the cell's side: clipped to a line - its own heights.)
+                    lo = std::min({a[1], b[1], c[1]});
+                    hi = std::max({a[1], b[1], c[1]});
+                }
                 const size_t cell = size_t(z) * kMapN + x;
                 if (seeThrough) {
                     m.crownHi[cell] = std::max(m.crownHi[cell], hi);
                     m.crownLo[cell] = std::min(m.crownLo[cell], lo);
+                } else if (flat && m.ground[cell] > kUnknown * 0.5f && hi <= m.ground[cell] + 2.0f) {
+                    m.floor[cell] = std::max(m.floor[cell], hi);   // (a floor: plating, a platform, steps)
                 } else {
                     m.solid[cell] = std::max(m.solid[cell], hi);
+                    if (!flat) m.wallLo[cell] = std::min(m.wallLo[cell], lo);
                 }
             }
     }

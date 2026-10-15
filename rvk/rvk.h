@@ -1907,6 +1907,7 @@ private:
     struct SandMap {
         int origin[2] = {0, 0};                  // its first cell (world cells)
         std::vector<float> ground, solid, crownLo, crownHi, feed, shelterSolid, shelterCrown;
+        std::vector<float> wallLo, floor;        // (building it: walls' lowest point over a cell, floors' highest)
         // The flow round solid obstacles (SandFlow): the wind's direction there (x z, a unit wind's), how far the air
         // arriving there was pushed aside on its way (x z, world), the nearest obstacle's top (world y).
         std::vector<float> flowX, flowZ, offsetX, offsetZ, nearTop;
@@ -1950,6 +1951,7 @@ private:
     void SandOffsetRows(SandSweep& j, int from, int to);
     bool StepSandSweep(SandSweep& j, SandMap& m, double deadline);
     void SandNearest(SandMap& m);
+    void FinishSandCells(SandMap& m);
     float CoarseTerrainAt(float x, float z) const;
     float CoarseShelterAt(float x, float z) const;
     bool SandMapAt(float x, float z, SandColumn* out) const;

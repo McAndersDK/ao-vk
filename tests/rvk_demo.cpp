@@ -1186,6 +1186,7 @@ void AddCube(std::vector<VtxMesh>& v, std::vector<uint16_t>& idx, float cx, floa
 // camera, as placed objects (a pack written here and loaded as the game's: statels.cpp, sand_map.cpp) and drawn as
 // grey boxes; --sand-wind X Z: the storm's wind that way (the game's weather wind, each frame).
 bool g_sandObstacles = false;
+bool g_sandArch = false;             // --sand-arch: an arch in place of the wall
 bool g_sandSim = true;               // the sand simulated (RVK_SandProc 0); --sand-proc: procedural
 bool g_sandWindSet = false;
 float g_sandWind[2] = {1.0f, 0.0f};
@@ -1339,7 +1340,13 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
             const float g = height(x, z);
             sandBoxes.push_back({{x - w / 2, g + lo, z - d / 2}, {x + w / 2, g + hi, z + d / 2}, seeThrough});
         };
-        box(-48.0f, 0.0f, 1.0f, 16.0f, -1.0f, 4.0f, false);        // a wall across the view, 12 units ahead
+        if (g_sandArch) {                                          // an arch across the view: its legs, its lintel
+            box(-48.0f, -5.5f, 2.0f, 5.0f, -1.0f, 6.0f, false);
+            box(-48.0f, 5.5f, 2.0f, 5.0f, -1.0f, 6.0f, false);
+            box(-48.0f, 0.0f, 2.0f, 6.0f, 3.5f, 6.0f, false);
+        } else {
+            box(-48.0f, 0.0f, 1.0f, 16.0f, -1.0f, 4.0f, false);    // a wall across the view, 12 units ahead
+        }
         box(-53.0f, 5.0f, 0.8f, 0.8f, -1.0f, 8.0f, false);         // a tree's trunk
         box(-53.0f, 5.0f, 6.0f, 6.0f, 5.0f, 11.0f, true);          // ... its crown
         box(-55.0f, -6.0f, 3.0f, 3.0f, -1.0f, 2.5f, false);        // a boulder
@@ -3872,6 +3879,7 @@ int main(int argc, char** argv)
         else if (a == "--terrain-pbr") { g_terrainPbr = g_grassBench = g_grassBenchStill = true; hdr = true; }
         else if (a == "--grass-bench-storm") g_grassBenchStorm = true;
         else if (a == "--sand-obstacles") g_sandObstacles = true;
+        else if (a == "--sand-arch") g_sandObstacles = g_sandArch = true;
         else if (a == "--sand-sim") g_sandSim = true;
         else if (a == "--sand-proc") g_sandSim = false;
         else if (a == "--sand-wind" && i + 2 < argc) {
