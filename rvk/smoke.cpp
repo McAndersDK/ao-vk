@@ -64,7 +64,7 @@ constexpr float kExtinction = 3.2f;             // per world unit at density 1 (
 
 constexpr uint64_t kSandKey = 0x4000000053414E44ull;   // the sand volume's key (bit 62: not a game pointer, not a drift
                                                        // cloud's)
-constexpr float kSandBox = 32.0f;               // its box (world units a side)
+constexpr float kSandBox = 32.0f;               // its box (world units a side) close in (Device::m_sandBoxSize: by the zoom)
 // m_sandOffset's wrap (world, along and across): the simulation's streak noise repeats over them (4096 lattice cells of
 // 24 and 6 world), the drawn grain over 32 and 16 (smoke.frag SandGrain).
 constexpr double kSandOffsetWrap[2] = {98304.0, 24576.0};
@@ -793,22 +793,47 @@ void Device::UpdateSandVolume(double now, float dt)
             double(m_sand), double(m_sandBlow), SandCells(m_smokeParams), double(kSandBox));
     }
     SmokeSource& s = v->source;
-    s.size = kSandBox;
+    // Its size: as far as the camera is from the character nearest it (zoomed out, the ground in view reaches further:
+    // a 32-unit box left only a patch of sand by the camera - the user), 32, 48 or 64 units (a step a few units past
+    // the last change's, so it doesn't flicker); the same cells over it (the sand coarser when seen from further).
+    {
+        float zoom = 1e30f;
+        for (const WaterBody& b : m_waterBodies) {
+            const float d = std::sqrt((b.x - m_frameEye[0]) * (b.x - m_frameEye[0]) +
+                                      (b.centreY - m_frameEye[1]) * (b.centreY - m_frameEye[1]) +
+                                      (b.z - m_frameEye[2]) * (b.z - m_frameEye[2]));
+            zoom = std::min(zoom, d);
+        }
+        if (zoom > 60.0f) {                      // (no character near: by the camera's height over the ground)
+            float y;
+            zoom = GroundAt(m_frameEye[0], m_frameEye[2], &y, nullptr, nullptr) ? std::max(m_frameEye[1] - y, 0.0f) * 2.0f
+                                                                                 : 0.0f;
+        }
+        const float want = zoom < 7.0f ? 32.0f : zoom < 15.0f ? 48.0f : 64.0f;
+        const float down = m_sandBoxSize <= 48.0f ? 5.0f : 13.0f;   // (smaller again a little nearer than it grew)
+        if (want > m_sandBoxSize || (want < m_sandBoxSize && zoom < down)) {
+            Log("sand: box %.0f -> %.0f units (the camera %.1f from the character)", double(m_sandBoxSize), double(want),
+                double(zoom));
+            m_sandBoxSize = want;
+        }
+    }
+    const float box = m_sandBoxSize;
+    s.size = box;
     s.life = 4.0f;
     s.rate = s.heat = s.speed = 0.0f;
     // Round the camera, a little ahead of it.
     float fx = m_frameForward[0], fz = m_frameForward[2];
     const float fl = std::hypot(fx, fz);
     if (fl > 1e-3f) { fx /= fl; fz /= fl; } else { fx = fz = 0.0f; }
-    s.pos[0] = m_frameEye[0] + fx * kSandBox * 0.15f;
-    s.pos[2] = m_frameEye[2] + fz * kSandBox * 0.15f;
+    s.pos[0] = m_frameEye[0] + fx * box * 0.25f;   // (from a quarter of it behind the camera to three quarters ahead)
+    s.pos[2] = m_frameEye[2] + fz * box * 0.25f;
     // Its floor: under the lowest ground known in it (else under the character nearest the camera, or the camera);
     // moved only when that is a unit or more off (a still box keeps its sand).
     float low = 1e30f;
     for (int j = 0; j <= 8; ++j)
         for (int i = 0; i <= 8; ++i) {
             float y;
-            if (GroundAt(s.pos[0] + (float(i) / 8.0f - 0.5f) * kSandBox, s.pos[2] + (float(j) / 8.0f - 0.5f) * kSandBox, &y,
+            if (GroundAt(s.pos[0] + (float(i) / 8.0f - 0.5f) * box, s.pos[2] + (float(j) / 8.0f - 0.5f) * box, &y,
                          nullptr, nullptr))
                 low = std::min(low, y);
         }
@@ -864,15 +889,15 @@ void Device::UpdateSandVolume(double now, float dt)
         float y;
         if (GroundAt(d.pos[0], d.pos[2], &y, nullptr, nullptr))
             d.pos[1] = y;
-        if (d.age > d.life || std::fabs(d.pos[0] - s.pos[0]) > 0.45f * kSandBox || std::fabs(d.pos[2] - s.pos[2]) > 0.45f * kSandBox)
+        if (d.age > d.life || std::fabs(d.pos[0] - s.pos[0]) > 0.45f * box || std::fabs(d.pos[2] - s.pos[2]) > 0.45f * box)
             d.life = 0.0f;
     } else if (v->age > kWarmUp && (Random01(m_sandRandom) < dt * std::min(m_sand * 2.5f, 1.0f) / 15.0f ||
                                     (getenv("RANDYVK_SAND_DEVIL") && d.age == 0.0f))) {
         // (Tests, RANDYVK_SAND_DEVIL: one at once, coming past 10 units ahead of the camera.)
         const bool test = d.age == 0.0f && getenv("RANDYVK_SAND_DEVIL");
-        const float across = test ? 0.0f : (Random01(m_sandRandom) - 0.5f) * 0.6f * kSandBox;
+        const float across = test ? 0.0f : (Random01(m_sandRandom) - 0.5f) * 0.6f * box;
         const float bx = test ? m_frameEye[0] + fx * 10.0f : s.pos[0], bz = test ? m_frameEye[2] + fz * 10.0f : s.pos[2];
-        const float back = test ? 12.0f : 0.38f * kSandBox;
+        const float back = test ? 12.0f : 0.38f * box;
         d.pos[0] = bx - m_windDir[0] * back - m_windDir[1] * across;
         d.pos[2] = bz - m_windDir[1] * back + m_windDir[0] * across;
         d.pos[1] = s.pos[1] + 1.5f;

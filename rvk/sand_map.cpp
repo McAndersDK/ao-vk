@@ -31,7 +31,7 @@ namespace rvk {
 using namespace detail;
 
 namespace {
-constexpr int kMapN = 192;                       // cells a side
+constexpr int kMapN = 256;                       // cells a side (128 units: the sand box reaches 48 ahead)
 constexpr float kMapCell = 0.5f;                 // world units
 constexpr float kSolidLee = 7.0f;                // a solid obstacle's lee: its height x this
 constexpr float kCrownLee = 4.0f;                // a see-through one's
