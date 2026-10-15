@@ -1862,8 +1862,13 @@ private:
         float vel[2] = {0, 0};                   // how it travels (world / s)
     };
     SandDevil m_sandDevil;
-    double m_sandScroll = 0.0;                   // how far the storm's wind has carried the sand (world; its streaks
-                                                 // ride on it; wrapped at kSandScrollWrap)
+    // The sand's streak pattern (simulated and drawn): a point's place in it is its offset from m_sandPivot turned
+    // into the wind's frame (along, across) plus m_sandOffset (the wind carrying it: along falls). Turned about a
+    // point near the camera (moved, the offset made up for it, once the camera is 64 units off): turned about the
+    // world's origin, thousands of units away, the wind's direction swinging a little slid it by hundreds.
+    double m_sandPivot[2] = {0.0, 0.0};
+    double m_sandOffset[2] = {0.0, 0.0};         // (wrapped: kSandOffsetWrap)
+    bool m_sandPivotSet = false;
     std::vector<float> m_sandGround;             // per column: the ground's height (box units), how much sand it gives
     float m_sandGroundCorner[3] = {1e30f, 0, 0}; // ... for the box there
     uint32_t m_sandGroundN = 0;

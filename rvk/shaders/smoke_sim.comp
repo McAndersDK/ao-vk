@@ -70,8 +70,9 @@ layout(set = 0, binding = 15, std430) readonly buffer SandBlock {
     vec4 devil;         // xyz: a dust devil's foot (box units); w: its radius (box units; 0: none)
     vec4 devil2;        // x: its spin (world / s); y: its lift (world / s); z: the density at its foot; w: characters'
                         // feet: the density kicked up per world / s they move
-    vec4 devil3;        // xy: how it travels (world / s, x z); z: how far the wind has carried the sand (world; the
-                        // streaks ride on it)
+    vec4 devil3;        // xy: how it travels (world / s, x z)
+    vec4 streaks;       // the streak pattern (rvk Device::m_sandPivot): xy its pivot (world x z), zw its offset (along,
+                        // across)
     vec2 ground[];      // a column's (z n + x): the ground's height (box units), how much sand it gives (0..1)
 } SD;
 shared uint sLow[3], sHigh[3];
@@ -136,7 +137,8 @@ float Streaks(vec3 uvw)
     float speed = length(SD.wind.xy);
     vec2 along = speed > 1e-3 ? SD.wind.xy / speed : vec2(1.0, 0.0), across = vec2(-along.y, along.x);
     float t = SD.wind.w;
-    vec2 q = vec2(dot(w, along) - SD.devil3.z, dot(w, across)) / SD.air.w;
+    vec2 r = w - SD.streaks.xy;
+    vec2 q = (vec2(dot(r, along), dot(r, across)) + SD.streaks.zw) / SD.air.w;
     float n = 0.65 * TileNoise(vec3(q.x * 0.25, q.y, t * 0.2), 4096) + 0.35 * TileNoise(vec3(q.x * 0.5, q.y * 2.0, t * 0.35) + 17.0, 4096);
     return smoothstep(0.3, 0.7, n);
 }

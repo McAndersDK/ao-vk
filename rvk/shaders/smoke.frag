@@ -46,17 +46,18 @@ float Detail(vec3 p, vec3 vel)
 }
 
 // Blowing sand's grain (S.info.w = 1): what the grid is too coarse to hold - ribbons long along the storm's wind and
-// narrow across, lifting a little as they go, and finer streaks racing faster through them; both ride on how far the
-// wind has carried the sand (S.detail.y, wrapped at 32: whole periods of both). Sharp-edged (sand, not a gas): the
-// density there x 0..~2.2, the average about kept.
+// narrow across, lifting a little as they go, and finer streaks racing faster through them; both in the streak pattern
+// the wind carries (S.sand; its offset wrapped at whole periods of both). Sharp-edged (sand, not a gas): the density
+// there x 0..~2.2, the average about kept.
 float SandGrain(vec3 p)
 {
     vec2 wv = S.look.zw;
     float speed = length(wv);
     vec2 a = speed > 1e-3 ? wv / speed : vec2(1.0, 0.0), c = vec2(-a.y, a.x);
-    float along = dot(p.xz, a), across = dot(p.xz, c), carried = S.detail.y;
-    float ribbons = Wisps(vec3(0.25 * (along - carried), 2.0 * p.y - 0.25 * carried, 1.5 * across));
-    float streaks = Wisps(vec3(along - 1.5 * carried, 6.0 * p.y, 5.0 * across) + 3.7);
+    vec2 r = p.xz - S.sand.xy;
+    float along = dot(r, a) + S.sand.z, across = dot(r, c) + S.sand.w;
+    float ribbons = Wisps(vec3(0.25 * along, 2.0 * p.y + 0.25 * S.sand.z, 1.5 * across));
+    float streaks = Wisps(vec3(along + 0.5 * S.sand.z, 6.0 * p.y, 5.0 * across) + 3.7);
     float crisp = smoothstep(0.40, 0.60, 0.6 * ribbons + 0.4 * streaks);
     return mix(1.0, 2.2 * crisp, clamp(S.detail.x, 0.0, 1.0));
 }

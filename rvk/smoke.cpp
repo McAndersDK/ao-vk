@@ -64,14 +64,15 @@ constexpr float kExtinction = 3.2f;             // per world unit at density 1 (
 constexpr uint64_t kSandKey = 0x4000000053414E44ull;   // the sand volume's key (bit 62: not a game pointer, not a drift
                                                        // cloud's)
 constexpr float kSandBox = 32.0f;               // its box (world units a side)
-constexpr double kSandScrollWrap = 98304.0;     // m_sandScroll's wrap (world): the simulation's streak noise repeats
-                                                // over it (4096 lattice cells of 24 world), the drawn grains over 32
+// m_sandOffset's wrap (world, along and across): the simulation's streak noise repeats over them (4096 lattice cells of
+// 24 and 6 world), the drawn grain over 32 and 16 (smoke.frag SandGrain).
+constexpr double kSandOffsetWrap[2] = {98304.0, 24576.0};
 constexpr float kSandSettle = 0.35f;            // how fast its sand settles (world / s)
 
 // The sand volume's block (smoke_sim.comp Sand, std430), then its columns' ground (2 floats each); a smoke volume's
 // all 0.
 struct SandHeader {
-    float corner[4], wind[4], air[4], devil[4], devil2[4], devil3[4];
+    float corner[4], wind[4], air[4], devil[4], devil2[4], devil3[4], streaks[4];
 };
 
 // The sand volume's cells a side, by RVK_SmokeQual.
@@ -181,6 +182,7 @@ constexpr VkDeviceSize kBoundsSlot = 32;        // a volume's in m_smokeBounds: 
 struct SmokeFrame {
     d3d::Matrix viewProj, view;
     float camera[4], box[4], colour[4], ambient[4], proj[4], viewport[4], fogColour[4], fogParams[4], detail[4], look[4];
+    float sand[4];                              // the sand's streak pattern: its pivot (x z), its offset (along, across)
     uint32_t info[4];                           // x: its slot in the bounds; y: lamps; z: cells a side
     uint32_t lamps[kLamps];                     // their indices in the frame lights
 };
@@ -765,13 +767,29 @@ void Device::UpdateSandVolume(double now, float dt)
         s.pos[1] = floorY;
     v->lastSeen = now;
 
-    // How far the wind has carried the sand (its streaks, in the simulation and drawn, ride on it: the wind's speed x
-    // its clock would jump with every gust).
+    // The streak pattern (m_sandPivot): carried by the wind (its speed accumulated - the speed x its clock would jump
+    // with every gust); its pivot kept near the camera.
     {
         float wind[2];
         SandWind(m_windDir, m_windStrength, m_windTime, wind);
-        m_sandScroll += double(std::hypot(wind[0], wind[1]) * dt);
-        if (m_sandScroll > kSandScrollWrap) m_sandScroll -= kSandScrollWrap;
+        const double speed = std::hypot(double(wind[0]), double(wind[1]));
+        const double ax = speed > 1e-3 ? wind[0] / speed : 1.0, az = speed > 1e-3 ? wind[1] / speed : 0.0;
+        const double ex = m_frameEye[0], ez = m_frameEye[2];
+        if (!m_sandPivotSet || std::hypot(ex - m_sandPivot[0], ez - m_sandPivot[1]) > 64.0) {
+            if (m_sandPivotSet) {                 // (the same place in the pattern from the new pivot)
+                const double dx = ex - m_sandPivot[0], dz = ez - m_sandPivot[1];
+                m_sandOffset[0] += dx * ax + dz * az;
+                m_sandOffset[1] += -dx * az + dz * ax;
+            }
+            m_sandPivot[0] = ex;
+            m_sandPivot[1] = ez;
+            m_sandPivotSet = true;
+        }
+        m_sandOffset[0] -= speed * double(dt);
+        for (int i = 0; i < 2; ++i) {
+            m_sandOffset[i] = std::fmod(m_sandOffset[i], kSandOffsetWrap[i]);
+            if (m_sandOffset[i] < 0.0) m_sandOffset[i] += kSandOffsetWrap[i];
+        }
     }
 
     // The dust devil: now and then (about every 15 s in a full storm) one comes in from the upwind side of the box,
@@ -1137,7 +1155,10 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
             sh.air[1] = 2.0f + 3.0f * std::min(m_sand * 2.5f, 1.0f);   // (the dust over the low, thick layer)
             sh.air[2] = 0.08f * strength;
             sh.air[3] = 6.0f;
-            sh.devil3[2] = float(m_sandScroll);
+            sh.streaks[0] = float(m_sandPivot[0]);
+            sh.streaks[1] = float(m_sandPivot[1]);
+            sh.streaks[2] = float(m_sandOffset[0]);
+            sh.streaks[3] = float(m_sandOffset[1]);
             const SandDevil& dv = m_sandDevil;
             if (dv.life > 0.0f) {
                 const float env = std::clamp(dv.age / 2.0f, 0.0f, 1.0f) * std::clamp((dv.life - dv.age) / 2.0f, 0.0f, 1.0f);
@@ -1401,7 +1422,10 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
             SandWind(m_windDir, m_windStrength, m_windTime, wind);
             sf.look[2] = wind[0];
             sf.look[3] = wind[1];
-            sf.detail[1] = float(std::fmod(m_sandScroll, 32.0));
+            sf.sand[0] = float(m_sandPivot[0]);
+            sf.sand[1] = float(m_sandPivot[1]);
+            sf.sand[2] = float(std::fmod(m_sandOffset[0], 32.0));
+            sf.sand[3] = float(std::fmod(m_sandOffset[1], 16.0));
             sf.info[3] = 1;
         }
         // (Fading in while it warms up; out over the last second before its volume is given back.)
