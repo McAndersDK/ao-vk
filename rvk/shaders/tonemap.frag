@@ -178,8 +178,10 @@ void main()
             float a = clamp(smoke.a, 0.0, 1.0);
             vec3 S = min(smoke.rgb, c);
             c = S + (c - S) * Tc + fog.rgb * (1.0 - a);
-            far *= mix(T, 1.0, a);
-            volumetric = mix(T, 1.0, a);
+            // (What lies behind as far and its shafts as hidden as where no sand blows: kept for the sand's share,
+            // they brought the distant dunes' outline back out through it - the user.)
+            far *= T;
+            volumetric = T;
             glow *= Tc;                          // (the scene the bloom came from holds the blowing sand already)
         } else {
             c = c * Tc + fog.rgb;
