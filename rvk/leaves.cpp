@@ -88,6 +88,66 @@ V3 Rotate(V3 v, V3 k, float angle)
     return v * c + Cross(k, v) * s + k * (Dot(k, v) * (1.0f - c));
 }
 
+// A solid mesh's axis (a tree trunk's), model space: up its length (`k`: the model axis that stands up) in ten bands,
+// each band's middle - the vertices near the band below's middle only, so a limb reaching out doesn't pull it aside
+// (the first band: all of the lowest tenth). x y z a point; stops where the wood ends.
+void TraceAxis(const uint8_t* v, uint32_t stride, uint32_t n, int k, std::vector<float>& out)
+{
+    out.clear();
+    if (!v || n < 8)
+        return;
+    const int a = (k + 1) % 3, b = (k + 2) % 3;
+    auto at = [&](uint32_t i, float p[3]) { std::memcpy(p, v + size_t(i) * stride, 12); };
+    float lo = 1e30f, hi = -1e30f;
+    for (uint32_t i = 0; i < n; ++i) {
+        float p[3];
+        at(i, p);
+        lo = std::min(lo, p[k]);
+        hi = std::max(hi, p[k]);
+    }
+    const int bands = 10;
+    const float step = (hi - lo) / float(bands);
+    if (!(step > 1e-4f))
+        return;
+    float cx = 0.0f, cz = 0.0f, r = 0.0f;
+    for (int band = 0; band < bands; ++band) {
+        const float b0 = lo + float(band) * step, b1 = b0 + step;
+        float sx = 0.0f, sz = 0.0f, near2 = 1e30f, nx = 0.0f, nz = 0.0f;
+        uint32_t count = 0;
+        const float reach = band == 0 ? 1e30f : std::max(2.5f * r, 0.15f * step);
+        for (uint32_t i = 0; i < n; ++i) {
+            float p[3];
+            at(i, p);
+            if (p[k] < b0 || p[k] > b1)
+                continue;
+            const float d2 = (p[a] - cx) * (p[a] - cx) + (p[b] - cz) * (p[b] - cz);
+            if (d2 < near2) { near2 = d2; nx = p[a]; nz = p[b]; }
+            if (band == 0 || d2 <= reach * reach) { sx += p[a]; sz += p[b]; ++count; }
+        }
+        if (!count) {                             // (the wood moved further than the reach: from the nearest vertex)
+            if (near2 >= 1e30f)
+                break;
+            sx = nx; sz = nz; count = 1;
+        }
+        cx = sx / float(count);
+        cz = sz / float(count);
+        float spread = 0.0f;
+        uint32_t m = 0;
+        for (uint32_t i = 0; i < n; ++i) {
+            float p[3];
+            at(i, p);
+            if (p[k] < b0 || p[k] > b1)
+                continue;
+            const float d = std::hypot(p[a] - cx, p[b] - cz);
+            if (band == 0 || d <= 3.0f * std::max(r, 0.05f)) { spread += d; ++m; }
+        }
+        r = m ? std::max(spread / float(m), 0.05f) : r;
+        float q[3];
+        q[a] = cx; q[b] = cz; q[k] = 0.5f * (b0 + b1);
+        out.insert(out.end(), q, q + 3);
+    }
+}
+
 // A seed from the mesh's own content (its positions and indices): the same tree bakes the same leaves and branches every
 // time (m_drawMeshKey holds a static snapshot's serial - a new one each upload: the branches changed when the leaves
 // were turned off and on).
@@ -218,6 +278,20 @@ void Device::CanopyParams(uint32_t primitive, uint32_t fvf, const FvfLayout& lay
     }
     // A tree with its own leaf art (RVK_LeafOwn): baked from it (again when the art changes - hot reload).
     Texture* art = set.kind == Canopy::Tree && m_leaf.own ? tex->m_leafArt : nullptr;
+    if (art && set.trunk.empty()) {              // its trunk: a solid draw just before, or (NoteSolidDraw) just after
+        float c[3], e[3];
+        DrawWorldBox(c, e);
+        RecentCanopy& r = m_recentCanopy;
+        r.setKey = key;
+        r.world = m_world;
+        for (int j = 0; j < 3; ++j) { r.lo[j] = c[j] - e[j]; r.hi[j] = c[j] + e[j]; }
+        r.ownDraw = m_frameDraw;
+        for (const SolidBox& b : m_recentSolid)
+            if (b.draw && m_frameDraw - b.draw <= 4 && TrunkUnder(b, r.lo, r.hi)) {
+                GiveTrunk(key, m_world, b);
+                break;
+            }
+    }
     if (!set.baked || set.texVersion != tex->m_alphaVersion || set.settingsVersion != m_leafVersion || set.art != art ||
         (art && set.artVersion != tex->m_leafArtVersion)) {
         if (m_leafBakesThisFrame >= kBakesPerFrame)
@@ -262,7 +336,7 @@ void Device::CrownOf(LeafSet& set) const
 
 // A solid static draw (opaque, depth-writing, lit, world-space): remembered a little while as a possible trunk, and
 // matched to the canopy drawn just before it if it stands under that one.
-void Device::NoteSolidDraw(uint32_t fvf)
+void Device::NoteSolidDraw(uint32_t fvf, const void* vertices, uint32_t stride, uint32_t vertexCount)
 {
     if (!m_leaf.on || !m_drawMesh || !m_drawMeshStatic || m_target != m_scene || IsTerrain(fvf) ||
         (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZ || !m_rs[d3d::RS_ZWRITEENABLE] || !m_rs[d3d::RS_LIGHTING] ||
@@ -273,10 +347,68 @@ void Device::NoteSolidDraw(uint32_t fvf)
     SolidBox& b = m_recentSolid[m_recentSolidNext++ % 16];
     for (int i = 0; i < 3; ++i) { b.lo[i] = c[i] - e[i]; b.hi[i] = c[i] + e[i]; }
     b.draw = m_frameDraw;
+    // Its axis (a trunk's), once a mesh, in the world for our own canopies to start their branches on.
+    b.axisPoints = 0;
+    if (m_leaf.own) {
+        const MeshInfo& info = *m_drawMesh;
+        if (!info.trunkAxisState && vertices) {
+            const auto& w = m_world.m;
+            int k = 1;
+            float best = -1.0f;
+            for (int i = 0; i < 3; ++i) {
+                const float len = std::sqrt(w[i][0] * w[i][0] + w[i][1] * w[i][1] + w[i][2] * w[i][2]);
+                const float upness = len > 0.0f ? std::fabs(w[i][1]) / len : 0.0f;
+                if (upness > best) { best = upness; k = i; }
+            }
+            TraceAxis(static_cast<const uint8_t*>(vertices), stride, vertexCount, k, info.trunkAxis);
+            info.trunkAxisState = 1;
+        }
+        const auto& w = m_world.m;
+        for (size_t i = 0; i + 2 < info.trunkAxis.size() && b.axisPoints < 10; i += 3, ++b.axisPoints) {
+            const float* q = &info.trunkAxis[i];
+            for (int j = 0; j < 3; ++j)
+                b.axis[b.axisPoints * 3 + j] = q[0] * w[0][j] + q[1] * w[1][j] + q[2] * w[2][j] + w[3][j];
+        }
+    }
+    // The own canopy drawn just before, if this stands under it: its trunk.
+    if (m_recentCanopy.setKey && m_frameDraw - m_recentCanopy.ownDraw <= 4 &&
+        TrunkUnder(b, m_recentCanopy.lo, m_recentCanopy.hi))
+        GiveTrunk(m_recentCanopy.setKey, m_recentCanopy.world, b);
     const RecentCanopy& r = m_recentCanopy;
     if (r.instance && m_frameDraw - r.draw <= 4 && r.x >= b.lo[0] - 0.5f && r.x <= b.hi[0] + 0.5f &&
         r.z >= b.lo[2] - 0.5f && r.z <= b.hi[2] + 0.5f && b.lo[1] < r.bottom)
         m_leafGround[r.instance] = b.lo[1] + 0.05f;
+}
+
+// Whether a solid draw's box stands under a crown's (world): overlapping it across, starting below it, with an axis.
+bool Device::TrunkUnder(const SolidBox& b, const float lo[3], const float hi[3]) const
+{
+    return b.axisPoints >= 2 && b.lo[0] <= hi[0] && b.hi[0] >= lo[0] && b.lo[2] <= hi[2] && b.hi[2] >= lo[2] &&
+           b.lo[1] < lo[1];
+}
+
+// Our own canopy's trunk found: its axis into the canopy's model space (every instance of the tree shares it), and
+// the set baked again with it if it was baked without.
+void Device::GiveTrunk(uint64_t setKey, const d3d::Matrix& canopyWorld, const SolidBox& b)
+{
+    auto it = m_leafSets.find(setKey);
+    if (it == m_leafSets.end() || !it->second.trunk.empty())
+        return;
+    d3d::Matrix inv;
+    if (!InvertMatrix(canopyWorld, &inv))
+        return;
+    LeafSet& set = it->second;
+    for (uint32_t i = 0; i < b.axisPoints; ++i) {
+        const float* p = &b.axis[i * 3];
+        for (int j = 0; j < 3; ++j)
+            set.trunk.push_back(p[0] * inv.m[0][j] + p[1] * inv.m[1][j] + p[2] * inv.m[2][j] + inv.m[3][j]);
+    }
+    if (set.baked)
+        set.baked = false;                       // (again, with it)
+    static uint32_t logged = 0;
+    if (logged < 20 && ++logged)
+        Log("leaves: a tree's trunk found (%u axis points, from %.1f to %.1f up in the canopy's space)", b.axisPoints,
+            double(set.trunk[1]), double(set.trunk[set.trunk.size() - 2]));
 }
 
 // The ground under the current canopy (see m_leafGround): the captured terrain, the trunk drawn next to it, what was
@@ -461,7 +593,36 @@ void Device::BakeOwnCanopy(LeafSet& set, uint32_t primitive, const FvfLayout& la
         lowest = std::min(lowest, Dot(b, up));
     }
     meanAll = meanAll * (1.0f / float(bases.size()));
-    const V3 root = meanAll + up * (lowest - Dot(meanAll, up) - 0.05f * Length(half));
+    V3 root = meanAll + up * (lowest - Dot(meanAll, up) - 0.05f * Length(half));
+    // Its trunk (GiveTrunk: the axis of the solid draw under it, canopy model space): the root where it reaches the
+    // crown's lowest sprigs (or its top, short of them), and every branch may start on it.
+    std::vector<V3> trunk;
+    for (size_t i = 0; i + 2 < set.trunk.size(); i += 3)
+        trunk.push_back(V3{set.trunk[i], set.trunk[i + 1], set.trunk[i + 2]});
+    // (The closest point of a polyline to q, from its point `from` on.)
+    auto closestOn = [](const std::vector<V3>& line, V3 q, size_t from, float* dist2) {
+        V3 best = line.empty() ? q : line[std::min(from, line.size() - 1)];
+        float bd = 1e30f;
+        for (size_t i = from; i + 1 < line.size(); ++i) {
+            V3 a = line[i], ab = line[i + 1] - a;
+            const float t = std::clamp(Dot(q - a, ab) / std::max(Dot(ab, ab), 1e-12f), 0.0f, 1.0f);
+            V3 p = a + ab * t, d = q - p;
+            if (Dot(d, d) < bd) { bd = Dot(d, d); best = p; }
+        }
+        if (line.size() == 1) { V3 d = q - best; bd = Dot(d, d); }
+        if (dist2) *dist2 = bd;
+        return best;
+    };
+    if (trunk.size() >= 2) {
+        root = trunk.back();
+        for (size_t i = 0; i + 1 < trunk.size(); ++i) {
+            const float h0 = Dot(trunk[i], up), h1 = Dot(trunk[i + 1], up);
+            if (h0 <= lowest && h1 >= lowest) {
+                root = trunk[i] + (trunk[i + 1] - trunk[i]) * ((lowest - h0) / std::max(h1 - h0, 1e-6f));
+                break;
+            }
+        }
+    }
     // A piece of branch from `from` to `to`, `thick` wide (model units) all along (the atlas' last cell: an even
     // stick), a little longer at both ends so pieces in a row overlap (no seam at the joint).
     auto stick = [&](V3 from, V3 to, float thick) {
@@ -536,6 +697,10 @@ void Device::BakeOwnCanopy(LeafSet& set, uint32_t primitive, const FvfLayout& la
     for (uint32_t c : order) {
         float thick = limbW * std::min(std::sqrt(carried[c] / 35.0f), 4.0f);
         V3 from = root, onward = up;
+        float viaParent = 1e30f;                 // (the attachment on its parent's limb, how far)
+        V3 parentAt{};
+        float parentW = 0.0f;
+        V3 parentOnward = up;
         if (parent[c] >= 0) {                    // (the closest point of the parent's limb past its first third)
             const Limb& pl = limbs[parent[c]];
             float best = 1e30f;
@@ -544,9 +709,21 @@ void Device::BakeOwnCanopy(LeafSet& set, uint32_t primitive, const FvfLayout& la
                 V3 d = pl.pts[i] - mean[c];
                 if (Dot(d, d) < best) { best = Dot(d, d); at = i; }
             }
-            from = pl.pts[at];
-            onward = Normalize(pl.pts[at] - pl.pts[at > 0 ? at - 1 : 0] + up * 1e-3f);
-            thick = std::min(thick, 0.85f * pl.widths[at]);
+            parentAt = pl.pts[at];
+            parentOnward = Normalize(pl.pts[at] - pl.pts[at > 0 ? at - 1 : 0] + up * 1e-3f);
+            parentW = pl.widths[at];
+            viaParent = best;
+        }
+        // On the trunk where it passes closest, if that is nearer than its parent's limb (or it has none).
+        float viaTrunk = 1e30f;
+        V3 trunkAt = trunk.size() >= 2 ? closestOn(trunk, mean[c], 0, &viaTrunk) : root;
+        if (trunk.size() >= 2 && (parent[c] < 0 || viaTrunk < viaParent)) {
+            from = trunkAt;
+            onward = Normalize(mean[c] - trunkAt + up * (0.3f * Length(mean[c] - trunkAt)));
+        } else if (parent[c] >= 0) {
+            from = parentAt;
+            onward = parentOnward;
+            thick = std::min(thick, 0.85f * parentW);
         }
         V3 d = mean[c] - from;
         const float len = Length(d);

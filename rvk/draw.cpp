@@ -2284,7 +2284,7 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     // draw may be a tree's trunk (where its fallen leaves lie).
     CanopyParams(primitive, fvf, layout, vertices, vertexCount, indices, indexCount);
     if (!m_drawLeaves && !m_external)
-        NoteSolidDraw(fvf);
+        NoteSolidDraw(fvf, vertices, layout.stride, vertexCount);
     // A swaying plant: its big quads split into small ones (cached), so they bend rather than tilt as a whole.
     float sway[4] = {};
     bool swaying = !m_external && SwayParams(primitive, fvf, layout.stride, vertices, vertexCount, indices, indexCount, sway);

@@ -1411,6 +1411,10 @@ private:
         bool rawSame = false;                    // ... one of them has its vertex bytes too
         bool skyScenery = false;                 // ... a mesh of the sky's scenery (the ships over the cities: mesh_id.h
                                                  // kSkyScenery): kept inside the far plane, fogged as the far sky
+        // A solid mesh's axis (leaves.cpp TraceAxis: a tree trunk's, up through the middle of its wood), model space,
+        // x y z a point; traced the first time it is drawn as a possible trunk (state 1; 0: not yet).
+        mutable std::vector<float> trunkAxis;
+        mutable int8_t trunkAxisState = 0;
     };
     std::unordered_map<uint64_t, MeshInfo> m_meshInfo;
     // Mesh ids (meshids.cpp).
@@ -2108,6 +2112,8 @@ private:
         // A tree with its own leaf art (the canopy texture's m_leafArt, RVK_LeafOwn): our sprigs in place of its cards.
         Texture* art = nullptr;
         uint32_t artVersion = 0;
+        std::vector<float> trunk;                // ... its trunk's axis in the canopy's model space (GiveTrunk; empty: not
+                                                 // found yet - the branches start under the crown, baked again once it is)
     };
     std::unordered_map<uint64_t, LeafSet> m_leafSets;   // by mesh key and texture
     LeafSettings m_leaf;
@@ -2137,13 +2143,21 @@ private:
     // so it comes from the captured terrain (the ground grass), else from the trunk: a solid static mesh drawn next to
     // the canopy, standing under it. Recent solid draws' world boxes, and per tree (canopy mesh + position) what was
     // found; a trunk drawn after its canopy is matched to it then, for the next frames.
-    struct SolidBox { float lo[3], hi[3]; uint32_t draw; };
+    struct SolidBox { float lo[3], hi[3]; uint32_t draw; float axis[30]; uint32_t axisPoints; };   // (axis: world)
     SolidBox m_recentSolid[16] = {};
     uint32_t m_recentSolidNext = 0;
-    struct RecentCanopy { uint64_t instance; float x, z, bottom; uint32_t draw; };
+    struct RecentCanopy {
+        uint64_t instance; float x, z, bottom; uint32_t draw;
+        uint64_t setKey = 0;                     // our own canopy's set (its trunk wanted): its key, world, box
+        d3d::Matrix world{};
+        float lo[3] = {}, hi[3] = {};
+        uint32_t ownDraw = 0;
+    };
     RecentCanopy m_recentCanopy{};
     std::unordered_map<uint64_t, float> m_leafGround;   // tree instance -> ground y
-    void NoteSolidDraw(uint32_t fvf);            // Draw: a solid static draw (a trunk?)
+    void NoteSolidDraw(uint32_t fvf, const void* vertices, uint32_t stride, uint32_t vertexCount);   // Draw: a trunk?
+    bool TrunkUnder(const SolidBox& b, const float lo[3], const float hi[3]) const;
+    void GiveTrunk(uint64_t setKey, const d3d::Matrix& canopyWorld, const SolidBox& b);
     float LeafGround(const LeafSet& set);
     Canopy CanopyKind(uint32_t primitive, uint32_t fvf, uint32_t stride, const void* vertices, uint32_t vertexCount,
                       const uint16_t* indices, uint32_t indexCount);
