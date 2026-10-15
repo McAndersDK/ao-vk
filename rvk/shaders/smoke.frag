@@ -139,6 +139,15 @@ void main()
     float g = sand ? 0.12 : 0.35, cosT = dot(dir, L);
     float phase = (1.0 - g * g) / (4.0 * kPi * pow(1.0 + g * g - 2.0 * g * cosT, 1.5)) * 4.0 * kPi;   // 1 = even
     vec3 sun = FL.sunColor.rgb * (sand ? 0.75 * mix(0.6, 1.0, phase) : mix(0.35, 1.0, phase));
+    // (With the sand fog, the blowing sand lit as the land is - rvk wind.cpp, lighting.glsl: the sun through the
+    // storm weak and red, the rest spread round. Lit by the full sun, sand before the sun outshone the dim sun
+    // behind the fog - the user.)
+    vec3 sunSpread = vec3(0.0);
+    if (sand && FL.windFrame.w > 0.5) {
+        float k = FL.windFrame.z;
+        sunSpread = FL.sunColor.rgb * (0.8 * max(L.y, 0.0) * k);
+        sun *= pow(vec3(max(1.0 - k, 1e-4)), vec3(0.8, 1.0, 1.25));
+    }
     float transmit = 1.0;
     vec3 light = vec3(0.0);
     uint lamps = S.info.y;
@@ -185,7 +194,7 @@ void main()
         if (S.info.w == 1u) {                     // (sand, RVK_SandContrast: its own shade deeper, its lit side brighter)
             float k = S.sandLook.x;
             lit = S.ambient.rgb * max(mix(0.45 / k, 1.0, sunIn) * mix(1.0, 0.85, clamp(k - 1.0, 0.0, 1.0)), 0.3) +
-                  sun * sunIn * (0.7 + 0.3 * k);         // (never darker than a third of the sky's light: dusty, not black)
+                  sun * sunIn * (0.7 + 0.3 * k) + sunSpread;   // (never darker than a third of the sky's light: dusty, not black)
         }
         for (uint k = 0u; k < lamps; ++k) {
             Light li = FL.lights[S.lamps[k >> 2u][k & 3u]];

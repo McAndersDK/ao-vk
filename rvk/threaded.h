@@ -132,6 +132,7 @@ public:
     void SetSandClear(float d);
     void SetSandGusts(float s);
     void SetSandFog(float s);
+    void SetSandSun(float s);
     void SetSandForce(float amount, bool ash);
     void ProfileWindow(bool start, const std::string& label);
     void ProfileManualEnd();

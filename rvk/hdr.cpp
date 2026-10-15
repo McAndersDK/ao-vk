@@ -1018,7 +1018,7 @@ bool Device::RenderSandFog(VkCommandBuffer cmd)
     SandGusts(gusts);                            // (the eye's ground, the wind's frame and time; zeros without gusts)
     struct {
         d3d::Matrix invViewProj;
-        float eye[4], proj[4], dens[4], albedo[4], sky[4], terrain[4], wind[4], gusts[4];
+        float eye[4], proj[4], dens[4], albedo[4], sky[4], terrain[4], wind[4], gusts[4], sun[4];
     } push{};
     static_assert(sizeof(push) <= 256, "push constant range");
     push.invViewProj = inverse;
@@ -1083,6 +1083,8 @@ bool Device::RenderSandFog(VkCommandBuffer cmd)
     push.gusts[1] = gusts[11];
     push.gusts[2] = m_sandEyeShelter;
     push.gusts[3] = m_sandAsh ? 1.0f : 0.0f;
+    // RVK_SandSun: the sky round the sun seen through the dust's depth ^ this (1: as the rest of the sky - hidden).
+    push.sun[0] = 1.0f - 0.95f * std::clamp(m_sandSun, 0.0f, 1.0f);
 
     Texture* dst = m_sandFogTex[0];
     Transition(cmd, dst, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);

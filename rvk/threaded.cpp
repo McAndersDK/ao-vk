@@ -1015,6 +1015,11 @@ void ThreadedDevice::SetSandFog(float s)
     Enqueue([this, s](const uint8_t*) { m_device.SetSandFog(s); });
 }
 
+void ThreadedDevice::SetSandSun(float s)
+{
+    Enqueue([this, s](const uint8_t*) { m_device.SetSandSun(s); });
+}
+
 void ThreadedDevice::SetSandClear(float d)
 {
     Enqueue([this, d](const uint8_t*) { m_device.SetSandClear(d); });

@@ -21,6 +21,7 @@ layout(push_constant) uniform Push {
     vec4 terrain;       // the terrain map: its corner x, z, 1 / its size; w: 1 = there, 2 = and its sun shade usable
     vec4 wind;          // the wind's direction x, z; its frame's offsets along, across (the gusts carried with it)
     vec4 gusts;         // x: RVK_SandGusts, y: the wind's time (s), z: the eye's shelter (0 .. 1), w: ash (1: no glow)
+    vec4 sunv;          // x: the sky round the sun seen through T ^ this (RVK_SandSun; 1: hidden as the rest)
 } P;
 layout(location = 0) out vec4 outFog;
 
@@ -174,8 +175,8 @@ void main()
     // (rvk wind.cpp: kSunPath of the column's depth) - dim and red, not gone (the user). (The disc is far brighter
     // than the sky: through the dust it still shows, as the sun through a storm does.)
     if (d >= 1.0 && sun) {
-        float near_ = smoothstep(0.978, 0.9997, dot(dir, toSun));   // (~12 degrees out to the disc)
-        transmit = pow(max(transmit, 1e-12), mix(1.0, 0.3, near_));
+        float near_ = smoothstep(0.966, 0.9997, dot(dir, toSun));   // (~15 degrees out to the disc)
+        transmit = pow(max(transmit, 1e-12), mix(1.0, P.sunv.x, near_));
     }
     outFog = vec4(light, transmit);
 }

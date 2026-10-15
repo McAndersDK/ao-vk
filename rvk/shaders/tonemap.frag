@@ -180,7 +180,7 @@ void main()
             c = S + (c - S) * Tc + fog.rgb * (1.0 - a);
             far *= mix(T, 1.0, a);
             volumetric = mix(T, 1.0, a);
-            glow *= mix(Tc, vec3(1.0), a);
+            glow *= Tc;                          // (the scene the bloom came from holds the blowing sand already)
         } else {
             c = c * Tc + fog.rgb;
             far *= T;

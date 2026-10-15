@@ -1605,9 +1605,16 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
             const float k = std::max(m_sandContrast, 0.25f);
             const float sky = std::max((0.45f / k + (1.0f - 0.45f / k) * 0.7f) * (1.0f - 0.15f * std::clamp(k - 1.0f, 0.0f, 1.0f)), 0.3f);
             const float sunPart = 0.75f * 0.8f * 0.7f * (0.7f + 0.3f * k);
+            float frame[4];
+            WindFrame(frame);                    // (with the sand fog: the sun through the storm - smoke.frag)
+            const float kRedden[3] = {0.8f, 1.0f, 1.25f};
             for (int i = 0; i < 3; ++i) {
                 const float sun = m_shadowValid ? m_shadowSunColor[i] : m_frameSunColor[i];
-                const float typical = std::max(sf.ambient[i] * sky + sun * sunPart, 0.02f);
+                float sunLight = sun * sunPart;
+                if (frame[3] > 0.5f)
+                    sunLight = sun * (sunPart * std::pow(std::max(1.0f - frame[2], 1e-4f), kRedden[i]) +
+                                      0.8f * std::max(-m_frameSunDir[1], 0.0f) * frame[2]);
+                const float typical = std::max(sf.ambient[i] * sky + sunLight, 0.02f);
                 if (haze[3] > 0.0f) sf.colour[i] = std::min(haze[i] / typical, 8.0f);
             }
         }
