@@ -120,6 +120,31 @@ void Device::WindAxes(float x, float z, float out[2]) const
     out[1] = float(-dx * m_windDir[1] + dz * m_windDir[0] + m_windOffset[1]);
 }
 
+// The tone mapping's distant gusts (occlusion.glsl gust0..3): the camera (the scene's view and projection, as its
+// depth), where the simulated sand ends, the wind's frame carried with it.
+void Device::SandGusts(float out[16]) const
+{
+    for (int i = 0; i < 16; ++i) out[i] = 0.0f;
+    if (m_sand <= 0.0f || m_sandHaze <= 0.0f || m_sandGusts <= 0.0f || !m_aoProjValid)
+        return;
+    const auto& v = m_aoView.m;
+    for (int i = 0; i < 3; ++i) out[i] = -(v[3][0] * v[i][0] + v[3][1] * v[i][1] + v[3][2] * v[i][2]);
+    float ground;
+    out[3] = GroundAt(out[0], out[2], &ground, nullptr, nullptr) ? ground : out[1] - 2.0f;
+    for (int i = 0; i < 3; ++i) out[4 + i] = v[i][2];   // (the view's forward in the world: its third column)
+    out[7] = m_aoProj.m[0][0];
+    out[8] = m_aoProj.m[1][1];
+    out[9] = 0.45f * m_sandBoxSize;              // (the simulated sand thins out from here: smoke.frag's edge band)
+    out[10] = m_sandGusts;
+    out[11] = float(std::fmod(m_windTime, 3600.0));
+    float frame[4];
+    WindFrame(frame);
+    out[12] = m_windDir[0];
+    out[13] = m_windDir[1];
+    out[14] = frame[0] - float(m_sandFarCarried);
+    out[15] = frame[1];
+}
+
 // The tone mapping's sand (occlusion.glsl dust, dust2): the storm's colour; its density - the game's tint at its
 // strength (alpha ~0.38 in its sandstorm) a 50% veil at ~25 units, x RVK_SandHaze; surging with the wind.
 void Device::SandHaze(float out[8]) const

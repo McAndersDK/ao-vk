@@ -140,8 +140,9 @@ bool Device::CreateHdrResources(std::string* error)
         return Check(vkCreateDescriptorSetLayout(m_device, &sl, nullptr, out), "post set layout", error);
     };
     auto pipelineLayout = [&](VkDescriptorSetLayout set, VkPipelineLayout* out) {
-        // (192: the tone mapping's air (RVK_Atmos) and sand haze - past Vulkan's guaranteed 128; desktop GPUs give 256.)
-        VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 192};
+        // (256: the tone mapping's air (RVK_Atmos), sand haze and gusts - past Vulkan's guaranteed 128; desktop GPUs
+        // give 256.)
+        VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 256};   // (256: + the storm's distant gusts)
         VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         pl.setLayoutCount = 1;
         pl.pSetLayouts = &set;
@@ -574,13 +575,14 @@ void Device::TonemapInputsPass(VkCommandBuffer cmd, Texture* dst, VkPipeline pip
         w[i].pImageInfo = &images[i];
     }
     vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_tonemapLayout, 0, kTonemapInputs, w);
-    float push[48] = {};
+    float push[64] = {};
     std::memcpy(push, params, 16 * sizeof(float));
     if (depthView == m_depthView && m_aoProjValid) {
         push[7] = float(int(push[7]) | 16);      // (the depth is the scene's: the grading's distance, the land's haze)
         LandHaze(push + 16);
     }
     SandHaze(push + 40);                         // (wind.cpp: a sand or ash storm's air)
+    SandGusts(push + 48);                        // (... its distant gusts)
     vkCmdPushConstants(cmd, m_tonemapLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), push);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRendering(cmd);

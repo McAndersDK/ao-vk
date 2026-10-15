@@ -344,6 +344,8 @@ public:
     };
     void SetFreeCam(const FreeCamInput& in);
     void SandHaze(float out[8]) const;                             // the tone mapping's sand: dust, dust2
+    void SandGusts(float out[16]) const;                           // ... its distant gusts: gust0..3
+    void SetSandGusts(float s) { m_sandGusts = s; }                // RVK_SandGusts
     bool SmokeCoverValid() const { return m_smokeHalf && m_smokeHalfFrame == m_frameNumber; }
     // Grass and plants bending out of the way of characters walking through them (0 = off; scales reach and bend).
     void SetGrassPush(float strength) { m_grassPush = strength; m_frameLightsDirty = true; }
@@ -1949,6 +1951,8 @@ private:
     double m_sandCoarseMade = -1e9, m_sandMapMs = 0.0, m_sandMapMaxMs = 0.0, m_sandShelterMade = -1e9;
     uint32_t m_sandShelterGen = 0, m_sandGroundShelterGen = ~0u;
     float m_sandEyeShelter = 0.0f;               // the camera's (eased): the near haze held off
+    float m_sandGusts = 1.0f;                    // RVK_SandGusts: the distant gusts in the haze (0 none)
+    double m_sandFarCarried = 0.0;               // how far the wind has carried them (world; wrapped at 1e6)
     void UpdateSandMap();
     void RasterSandItem(SandMap& m, uint32_t item);
     void SandFlowCells(const SandMap& m, SandSweep& j);

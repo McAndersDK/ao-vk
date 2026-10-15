@@ -42,6 +42,54 @@ vec3 Grade(vec3 c, float far)
 // valleys below the eye hazier, peaks above clearer (exponential with height, integrated along the ray) - its
 // extinction taking red first (the far land bluer), the light it scatters the game's fog colour (the zone's air) and,
 // towards the sun, its glow (a forward lobe: hazy air round a low sun lights up), the sun's light reddened as it sets.
+// The storm's distant gusts (occlusion.glsl gust0..3): value noise (0..1) at a point.
+float GustHash(vec3 p)
+{
+    p = fract(p * 0.3183099 + 0.1);
+    p *= 17.0;
+    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+float GustNoise(vec3 x)
+{
+    vec3 i = floor(x), f = fract(x);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(GustHash(i), GustHash(i + vec3(1, 0, 0)), f.x), mix(GustHash(i + vec3(0, 1, 0)), GustHash(i + vec3(1, 1, 0)), f.x), f.y),
+               mix(mix(GustHash(i + vec3(0, 0, 1)), GustHash(i + vec3(1, 0, 1)), f.x), mix(GustHash(i + vec3(0, 1, 1)), GustHash(i + 1.0), f.x), f.y),
+               f.z);
+}
+// How much sand the haze holds along the view to view depth z, in units of z (z itself: an even haze): beyond the
+// simulated sand round the camera (gust2.y), billows of dust drifting with the wind - thicker and thinner, a bigger
+// scale and a finer one, stretched along it - thicker low down, thinner high up; six samples to 700 units out, an even
+// haze beyond.
+float DustDepth(vec2 uv, float z)
+{
+    vec3 f = P.gust1.xyz;
+    vec3 r = normalize(vec3(f.z, 0.0, -f.x) + vec3(1e-6, 0.0, 0.0));   // (the camera never rolls: right level)
+    vec3 u = cross(f, r);
+    vec3 D = r * ((uv.x * 2.0 - 1.0) / P.gust1.w) + u * ((1.0 - uv.y * 2.0) / P.gust2.x) + f;   // (a view depth of 1)
+    float L = length(D);
+    float t0 = P.gust2.y / L, t1 = min(z, 700.0 / L);
+    if (t1 <= t0)
+        return z;
+    const int kSamples = 6;
+    float dt = (t1 - t0) / float(kSamples);
+    float jitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    vec2 wd = P.gust3.xy, side = vec2(-wd.y, wd.x);
+    float sum = 0.0;
+    for (int i = 0; i < kSamples; ++i) {
+        float t = t0 + (float(i) + jitter) * dt;
+        vec3 p = P.gust0.xyz + D * t;
+        float h = p.y - P.gust0.w;
+        float along = dot(p.xz, wd) + P.gust3.z, across = dot(p.xz, side) + P.gust3.w;
+        float n = 0.65 * GustNoise(vec3(along / 70.0, h / 22.0 + P.gust2.w * 0.015, across / 40.0)) +
+                  0.35 * GustNoise(vec3(along / 24.0 + 3.1, h / 9.0, across / 14.0 + 7.7));
+        float billow = (0.1 + 2.6 * smoothstep(0.34, 0.68, n)) * mix(1.4, 0.55, smoothstep(0.0, 40.0, h));
+        float near_ = smoothstep(P.gust2.y, 1.6 * P.gust2.y, t * L);   // (none yet where the near sand is)
+        sum += mix(1.0, billow, near_ * P.gust2.z);
+    }
+    return z - (t1 - t0) + sum * dt;
+}
+
 vec3 Air(vec3 c, float z)
 {
     vec2 uv = gl_FragCoord.xy / vec2(textureSize(scene, 0));
@@ -117,7 +165,10 @@ void main()
         float surge = 1.0 + P.dust2.y * (0.6 * sin(P.dust2.x * 0.9 + uv.x * 5.0) + 0.4 * sin(P.dust2.x * 2.3 - uv.y * 7.0 + uv.x * 3.0));
         // (Sand in the air right in front too: a veil at every distance, P.dust2.z, under the haze that thickens
         // with it.)
-        float through = exp(-P.dust.w * dist * max(surge, 0.2)) * (1.0 - P.dust2.z * clamp(surge, 0.5, 1.5));
+        // (The distant gusts, RVK_SandGusts: the haze thicker and thinner in billows drifting with the wind; without
+        // them, the old surge - waves over the screen.)
+        float depth = P.gust2.z > 0.0 ? DustDepth(uv, dist) : dist * max(surge, 0.2);
+        float through = exp(-P.dust.w * depth) * (1.0 - P.dust2.z * clamp(surge, 0.5, 1.5));
         through = clamp(through, 0.0, 1.0);
         // Smoke and blowing sand (drawn over the scene before this, without depth) are near: the pixel taken apart
         // again - the smoke's own light S and cover a (the half-size smoke image, premultiplied), what is behind it

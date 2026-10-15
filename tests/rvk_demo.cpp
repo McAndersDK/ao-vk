@@ -1189,6 +1189,7 @@ void AddCube(std::vector<VtxMesh>& v, std::vector<uint16_t>& idx, float cx, floa
 // grey boxes; --sand-wind X Z: the storm's wind that way (the game's weather wind, each frame).
 bool g_sandObstacles = false;
 bool g_sandArch = false;
+float g_sandGusts = 1.0f;            // --sand-gusts S: RVK_SandGusts
 float g_sandClear = 6.0f;            // --sand-clear D: RVK_SandClear
 float g_sandContrast = 2.0f;         // --sand-contrast K: RVK_SandContrast             // --sand-arch: an arch in place of the wall
 bool g_sandSim = true;               // the sand simulated (RVK_SandProc 0); --sand-proc: procedural
@@ -3893,6 +3894,7 @@ int main(int argc, char** argv)
         else if (a == "--sand-proc") g_sandSim = false;
         else if (a == "--sand-contrast" && i + 1 < argc) g_sandContrast = float(std::atof(argv[++i]));
         else if (a == "--sand-clear" && i + 1 < argc) g_sandClear = float(std::atof(argv[++i]));
+        else if (a == "--sand-gusts" && i + 1 < argc) g_sandGusts = float(std::atof(argv[++i]));
         else if (a == "--sand-wind" && i + 2 < argc) {
             g_sandWind[0] = float(std::atof(argv[++i]));
             g_sandWind[1] = float(std::atof(argv[++i]));
@@ -4066,6 +4068,7 @@ int main(int argc, char** argv)
     dev.SetSandProcedural(!g_sandSim);
     dev.SetSandContrast(g_sandContrast);
     dev.SetSandClear(g_sandClear);
+    dev.SetSandGusts(g_sandGusts);
     dev.SetWindStorm(g_windStorm);
     dev.SetSandForce(g_sandForce, g_sandAsh);
     dev.SetTonemap(knee, 1.0f);

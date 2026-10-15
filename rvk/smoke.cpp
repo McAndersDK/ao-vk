@@ -765,6 +765,11 @@ void Device::UpdateSandVolume(double now, float dt)
         return;
     }
     UpdateSandMap();                             // (what shelters from the wind round the camera: sand_map.cpp)
+    {                                            // (the haze's distant gusts carried with the wind: wind.cpp SandGusts)
+        float wind[2];
+        SandWind(m_windDir, m_windStrength, m_windTime, wind);
+        m_sandFarCarried = std::fmod(m_sandFarCarried + double(std::hypot(wind[0], wind[1]) * std::min(dt, 0.1f)), 1e6);
+    }
     {
         const float eye = SandShelterAt(m_frameEye[0], m_frameEye[1] - 0.8f, m_frameEye[2]);
         m_sandEyeShelter += (eye - m_sandEyeShelter) * (1.0f - std::exp(-dt / 0.6f));

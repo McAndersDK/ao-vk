@@ -34,7 +34,14 @@ layout(push_constant) uniform Push {
     vec4 dust;          // rgb: its colour (as the scene's light); w: its density (per world unit; 0: none)
     vec4 dust2;         // x: the wind's clock; y: how much it surges with the gusts; z: the veil at every distance;
                         // w: 1 = smokeCover holds this frame's smoke (blowing sand: near, not behind the sky's veil)
-                        // (0..1); w: unused
+    // The storm's distant gusts (rvk wind.cpp SandGusts; tonemap.frag): beyond the simulated sand round the camera,
+    // billows of thicker and thinner dust drifting with the wind through the haze.
+    vec4 gust0;         // xyz: the eye (world); w: the ground's height under it
+    vec4 gust1;         // xyz: the view's forward (world); w: the projection's m00
+    vec4 gust2;         // x: the projection's m11; y: where the simulated sand ends (world units from the eye); z: how
+                        // strong the gusts (RVK_SandGusts; 0 none); w: the wind's clock
+    vec4 gust3;         // xy: the wind's direction (x z); zw: along and across the wind, what to add to a place's
+                        // dot products (its frame, carried with the wind)
 } P;
 
 // A reduced-resolution image at this pixel: of the 4 nearest texels, those at this pixel's depth (the same surface,
