@@ -88,6 +88,25 @@ V3 Rotate(V3 v, V3 k, float angle)
     return v * c + Cross(k, v) * s + k * (Dot(k, v) * (1.0f - c));
 }
 
+// A seed from the mesh's own content (its positions and indices): the same tree bakes the same leaves and branches every
+// time (m_drawMeshKey holds a static snapshot's serial - a new one each upload: the branches changed when the leaves
+// were turned off and on).
+uint64_t ContentSeed(const void* vertices, uint32_t stride, uint32_t vertexCount, const uint16_t* indices,
+                     uint32_t indexCount)
+{
+    uint64_t h = 0xCBF29CE484222325ull ^ vertexCount ^ (uint64_t(indexCount) << 32);
+    auto mix = [&h](uint64_t x) { h = (h ^ x) * 0x100000001B3ull; h ^= h >> 29; };
+    const uint8_t* v = static_cast<const uint8_t*>(vertices);
+    for (uint32_t i = 0; i < vertexCount; ++i) {
+        uint32_t p[3];
+        std::memcpy(p, v + size_t(i) * stride, 12);
+        mix(p[0]); mix(p[1]); mix(p[2]);
+    }
+    for (uint32_t i = 0; indices && i < indexCount; ++i)
+        mix(indices[i]);
+    return h;
+}
+
 // The texture's alpha (0..1) at (u, v), filtered between the four nearest cells of its mask (wrapping).
 float MaskAlpha(const std::vector<uint8_t>& mask, uint32_t w, uint32_t h, float u, float v)
 {
@@ -329,7 +348,7 @@ void Device::BakeOwnCanopy(LeafSet& set, uint32_t primitive, const FvfLayout& la
     const float sizeW = std::clamp(0.11f * heightW, 1.0f, 3.2f) * std::clamp(m_leaf.size, 0.25f, 3.5f);
     const float size = sizeW / scale;            // model units
     const float perArea = 4.5f * std::clamp(m_leaf.density, 0.1f, 4.0f) / (0.45f * size * size);
-    Rng rng(m_drawMeshKey ^ 0xC0A0B7ull);
+    Rng rng(ContentSeed(vertices, stride, vertexCount, indices, indexCount) ^ 0xC0A0B7ull);
     const uint32_t count = indices ? indexCount : vertexCount;
     const uint32_t triangles = primitive == d3d::TriangleList ? count / 3 : (count >= 3 ? count - 2 : 0);
     auto unorm16 = [](float x) { return uint32_t(std::clamp(x, 0.0f, 1.0f) * 65535.0f + 0.5f); };
@@ -558,7 +577,7 @@ bool Device::BakeLeaves(LeafSet& set, uint32_t primitive, const FvfLayout& layou
     const float win = 0.0625f * std::clamp(m_leaf.size, 0.25f, 3.5f);   // a sprig's half size in the texture
     const float perArea = 2.2f * std::clamp(m_leaf.density, 0.1f, 4.0f) / (4.0f * win * win);
     std::vector<LeafRecord> leaves;
-    Rng rng(m_drawMeshKey ^ 0x5EEDull);
+    Rng rng(ContentSeed(vertices, layout.stride, vertexCount, indices, indexCount) ^ 0x5EEDull);
     const uint32_t count = indices ? indexCount : vertexCount;
     const uint32_t triangles = primitive == d3d::TriangleList ? count / 3 : (count >= 3 ? count - 2 : 0);
     std::vector<LeafRecord> branches;            // (our own canopy's: first, never thinned - BakeOwnCanopy)
