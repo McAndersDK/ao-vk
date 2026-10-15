@@ -110,14 +110,26 @@ void main()
     float shadows = FL.shadowParams.x > 0.5 ? 1.0 : 0.0;
     vec3 moon = FL.moon.w > 0.5 ? vec3(0.0) : FL.moon.rgb * 0.6;   // (the moon's own shadow map: its light is the "sun" above)
 
-    // The light the dust at a point sends towards the eye, per unit of its density's work: its colour x (the sun
-    // reaching it through the dust above, shaded, x the phase + the sky's + the moon's).
-    vec3 litTail = vec3(0.0);
+    // The storm's dust: a thick layer near the ground (scale height P.dens.y) and a tall thin column above it (the
+    // storm's upper dust, kUpper of it at the ground, scale height kUpperHeight) - the same for the land, things high
+    // up (the ships in the sky) and the sky itself, so none stands clear of what hides the others.
+    const float kUpper = 0.3, kUpperHeight = 1500.0;
+    // Its light in this direction: the sky's and the moon's; the sun through half the thick layer above (reddened),
+    // its glow towards the eye softened (the light in a storm has scattered many times), and what the dust took from
+    // it spread round (else a thick storm went near black). One light for the whole ray - shaded only where the sun
+    // is shut out (shadows, the terrain at a low sun, clouds) - so the far land fades into the sky behind it with no
+    // other colour (the user: the hills differed from the sky; the sky blazed orange lit as the thin dust high up).
+    vec3 sunDirect = vec3(0.0), base = P.sky.rgb + moon;
+    if (sun) {
+        vec3 mid = exp(-kRedden * (P.dens.x * (1.0 - kUpper) * P.dens.y * 0.5 / sunUp));
+        sunDirect = FL.sunColor.rgb * mid * mix(1.0, phase, 0.35);   // (gentle: away from the sun as dark as the sim sand)
+        base += FL.sunColor.rgb * (0.8 * max(toSun.y, 0.0)) * (1.0 - mid);
+    }
     float transmit = 1.0;
     vec3 light = vec3(0.0);
     int steps = int(P.sky.w);
     float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))) + P.albedo.w);
-    float tPrev = 0.0, hLast = 0.0;
+    float tPrev = 0.0, hLast = 0.0, shadeLast = 1.0;
     for (int i = 0; i < steps; ++i) {
         float u = (float(i) + noise) / float(steps), t = reach * u * u;
         float dt = t - tPrev;
@@ -126,58 +138,36 @@ void main()
         vec2 tm = TerrainAt(q.xz);
         float h = max(q.y - tm.y, 0.0);
         hLast = h;
-        float layer = exp(-h / P.dens.y);
-        float sigma = P.dens.x * layer * Billow(q, h);
+        float sigma = P.dens.x * ((1.0 - kUpper) * exp(-h / P.dens.y) * Billow(q, h) + kUpper * exp(-h / kUpperHeight));
         // (Clear round the eye - RVK_SandClear, fading in over as many again; held off further in a lee.)
         sigma *= smoothstep(0.35 * P.dens.w, 1.6 * P.dens.w, t) * (1.0 - 0.75 * P.gusts.z * (1.0 - smoothstep(10.0, 40.0, t)));
-        vec3 src = P.sky.rgb + moon;
+        float shade = 1.0;
         if (sun) {
-            // Through the dust above towards the sun: an exponential layer's depth along the way, from here.
-            vec3 through = exp(-kRedden * (P.dens.x * P.dens.y * layer / sunUp));
-            // What the dust above took from the sun isn't lost: scattered on and on (the dust is bright - most of
-            // the light it meets it sends on), it comes down as a glow from all round - the storm's own light,
-            // brighter the higher the sun. (Without it a thick storm went near black.)
-            src += FL.sunColor.rgb * (max(toSun.y, 0.0) * 0.8) * (1.0 - through);
-            float shade = 1.0;
             if (shadows > 0.0)
                 shade = mix(1.0, SunVisible(t), casterFade);
             if (P.terrain.w > 1.5)               // (the terrain's shade from a low sun: under the height to see it)
                 shade *= smoothstep(tm.x - 1.0, tm.x + 3.0, q.y);
             shade *= CloudShadowMap(q);
-            src += FL.sunColor.rgb * through * (shade * phase);
-            if (i == steps - 1)
-                litTail = FL.sunColor.rgb * (through * mix(1.0, phase, 0.5) * (P.terrain.w > 1.5 ? smoothstep(tm.x - 1.0, tm.x + 3.0, q.y) : 1.0) +
-                                             max(toSun.y, 0.0) * 0.8 * (1.0 - through));
         }
+        shadeLast = P.terrain.w > 1.5 ? smoothstep(tm.x - 1.0, tm.x + 3.0, q.y) : 1.0;
         float a = 1.0 - exp(-sigma * dt);
-        light += transmit * a * (P.albedo.rgb * src);
+        light += transmit * a * (P.albedo.rgb * (base + sunDirect * shade));
         transmit *= 1.0 - a;
     }
 
-    // Past the march: the rest of the ray to the surface, an exponential layer from the last step's height, lit as
-    // the last step without the near shadows. The sky: the dust goes on - a storm's thin upper dust reaches far
-    // above the thick layer near the ground - and hides it wholly, as the haze did (else in a thin storm the blue
-    // sky showed overhead).
-    if (d >= 1.0) {
-        // (Lit as the dust typically is - the sun through half the thick layer, what it lost spread round - not as
-        // the thin dust high up: there the sun is barely dimmed, and with its full forward glow the sky went a
-        // blazing orange (the user). Deep in the storm the light has scattered many times: its glow towards the sun
-        // softer.)
-        vec3 skySun = vec3(0.0);
-        if (sun) {
-            vec3 mid = exp(-kRedden * (P.dens.x * P.dens.y * 0.5 / sunUp));
-            skySun = FL.sunColor.rgb * (mid + 0.8 * max(toSun.y, 0.0) * (1.0 - mid)) * mix(1.0, phase, 0.3);
-        }
-        light += transmit * (P.albedo.rgb * (P.sky.rgb + moon + skySun));
-        transmit = 0.0;
-    } else if (dist > reach && transmit > 1e-4) {
+    // Past the march: the rest of the ray - to the surface, or for the sky out of the dust - through both layers
+    // in closed form (from the last step's height, the ground taken as level), lit as the march without the near
+    // shadows.
+    if (dist > reach && transmit > 1e-5) {
         float len = min(dist - reach, 50000.0);
-        float k = dir.y / P.dens.y;
-        float depth = abs(k * len) < 1e-3 ? len : (1.0 - exp(-k * len)) / k;
-        depth = min(depth, 50000.0);
-        float tau = P.dens.x * min(exp(-hLast / P.dens.y) * depth, len);   // (never thicker than at the ground)
+        float k1 = dir.y / P.dens.y, k2 = dir.y / kUpperHeight;
+        float d1 = abs(k1 * len) < 1e-3 ? len : (1.0 - exp(-k1 * len)) / k1;
+        float d2 = abs(k2 * len) < 1e-3 ? len : (1.0 - exp(-k2 * len)) / k2;
+        // (Never thicker than at the ground.)
+        float tau = P.dens.x * ((1.0 - kUpper) * min(exp(-hLast / P.dens.y) * d1, len) +
+                                kUpper * min(exp(-hLast / kUpperHeight) * d2, len));
         float a = 1.0 - exp(-tau);
-        light += transmit * a * (P.albedo.rgb * (P.sky.rgb + moon + litTail));
+        light += transmit * a * (P.albedo.rgb * (base + sunDirect * shadeLast));
         transmit *= 1.0 - a;
     }
     outFog = vec4(light, transmit);
