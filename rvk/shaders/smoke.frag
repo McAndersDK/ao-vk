@@ -130,9 +130,12 @@ void main()
     float ds = (leave - enter) / float(steps);
     float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))) + FL.taa.z);
     vec3 L = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
-    float g = 0.35, cosT = dot(dir, L);
+    // (Sand: nearly even - the light bounced about among so many grains, and the storm dims the sun; scattered forwards
+    // as smoke's, looking into a low sun it glared, ~4 x as bright as looking away.)
+    bool sand = S.info.w == 1u;
+    float g = sand ? 0.12 : 0.35, cosT = dot(dir, L);
     float phase = (1.0 - g * g) / (4.0 * kPi * pow(1.0 + g * g - 2.0 * g * cosT, 1.5)) * 4.0 * kPi;   // 1 = even
-    vec3 sun = FL.sunColor.rgb * mix(0.35, 1.0, phase);
+    vec3 sun = FL.sunColor.rgb * (sand ? 0.75 * mix(0.6, 1.0, phase) : mix(0.35, 1.0, phase));
     float transmit = 1.0;
     vec3 light = vec3(0.0);
     uint lamps = S.info.y;
