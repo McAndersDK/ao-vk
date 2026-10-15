@@ -1,6 +1,7 @@
 # Sand that knows the land: shelter behind hills and objects, flow round them
 
-Status: plan (2026-10-15), branch `storms`. The user: the blowing sand and the wind ignore terrain and objects -
+Status (2026-10-15): phases 1-4 done on `storms` (862788c, 904db0c, 2c6df3e), staged randy31-storms30.dll, not yet
+seen in game; phase 5 open. Branch `storms`. The user: the blowing sand and the wind ignore terrain and objects -
 standing by a hill there should be no sand on its lee side, and sand should wrap round a tree. Moving off the smoke
 simulation to something procedural is fine.
 
@@ -96,3 +97,24 @@ validation, cost (target: the whole sand under 0.6 ms at any RVK_SandRes).
 - Terrain capture holes far from grass: the coarse grid covers hills; small dunes may be missed.
 - Indoors / under roofs: a roof is an obstacle from above - the height map's "top" makes a covered cell fully
   sheltered below it (as wanted).
+
+## Done (2026-10-15)
+
+- Phases 1-2 (862788c): rvk/sand_map.cpp - the map (192 x 192 cells of 0.5 round the eye: ground from the grass capture
+  or the terrain grid, placed objects' solid tops and see-through spans rasterised from a CPU copy of the statel
+  pack), the shelter sweep along the wind (solid lee x7, see-through x4 at half), the coarse terrain swept the same
+  way upwind. The sand volume's columns: solid tops as ground (the simulation goes round), no sand on top of things,
+  smoke_sim.comp SandShelter cuts inflow / pick-up / wind; the near haze by the camera's shelter. Frame dumps write
+  <dump>-sand.bmp.
+- Phase 3 (904db0c): smoke_sim.comp stage 12 - the sand procedural (RVK_SandProc, on): layers, streaks, billows,
+  shelter, devils as whirling funnels, footfall puffs; 0.05 ms against the solver's 0.22 in the demo.
+- Phase 4 (2c6df3e): the flow round solid obstacles - nearest obstacle (distance transform), deflected wind, the push
+  aside summed along the wind (12-unit relax); columns of three vec4; streaks and billows looked up where the air came
+  from below an obstacle's top. <dump>-flow.bmp. All map work in 0.8 ms slices: ~0.05-0.08 ms a frame, at most ~1 ms.
+- Demo: --grass-bench / --sand-storm with --sand-obstacles (a wall, a tree, a boulder as a placed-object pack),
+  --sand-wind X Z (the game's weather wind; ~1500 frames: the wind turns over 8 s), --grass-bench-rise H,
+  --grass-bench-pitch R, --sand-sim; RANDYVK_SAND_READBACK=N (density by height).
+
+Open: phase 5 (grass and plants calmer in a lee: needs the map as a texture in the grass shaders); an in-game look -
+real hills (the terrain grid's cells hold their highest point: slight false shelter possible on rough ground), real
+placed objects (cost of rasterising a city's pieces: logged), trees.
