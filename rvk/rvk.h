@@ -1882,7 +1882,7 @@ private:
     float m_sandColour[3] = {0.75f, 0.47f, 0.19f};   // its colour (linear)
     float m_sandHaze = 0.1f;                     // RVK_SandHaze: x
     float m_sandBlow = 1.0f;                     // RVK_SandBlow: the blowing sand round the camera (smoke.cpp), x
-    bool m_sandProcedural = true;                // RVK_SandProc: the sand made procedurally (else simulated)
+    bool m_sandProcedural = false;               // RVK_SandProc: the sand made procedurally (else simulated: the user's pick)
     float m_sandForce = 0.0f;                    // RVK_SandForce: a sand (ash) storm this strong whatever the game's weather
                                                  // (1: the game's full one; 0: the game's)
     bool m_sandAsh = false;                      // RVK_SandAsh: the forced one an ash storm
