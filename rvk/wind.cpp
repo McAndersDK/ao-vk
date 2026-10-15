@@ -43,15 +43,19 @@ void Device::UpdateWind()
     }
 
     // A sand or ash storm: the game's tint, left out in Draw, says its colour and strength; eased in and out.
-    const bool tint = now - m_stormTintSeen < 0.5;
-    const float sandTarget = tint ? float(m_stormTintColour >> 24) / 255.0f : 0.0f;
+    // RVK_SandForce: one whatever the weather, as strong as the game's full one (alpha ~0.38) x it, in a sand colour
+    // (the demo's stand-in for the game's) or an ash grey (RVK_SandAsh).
+    const bool forced = m_sandForce > 0.0f;
+    const bool tint = forced || now - m_stormTintSeen < 0.5;
+    const uint32_t tintColour = forced ? (m_sandAsh ? 0x009A9590u : 0x00C07830u) : m_stormTintColour;
+    const float sandTarget = forced ? 0.38f * m_sandForce : tint ? float(m_stormTintColour >> 24) / 255.0f : 0.0f;
     m_sand += (sandTarget - m_sand) * (dt > 0.0f ? 1.0f - std::exp(-dt / 3.0f) : 1.0f);
     if (m_sand < 1e-3f && sandTarget == 0.0f) m_sand = 0.0f;
     if (tint) {
         // Its colour, made linear, then half-way towards its own brightness and a little lighter: the game's sheet is
         // a third over a greyish frame - at full strength (the horizon) its raw colour is a saturated orange.
         auto linear = [](uint32_t v) { const float c = float(v & 0xFF) / 255.0f; return c * c; };   // (about sRGB)
-        const float rgb[3] = {linear(m_stormTintColour >> 16), linear(m_stormTintColour >> 8), linear(m_stormTintColour)};
+        const float rgb[3] = {linear(tintColour >> 16), linear(tintColour >> 8), linear(tintColour)};
         const float luma = 0.3f * rgb[0] + 0.59f * rgb[1] + 0.11f * rgb[2];
         for (int i = 0; i < 3; ++i) m_sandColour[i] = 1.3f * (luma + (rgb[i] - luma) * 0.5f);
     }
@@ -75,9 +79,10 @@ void Device::UpdateWind()
     if (m_frameNumber % 600 == 0)
     {
         Log("wind: towards %.2f %.2f (%s), strength x%.2f, gusts x%.2f, storm %.2f; the game's storm tint left out %u "
-            "times (colour %08x), sand %.2f", double(m_windDir[0]), double(m_windDir[1]),
+            "times (colour %08x), sand %.2f%s", double(m_windDir[0]), double(m_windDir[1]),
             fromGame && gl > 0.05f ? "the game's weather" : "the sky's", double(m_windStrength), double(m_windGusts),
-            double(m_storm), m_stormTintSkipped, m_stormTintColour, double(m_sand));
+            double(m_storm), m_stormTintSkipped, m_stormTintColour, double(m_sand),
+            forced ? (m_sandAsh ? " (forced: ash)" : " (forced: sand)") : "");
         m_stormTintSkipped = 0;
     }
 }

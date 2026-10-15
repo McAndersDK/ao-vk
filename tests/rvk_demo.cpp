@@ -1150,6 +1150,8 @@ bool g_grassBenchStorm = false;   // --grass-bench-storm: AO's sandstorm tint (a
 bool g_sandStorm = false;         // --sand-storm: the grass bench in a desert sandstorm (sandy ground, the game's tint,
                                   // the new weather without rain: our haze and blowing sand)
 float g_sandBlow = 1.0f;          // --sand-blow X: RVK_SandBlow
+float g_sandForce = 0.0f;         // --sand-force X: RVK_SandForce
+bool g_sandAsh = false;           // --sand-ash: RVK_SandAsh
 bool g_grassBenchStill = false;   // --grass-bench-still: the camera stays where it starts (to watch the wind)
 bool g_terrainPbr = false;        // --terrain-pbr: the bench's ground texture gets a PBR material (a glossy path through
                                   // rough grass), per-pixel lighting, no grass field: the ground's PBR (MAT_BASE) path
@@ -3724,6 +3726,8 @@ int main(int argc, char** argv)
         else if (a == "--grass-bench-storm") g_grassBenchStorm = true;
         else if (a == "--sand-storm") { g_grassFieldOn = g_grassBench = g_grassBenchStorm = g_sandStorm = true; hdr = true; }
         else if (a == "--sand-blow" && i + 1 < argc) g_sandBlow = float(std::atof(argv[++i]));
+        else if (a == "--sand-force" && i + 1 < argc) g_sandForce = float(std::atof(argv[++i]));
+        else if (a == "--sand-ash") g_sandAsh = true;
         else if (a == "--grass-bench-platform") g_grassBenchPlatform = true;
         else if (a == "--grass-bench-loading" && i + 1 < argc) g_grassBenchLoading = std::atoi(argv[++i]);
         else if (a == "--grass-bench-loading-null") g_grassBenchLoadingNull = true;
@@ -3871,13 +3875,14 @@ int main(int argc, char** argv)
         smoke.opacity = g_smokeOpaque;
         dev.SetSmokeParams(smoke);
     }
-    if (g_rainForce > 0.0f || g_sandStorm) {
+    if (g_rainForce > 0.0f || g_sandStorm || g_sandForce > 0.0f) {
         Device::WeatherParams weather;
         weather.enable = true;
         weather.force = g_rainForce;
         dev.SetWeatherParams(weather);
     }
     dev.SetSandBlow(g_sandBlow);
+    dev.SetSandForce(g_sandForce, g_sandAsh);
     dev.SetTonemap(knee, 1.0f);
     dev.SetBloom(bloom, 1.0f);
     dev.SetEffectGlow(effectGlow);

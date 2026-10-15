@@ -323,6 +323,7 @@ public:
     void SetStormTint(bool on) { m_stormTint = on; }               // RVK_StormTint (Draw: the game's storm sheet)
     void SetSandHaze(float amount) { m_sandHaze = amount; }        // RVK_SandHaze (wind.cpp)
     void SetSandBlow(float amount) { m_sandBlow = amount; }        // RVK_SandBlow (smoke.cpp: the sand volume)
+    void SetSandForce(float amount, bool ash) { m_sandForce = amount; m_sandAsh = ash; }   // RVK_SandForce, RVK_SandAsh
     void SandHaze(float out[8]) const;                             // the tone mapping's sand: dust, dust2
     bool SmokeCoverValid() const { return m_smokeHalf && m_smokeHalfFrame == m_frameNumber; }
     // Grass and plants bending out of the way of characters walking through them (0 = off; scales reach and bend).
@@ -1850,6 +1851,9 @@ private:
     float m_sandColour[3] = {0.75f, 0.47f, 0.19f};   // its colour (linear)
     float m_sandHaze = 1.0f;                     // RVK_SandHaze: x
     float m_sandBlow = 1.0f;                     // RVK_SandBlow: the blowing sand round the camera (smoke.cpp), x
+    float m_sandForce = 0.0f;                    // RVK_SandForce: a sand (ash) storm this strong whatever the game's weather
+                                                 // (1: the game's full one; 0: the game's)
+    bool m_sandAsh = false;                      // RVK_SandAsh: the forced one an ash storm
     // The sand volume (smoke.cpp UpdateSandVolume): a smoke volume round the camera in a sand or ash storm.
     struct SandDevil {
         float pos[3] = {0, 0, 0};                // its foot (world)

@@ -985,6 +985,11 @@ void ThreadedDevice::SetSandHaze(float amount)
     Enqueue([this, amount](const uint8_t*) { m_device.SetSandHaze(amount); });
 }
 
+void ThreadedDevice::SetSandForce(float amount, bool ash)
+{
+    Enqueue([this, amount, ash](const uint8_t*) { m_device.SetSandForce(amount, ash); });
+}
+
 void ThreadedDevice::SetSandBlow(float amount)
 {
     Enqueue([this, amount](const uint8_t*) { m_device.SetSandBlow(amount); });
