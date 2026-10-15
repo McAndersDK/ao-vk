@@ -142,6 +142,30 @@ float Streaks(vec3 uvw)
     float n = 0.65 * TileNoise(vec3(q.x * 0.25, q.y, t * 0.2), 4096) + 0.35 * TileNoise(vec3(q.x * 0.5, q.y * 2.0, t * 0.35) + 17.0, 4096);
     return smoothstep(0.3, 0.7, n);
 }
+// Characters in the storm (too thin for the grid to hold them much - a cell is about their width): their wind shadow
+// (0..1; downwind of one, ~4 world units long, widening a little; to the top of them) and the push round them (world /
+// s: sideways out of its way, and up over, just upwind and beside).
+float Lee(vec3 uvw, out vec3 push)
+{
+    push = vec3(0.0);
+    float speed = length(SD.wind.xy), lee = 0.0;
+    if (speed < 1e-3) return 0.0;
+    vec2 aw = SD.wind.xy / speed, side = vec2(-aw.y, aw.x);
+    float size = P.a.w;
+    for (int i = 0; i < int(B.info.x); ++i) {
+        vec4 b = B.pos[i];
+        vec2 rel = (uvw.xz - b.xz) * size;
+        float up = (uvw.y - b.y) * size, top = (b.w - b.y) * size;
+        if (up < -0.3 || up > top + 0.4) continue;
+        float al = dot(rel, aw), ac = dot(rel, side);
+        float R = max(B.vel[i].w * size, 0.45), width = R * (1.3 + 0.25 * max(al, 0.0));
+        float tall = 1.0 - smoothstep(top, top + 0.4, up);
+        lee = max(lee, step(0.0, al) * (1.0 - smoothstep(0.5 * width, width, abs(ac))) * (1.0 - smoothstep(1.0, 4.5, al)) * tall);
+        float front = (1.0 - smoothstep(0.0, 1.0, abs(al + 0.4))) * (1.0 - smoothstep(R, 2.5 * R, abs(ac))) * tall;
+        push += front * speed * vec3(0.6 * (ac >= 0.0 ? side.x : -side.x), 0.25, 0.6 * (ac >= 0.0 ? side.y : -side.y));
+    }
+    return lee;
+}
 // The storm's wind at a point: a little slower near the ground (the sand hopping along it races still), none in it.
 vec3 SandWind(vec3 uvw)
 {
@@ -210,6 +234,10 @@ void main()
             uint salt = uint(P.e.w) / 4u + uint(i) * 131u;
             v += wake * vec3(Jitter(id / 2, salt), 0.5 * Jitter(id / 2, salt + 17u), Jitter(id / 2, salt + 7919u));
         }
+        vec3 push;
+        float lee = Lee(uvw, push);
+        v.xz *= 1.0 - 0.75 * lee;                                        // (sheltered: still air behind a character)
+        v += push * (1.0 - exp(-8.0 * dt));
         if (above < 0.0 || id.y == 0) v = vec3(0.0);                     // (the ground: solid)
         v *= exp(-0.05 * dt);
         imageStore(velOut, id, vec4(v, 0.0));
@@ -324,6 +352,10 @@ void main()
             float level = 0.0;
             if (above >= 0.0 && above < 0.8)
                 level = SD.air.z * feed * (0.1 + 0.9 * Streaks(uvw)) * (1.0 - above / 0.8);
+            vec3 push_;
+            float lee = Lee(uvw, push_);
+            level *= 1.0 - lee;                                          // (none lifted in a character's wind shadow,
+            dens.r *= exp(-2.0 * lee * dt);                              // and what blows in there settles out)
             if (SD.devil.w > 0.0) {
                 float d = length((uvw.xz - SD.devil.xz) * size), R = SD.devil.w * size;
                 float up = (uvw.y - SD.devil.y) * size;

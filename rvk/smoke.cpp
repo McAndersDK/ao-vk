@@ -59,6 +59,7 @@ constexpr float kSimStep = 1.0f / 60.0f;         // a volume steps about this of
 constexpr float kSimFar = 40.0f;                // between its last two states; beyond this (world) half as often
 constexpr uint32_t kNoiseSize = 64;             // the wisps' noise image (cells a side)
 constexpr float kFlowMax = 4.0f;                // the flow image's range (world / s; smoke_common.glsl kSmokeFlowMax)
+constexpr float kSandFlowMax = 16.0f;           // ... the sand volume's (a storm's wind; kSandFlowMax there)
 constexpr float kExtinction = 3.2f;             // per world unit at density 1 (x RVK_SmokeThick)
 
 constexpr uint64_t kSandKey = 0x4000000053414E44ull;   // the sand volume's key (bit 62: not a game pointer, not a drift
@@ -1090,7 +1091,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         std::memcpy(p.f, sun, sizeof(sun));
         p.f[3] = kExtinction * P.density;                     // (as thick to the sun as it is to the eye)
         p.g[0] = float(slot);
-        p.g[1] = 1.0f / kFlowMax;
+        p.g[1] = 1.0f / (sand ? kSandFlowMax : kFlowMax);
         p.g[2] = kEdgeFade;
         // A drift cloud: its source's box (stage 9 takes the smoke that box lets go of): this box's coordinates ->
         // that one's, uvw * h.w + h.xyz; its density read through binding 10.

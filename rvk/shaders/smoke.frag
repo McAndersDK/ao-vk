@@ -48,18 +48,25 @@ float Detail(vec3 p, vec3 vel)
 // Blowing sand's grain (S.info.w = 1): what the grid is too coarse to hold - ribbons long along the storm's wind and
 // narrow across, lifting a little as they go, and finer streaks racing faster through them; both in the streak pattern
 // the wind carries (S.sand; its offset wrapped at whole periods of both). Sharp-edged (sand, not a gas): the density
-// there x 0..~2.2, the average about kept.
-float SandGrain(vec3 p)
+// there x 0..~2.2, the average about kept. Bent by the simulated air: where it goes otherwise than the storm's wind
+// (round a character, in its wind shadow, kicked up, a dust devil) the pattern is pushed off as far as that difference
+// carries it in a fraction of a second, and its edges soften where the air is churned - the simulation's own shape
+// shows there.
+float SandGrain(vec3 p, vec3 uvw)
 {
     vec2 wv = S.look.zw;
     float speed = length(wv);
     vec2 a = speed > 1e-3 ? wv / speed : vec2(1.0, 0.0), c = vec2(-a.y, a.x);
+    vec3 air = texture(flow, uvw).xyz * kSandFlowMax;
+    vec3 off = vec3(air.x - wv.x, air.y, air.z - wv.y);
+    float churn = length(off);
+    p -= off * (0.35 * min(1.0, 2.5 / max(churn, 1e-3)));      // (at most ~1 world unit)
     vec2 r = p.xz - S.sand.xy;
     float along = dot(r, a) + S.sand.z, across = dot(r, c) + S.sand.w;
     float ribbons = Wisps(vec3(0.25 * along, 2.0 * p.y + 0.25 * S.sand.z, 1.5 * across));
     float streaks = Wisps(vec3(along + 0.5 * S.sand.z, 6.0 * p.y, 5.0 * across) + 3.7);
     float crisp = smoothstep(0.40, 0.60, 0.6 * ribbons + 0.4 * streaks);
-    return mix(1.0, 2.2 * crisp, clamp(S.detail.x, 0.0, 1.0));
+    return mix(1.0, 2.2 * crisp, clamp(S.detail.x, 0.0, 1.0) * (1.0 - 0.6 * smoothstep(1.0, 5.0, churn)));
 }
 
 float Fog(float d)
@@ -150,7 +157,7 @@ void main()
         // Wisps: thin smoke frays right through, thick keeps more of its body (the average kept: 2 x the noise's 0.5).
         // Sand: its grain instead.
         if (S.info.w == 1u) {
-            dens *= SandGrain(p);
+            dens *= SandGrain(p, uvw);
             if (dens < 1e-4)
                 continue;
         } else {

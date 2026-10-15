@@ -27,5 +27,6 @@ layout(set = 0, binding = 0) uniform SmokeFrame {
 layout(set = 0, binding = 6, std430) readonly buffer SmokeBounds { uvec4 bounds[]; } SB;
 
 const float kSmokeFlowMax = 4.0;                // the flow image's range (world / s; rvk/smoke.cpp kFlowMax)
+const float kSandFlowMax = 16.0;                // ... the sand volume's (rvk/smoke.cpp kSandFlowMax)
 
 float SmokeViewZ(float d) { return S.proj.y / (min(d, 0.9999999) - S.proj.x); }
