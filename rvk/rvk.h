@@ -1849,7 +1849,7 @@ private:
     double m_stormTintSeen = -1e9;               // when (m_frameClock)
     float m_sand = 0.0f;                         // 0 .. 1: how thick the storm's air (eased)
     float m_sandColour[3] = {0.75f, 0.47f, 0.19f};   // its colour (linear)
-    float m_sandHaze = 1.0f;                     // RVK_SandHaze: x
+    float m_sandHaze = 0.1f;                     // RVK_SandHaze: x
     float m_sandBlow = 1.0f;                     // RVK_SandBlow: the blowing sand round the camera (smoke.cpp), x
     float m_sandForce = 0.0f;                    // RVK_SandForce: a sand (ash) storm this strong whatever the game's weather
                                                  // (1: the game's full one; 0: the game's)

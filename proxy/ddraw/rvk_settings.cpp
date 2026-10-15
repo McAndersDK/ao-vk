@@ -137,7 +137,7 @@ Setting g_settings[] = {
     {"RVK_RainBright", "Rain: brightness",                                         "Experimental",     Float, 0, 3, 0.05f, 1, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_WindStorm",  "Storm wind: how hard storms blow - grass, plants, trees and leaves (0: as on a calm day)", "Experimental", Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_StormTint",  "The game's storm tint: its flat sheet over the screen in sand and ash storms (off: left out)", "Experimental", Bool, 0, 1, 1, 0, nullptr, 0, "RVK_WeatherOn"},
-    {"RVK_SandHaze",   "Sand and ash storms: how thick the air (our own, in place of the game's tint), x (0: none)", "Experimental", Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
+    {"RVK_SandHaze",   "Sand and ash storms: how thick the air (our own, in place of the game's tint), x (0: none)", "Experimental", Float, 0, 3, 0.05f, 0.1f, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_SandForce",  "Sand and ash storms: force one this strong (1 = the game's full storm; 0 = the game's weather)", "Experimental", Float, 0, 2, 0.05f, 0, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_SandAsh",    "Sand and ash storms: the forced one is an ash storm (grey) instead of sand", "Experimental", Bool, 0, 1, 1, 0, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_SandBlow",   "Sand and ash storms: sand blowing round you, simulated - streaks, eddies, dust devils, kicked up by feet (x; 0: none)", "Experimental", Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
