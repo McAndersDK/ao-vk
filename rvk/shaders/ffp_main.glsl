@@ -648,11 +648,11 @@ void main()
         if (dot(FL.sunColor.rgb, FL.sunColor.rgb) > 0.0 && len2 > 0.0) {
             float ndl = max(dot(normalize(n), -normalize(FL.sunDir.xyz)), 0.0);
             if ((C.flags.x & F_SHADOWTEX) != 0u) {
-                gSunShare = 0.6 * ndl * texShade;
+                gSunShare = 0.6 * ndl * texShade * (1.0 - FL.windFrame.z);
             } else {
                 const vec3 kLuma = vec3(0.3, 0.59, 0.11);
                 float sunPart = dot(vDiffuse.rgb * FL.sunColor.rgb, kLuma) * ndl * sunScale;
-                gSunShare = clamp(sunPart / max(dot(lit + local, kLuma), 1e-3), 0.0, 1.0);
+                gSunShare = clamp(sunPart * (1.0 - FL.windFrame.z) / max(dot(lit + local, kLuma), 1e-3), 0.0, 1.0);
             }
         }
         if ((C.flags.x & F_OVERBRIGHT) != 0u) {
