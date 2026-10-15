@@ -587,6 +587,7 @@ public:
     struct SmokeParams {
         bool enable = false;                     // RVK_SmokeOn
         uint32_t quality = 2;                    // RVK_SmokeQual: a box's cells a side at most: 1 64, 2 96, 3 128
+        uint32_t sandCells = 0;                  // RVK_SandRes: the sand volume's cells a side (0: by quality)
         float resolution = 12.0f;               // RVK_SmokeRes: cells per world unit (a bigger box has more)
         float density = 1.0f;                   // RVK_SmokeThick: how thick, x
         float stir = 1.0f;                      // RVK_SmokeStir: how much characters move it (0 not at all)

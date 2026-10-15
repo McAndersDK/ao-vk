@@ -1150,6 +1150,7 @@ bool g_grassBenchStorm = false;   // --grass-bench-storm: AO's sandstorm tint (a
 bool g_sandStorm = false;         // --sand-storm: the grass bench in a desert sandstorm (sandy ground, the game's tint,
                                   // the new weather without rain: our haze and blowing sand)
 float g_sandBlow = 1.0f;          // --sand-blow X: RVK_SandBlow
+uint32_t g_sandRes = 0;           // --sand-res N: RVK_SandRes
 float g_sandForce = 0.0f;         // --sand-force X: RVK_SandForce
 bool g_sandAsh = false;           // --sand-ash: RVK_SandAsh
 bool g_grassBenchStill = false;   // --grass-bench-still: the camera stays where it starts (to watch the wind)
@@ -3726,6 +3727,7 @@ int main(int argc, char** argv)
         else if (a == "--grass-bench-storm") g_grassBenchStorm = true;
         else if (a == "--sand-storm") { g_grassFieldOn = g_grassBench = g_grassBenchStorm = g_sandStorm = true; hdr = true; }
         else if (a == "--sand-blow" && i + 1 < argc) g_sandBlow = float(std::atof(argv[++i]));
+        else if (a == "--sand-res" && i + 1 < argc) g_sandRes = uint32_t(std::atoi(argv[++i]));
         else if (a == "--sand-force" && i + 1 < argc) g_sandForce = float(std::atof(argv[++i]));
         else if (a == "--sand-ash") g_sandAsh = true;
         else if (a == "--grass-bench-platform") g_grassBenchPlatform = true;
@@ -3873,6 +3875,11 @@ int main(int argc, char** argv)
         smoke.detail = g_smokeWisps;
         smoke.half = g_smokeHalf;
         smoke.opacity = g_smokeOpaque;
+        smoke.sandCells = g_sandRes;
+        dev.SetSmokeParams(smoke);
+    } else if (g_sandRes) {
+        Device::SmokeParams smoke;
+        smoke.sandCells = g_sandRes;
         dev.SetSmokeParams(smoke);
     }
     if (g_rainForce > 0.0f || g_sandStorm || g_sandForce > 0.0f) {

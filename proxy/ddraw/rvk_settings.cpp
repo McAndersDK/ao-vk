@@ -140,6 +140,7 @@ Setting g_settings[] = {
     {"RVK_SandHaze",   "Sand and ash storms: how thick the air (our own, in place of the game's tint), x (0: none)", "Experimental", Float, 0, 3, 0.05f, 0.1f, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_SandForce",  "Sand and ash storms: force one this strong (1 = the game's full storm; 0 = the game's weather)", "Experimental", Float, 0, 2, 0.05f, 0, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_SandAsh",    "Sand and ash storms: the forced one is an ash storm (grey) instead of sand", "Experimental", Bool, 0, 1, 1, 0, nullptr, 0, "RVK_WeatherOn"},
+    {"RVK_SandRes",    "Sand and ash storms: the blowing sand's cells a side (its 32-unit box; finer costs more; 0: by RVK_SmokeQual - 48, 64, 80)", "Experimental", Choice, 0, 128, 1, 0, nullptr, 0, "RVK_WeatherOn", "0 48 64 80 96 112 128"},
     {"RVK_SandBlow",   "Sand and ash storms: sand blowing round you, simulated - streaks, eddies, dust devils, kicked up by feet (x; 0: none)", "Experimental", Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
 
     {"RVK_SmokeOn",    "Simulated smoke (needs HDR)",  "Experimental",    Bool,  0, 1, 1, 0, nullptr, 0},
@@ -535,10 +536,11 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
         w.brightness = V("RVK_RainBright");
         d->SetWeatherParams(w);
     }
-    else if (std::strncmp(n, "RVK_Smoke", 9) == 0) {
+    else if (std::strncmp(n, "RVK_Smoke", 9) == 0 || std::strcmp(n, "RVK_SandRes") == 0) {
         rvk::Device::SmokeParams s;
         s.enable = V("RVK_SmokeOn") != 0.0f;
         s.quality = uint32_t(V("RVK_SmokeQual"));
+        s.sandCells = uint32_t(V("RVK_SandRes"));
         s.resolution = V("RVK_SmokeRes");
         s.density = V("RVK_SmokeThick");
         s.stir = V("RVK_SmokeStir");

@@ -76,8 +76,14 @@ struct SandHeader {
     float corner[4], wind[4], air[4], devil[4], devil2[4], devil3[4], streaks[4];
 };
 
-// The sand volume's cells a side, by RVK_SmokeQual.
-uint32_t SandCells(const Device::SmokeParams& P) { return P.quality <= 1 ? 48u : P.quality == 2 ? 64u : 80u; }
+// The sand volume's cells a side: RVK_SandRes, or by RVK_SmokeQual.
+constexpr uint32_t kSandCellsMax = 128;
+uint32_t SandCells(const Device::SmokeParams& P)
+{
+    if (P.sandCells)
+        return std::clamp((P.sandCells + 3u) / 4u * 4u, 32u, kSandCellsMax);   // (a multiple of 4: the flow image's half)
+    return P.quality <= 1 ? 48u : P.quality == 2 ? 64u : 80u;
+}
 
 // Its box: round source.pos (x z the middle, y the floor), whole cells from the world's origin - moving with the camera,
 // its contents move by whole cells (no blur from the shift).
@@ -1003,7 +1009,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
     for (float& s : sun) s /= sl;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_smokeSimPipeline);
     uint32_t groups = 0;
-    EnsureRingSpace(live.size() * (sizeof(SmokeBodies) + sizeof(SandHeader) + 512) + 80u * 80u * 8u + 1024);
+    EnsureRingSpace(live.size() * (sizeof(SmokeBodies) + sizeof(SandHeader) + 512) + kSandCellsMax * kSandCellsMax * 8u + 1024);
     Frame& f = m_frames[m_frameIndex];
     // Which volumes step this frame: warming up ones every frame; of the others those due, the most overdue first, as
     // many as keep them all stepping every kSimStep or so - each frame about the same work, not two volumes' steps in
