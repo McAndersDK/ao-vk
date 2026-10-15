@@ -1594,6 +1594,23 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         else
             ArgbTo4(m_rs[d3d::RS_AMBIENT], sf.ambient);
         sf.ambient[3] = std::clamp(float(v.n) * 0.75f, 32.0f, 96.0f);   // (the march's steps: about a cell each)
+        // The sand's colour such that, as typically lit (smoke.frag: the sky's light ~0.84, the sun's ~0.42 at
+        // RVK_SandContrast 1), it is the haze's - the same dusty air. Else (the user) the sand in front of distant
+        // hills laid a paler or darker film of another tint over the haze on them, and at night it went dark grey
+        // (lit by the night's dim blue-grey sky) where the haze and the land stay sandy. Its light and shade stay
+        // as variation about the haze's colour.
+        if (sand) {
+            float haze[8];
+            SandHaze(haze);
+            const float k = std::max(m_sandContrast, 0.25f);
+            const float sky = std::max((0.45f / k + (1.0f - 0.45f / k) * 0.7f) * (1.0f - 0.15f * std::clamp(k - 1.0f, 0.0f, 1.0f)), 0.3f);
+            const float sunPart = 0.75f * 0.8f * 0.7f * (0.7f + 0.3f * k);
+            for (int i = 0; i < 3; ++i) {
+                const float sun = m_shadowValid ? m_shadowSunColor[i] : m_frameSunColor[i];
+                const float typical = std::max(sf.ambient[i] * sky + sun * sunPart, 0.02f);
+                if (haze[3] > 0.0f) sf.colour[i] = std::min(haze[i] / typical, 8.0f);
+            }
+        }
         sf.proj[0] = m_proj.m[2][2];
         sf.proj[1] = m_proj.m[3][2];
         sf.proj[2] = m_proj.m[0][0];
