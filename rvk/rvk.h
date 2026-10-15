@@ -322,7 +322,9 @@ public:
     void SetWindStorm(float scale) { m_windStormScale = scale; }   // RVK_WindStorm (wind.cpp)
     void SetStormTint(bool on) { m_stormTint = on; }               // RVK_StormTint (Draw: the game's storm sheet)
     void SetSandHaze(float amount) { m_sandHaze = amount; }        // RVK_SandHaze (wind.cpp)
+    void SetSandBlow(float amount) { m_sandBlow = amount; }        // RVK_SandBlow (smoke.cpp: the sand volume)
     void SandHaze(float out[8]) const;                             // the tone mapping's sand: dust, dust2
+    bool SmokeCoverValid() const { return m_smokeHalf && m_smokeHalfFrame == m_frameNumber; }
     // Grass and plants bending out of the way of characters walking through them (0 = off; scales reach and bend).
     void SetGrassPush(float strength) { m_grassPush = strength; m_frameLightsDirty = true; }
     // Plants' big quads split into pieces for smooth bending (0 = off; 1 = pieces about 0.3 units across).
@@ -1847,6 +1849,21 @@ private:
     float m_sand = 0.0f;                         // 0 .. 1: how thick the storm's air (eased)
     float m_sandColour[3] = {0.75f, 0.47f, 0.19f};   // its colour (linear)
     float m_sandHaze = 1.0f;                     // RVK_SandHaze: x
+    float m_sandBlow = 1.0f;                     // RVK_SandBlow: the blowing sand round the camera (smoke.cpp), x
+    // The sand volume (smoke.cpp UpdateSandVolume): a smoke volume round the camera in a sand or ash storm.
+    struct SandDevil {
+        float pos[3] = {0, 0, 0};                // its foot (world)
+        float radius = 1.2f, spin = 0.0f, age = 0.0f, life = 0.0f;   // life 0: none
+        float drift[2] = {0, 0};                 // how it wanders (world / s)
+        float vel[2] = {0, 0};                   // how it travels (world / s)
+    };
+    SandDevil m_sandDevil;
+    std::vector<float> m_sandGround;             // per column: the ground's height (box units), how much sand it gives
+    float m_sandGroundCorner[3] = {1e30f, 0, 0}; // ... for the box there
+    uint32_t m_sandGroundN = 0;
+    uint64_t m_sandGroundFrame = 0;              // ... made then (made again now and then: the ground comes in)
+    uint32_t m_sandRandom = 0x9E3779B9u;
+    bool SandActive() const { return m_sand > 0.01f && m_sandBlow > 0.0f; }
     float m_rainWind[3] = {0, 0, 0};
     double m_rainClock = 0.0;                    // the rain's own time (s), for the drops' fall
     double m_rainLastClock = -1.0;
@@ -2018,12 +2035,15 @@ private:
     VkPipelineLayout m_smokeUpLayout = VK_NULL_HANDLE;
     Texture* m_smokeHalf = nullptr;              // RVK_SmokeHalf: the smoke at half size (premultiplied)
     Texture* m_smokeHalfDepth = nullptr;         // ... and the view depth each pixel was marched to (R)
+    uint64_t m_smokeHalfFrame = ~0ull;           // the frame m_smokeHalf was drawn (the tone mapping's sand: its cover)
     bool CreateSmokeResources(std::string* error);
     void DestroySmokeResources();
     void DestroySmokeImages();
     bool MakeSmokeImage(VkFormat format, uint32_t n, SmokeImage& out);
     void RenderSmoke(VkCommandBuffer cmd);
     void UpdateSmokeDrift(double now);
+    void UpdateSandVolume(double now, float dt);
+    void MakeSandGround(const float corner[3], float size, uint32_t n);
     void UpdateWaterReady();
     const WaterGrid* WaterGridFor(uint32_t segments);
     WaterMap* WaterMapFor(const WaterVertex* v, uint32_t count, const uint16_t* idx, uint32_t icount,
@@ -2277,7 +2297,7 @@ private:
                m_dofPrefilterPipeline = VK_NULL_HANDLE, m_dofTilesPipeline = VK_NULL_HANDLE,
                m_dofGatherPipeline = VK_NULL_HANDLE, m_dofFinalPipeline = VK_NULL_HANDLE;
     bool RenderDof(VkCommandBuffer cmd, bool bloom, bool ao, bool gi, bool volume, const float tonemapParams[16]);
-    static constexpr uint32_t kTonemapInputs = 13;   // occlusion.glsl's bindings
+    static constexpr uint32_t kTonemapInputs = 14;   // occlusion.glsl's bindings
     void TonemapInputsPass(VkCommandBuffer cmd, Texture* dst, VkPipeline pipeline, Texture* scene, bool bloom, bool ao,
                            bool gi, bool volume, const float params[16]);
     void MakeDepthReadable(VkCommandBuffer cmd);

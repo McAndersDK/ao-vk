@@ -1147,6 +1147,9 @@ int g_grassBenchLoading = 0;      // --grass-bench-loading N: the ground's textu
 bool g_grassBenchLoadingNull = false;   // --grass-bench-loading-null: ... drawn untextured instead
 bool g_grassBenchPlatform = false;  // --grass-bench-platform: a flat slab lying on the ground ahead (no grass under it)
 bool g_grassBenchStorm = false;   // --grass-bench-storm: AO's sandstorm tint (a depth-writing ZFUNC ALWAYS sprite)
+bool g_sandStorm = false;         // --sand-storm: the grass bench in a desert sandstorm (sandy ground, the game's tint,
+                                  // the new weather without rain: our haze and blowing sand)
+float g_sandBlow = 1.0f;          // --sand-blow X: RVK_SandBlow
 bool g_grassBenchStill = false;   // --grass-bench-still: the camera stays where it starts (to watch the wind)
 bool g_terrainPbr = false;        // --terrain-pbr: the bench's ground texture gets a PBR material (a glossy path through
                                   // rough grass), per-pixel lighting, no grass field: the ground's PBR (MAT_BASE) path
@@ -1183,7 +1186,8 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
     std::vector<uint32_t> grassPixels(64 * 64);
     for (int y = 0; y < 64; ++y)
         for (int x = 0; x < 64; ++x)
-            grassPixels[y * 64 + x] = (x >= 26 && x < 38) ? 0xFF8A6A4A : ((x / 4 + y / 4) & 1 ? 0xFF3C6A2A : 0xFF2E5320);
+            grassPixels[y * 64 + x] = g_sandStorm ? ((x / 4 + y / 4) & 1 ? 0xFFC8A46E : 0xFFBE9862)
+                                    : (x >= 26 && x < 38) ? 0xFF8A6A4A : ((x / 4 + y / 4) & 1 ? 0xFF3C6A2A : 0xFF2E5320);
     // (Loading: a game draws ground whose texture isn't in yet with a stand-in, then uploads the picture.)
     const std::vector<uint32_t> standIn(64 * 64, 0xFF3C6A2A);
     Texture* grassGround = dev.CreateTexture(64, 64, g_grassBenchLoading > 0 ? standIn.data() : grassPixels.data());
@@ -3718,6 +3722,8 @@ int main(int argc, char** argv)
         else if (a == "--grass-bench-still") g_grassBenchStill = true;
         else if (a == "--terrain-pbr") { g_terrainPbr = g_grassBench = g_grassBenchStill = true; hdr = true; }
         else if (a == "--grass-bench-storm") g_grassBenchStorm = true;
+        else if (a == "--sand-storm") { g_grassFieldOn = g_grassBench = g_grassBenchStorm = g_sandStorm = true; hdr = true; }
+        else if (a == "--sand-blow" && i + 1 < argc) g_sandBlow = float(std::atof(argv[++i]));
         else if (a == "--grass-bench-platform") g_grassBenchPlatform = true;
         else if (a == "--grass-bench-loading" && i + 1 < argc) g_grassBenchLoading = std::atoi(argv[++i]);
         else if (a == "--grass-bench-loading-null") g_grassBenchLoadingNull = true;
@@ -3865,12 +3871,13 @@ int main(int argc, char** argv)
         smoke.opacity = g_smokeOpaque;
         dev.SetSmokeParams(smoke);
     }
-    if (g_rainForce > 0.0f) {
+    if (g_rainForce > 0.0f || g_sandStorm) {
         Device::WeatherParams weather;
         weather.enable = true;
         weather.force = g_rainForce;
         dev.SetWeatherParams(weather);
     }
+    dev.SetSandBlow(g_sandBlow);
     dev.SetTonemap(knee, 1.0f);
     dev.SetBloom(bloom, 1.0f);
     dev.SetEffectGlow(effectGlow);

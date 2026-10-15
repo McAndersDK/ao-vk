@@ -10,6 +10,12 @@
 // volumes are kept for the next. The velocity and the density are kept in pairs per volume (one read, one written,
 // swapped each step); the curl, the divergence and the pressure are scratch, shared by all. A volume steps about kSimStep apart whatever the frame
 // rate; its drawing blends its last two states (the look image).
+//
+// The sand volume (RVK_SandBlow, in a sand or ash storm - the game's tint, wind.cpp): one more volume, round the camera,
+// with no source: the storm's wind blows through it, bringing sand in over its walls in streaks; the ground under it
+// (the ground grass captures; flat under the camera's character without it) is solid and gives sand off where it is
+// bare, skimming along it; now and then a dust devil whirls some up; characters' feet kick it up. It moves with the
+// camera a whole cell at a time, its floor under the lowest ground in it.
 #include "internal.h"
 
 #include <algorithm>
@@ -54,6 +60,55 @@ constexpr float kSimFar = 40.0f;                // between its last two states; 
 constexpr uint32_t kNoiseSize = 64;             // the wisps' noise image (cells a side)
 constexpr float kFlowMax = 4.0f;                // the flow image's range (world / s; smoke_common.glsl kSmokeFlowMax)
 constexpr float kExtinction = 3.2f;             // per world unit at density 1 (x RVK_SmokeThick)
+
+constexpr uint64_t kSandKey = 0x4000000053414E44ull;   // the sand volume's key (bit 62: not a game pointer, not a drift
+                                                       // cloud's)
+constexpr float kSandBox = 32.0f;               // its box (world units a side)
+constexpr float kSandSettle = 0.35f;            // how fast its sand settles (world / s)
+
+// The sand volume's block (smoke_sim.comp Sand, std430), then its columns' ground (2 floats each); a smoke volume's
+// all 0.
+struct SandHeader {
+    float corner[4], wind[4], air[4], devil[4], devil2[4], devil3[4];
+};
+
+// The sand volume's cells a side, by RVK_SmokeQual.
+uint32_t SandCells(const Device::SmokeParams& P) { return P.quality <= 1 ? 48u : P.quality == 2 ? 64u : 80u; }
+
+// Its box: round source.pos (x z the middle, y the floor), whole cells from the world's origin - moving with the camera,
+// its contents move by whole cells (no blur from the shift).
+void SandCorner(const Device::SmokeSource& s, uint32_t n, float out[3])
+{
+    const float h = s.size / float(n);
+    out[0] = std::floor((s.pos[0] - 0.5f * s.size) / h) * h;
+    out[1] = std::floor(s.pos[1] / h) * h;
+    out[2] = std::floor((s.pos[2] - 0.5f * s.size) / h) * h;
+}
+
+// The blowing sand's colour (x the light on it): the storm's, paler, as bright as the haze it is part of once lit.
+float SandLit(const float colour[3], int i)
+{
+    const float luma = 0.3f * colour[0] + 0.59f * colour[1] + 0.11f * colour[2];
+    return 1.5f * (colour[i] + (luma - colour[i]) * 0.3f);
+}
+
+uint32_t NextRandom(uint32_t& x)
+{
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    return x;
+}
+float Random01(uint32_t& x) { return float(NextRandom(x) >> 8) / 16777216.0f; }
+
+// The storm's wind through the sand volume (world / s, x z): ~3.5 on a calm day's x1 .. ~10 in a full storm, rising and
+// falling.
+void SandWind(const float dir[2], float strength, double t, float out[2])
+{
+    const float speed = 3.5f * strength * float(1.0 + 0.25 * std::sin(t * 0.9) + 0.15 * std::sin(t * 2.3 + 1.7));
+    out[0] = dir[0] * speed;
+    out[1] = dir[1] * speed;
+}
 
 constexpr uint32_t kSmokeBodies = 8;            // characters stirring a volume (smoke_sim.comp Bodies)
 constexpr float kBodyRadius = 0.35f;            // a character's (world)
@@ -333,17 +388,18 @@ bool Device::CreateSmokeResources(std::string* error)
                    error))
             return false;
     }
-    // The simulation: 0, 1, 10 sampled; 2..9, 12 and 14 storage images; 11 the characters; 13 the bounds.
+    // The simulation: 0, 1, 10 sampled; 2..9, 12 and 14 storage images; 11 the characters; 13 the bounds; 15 the sand
+    // volume's block.
     {
-        VkDescriptorSetLayoutBinding b[15] = {};
-        for (uint32_t i = 0; i < 15; ++i)
+        VkDescriptorSetLayoutBinding b[16] = {};
+        for (uint32_t i = 0; i < 16; ++i)
             b[i] = {i, i < 2 || i == 10 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1,
                     VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
         b[11].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        b[13].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        b[13].descriptorType = b[15].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         VkDescriptorSetLayoutCreateInfo sl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         sl.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-        sl.bindingCount = 15;
+        sl.bindingCount = 16;
         sl.pBindings = b;
         if (!Check(vkCreateDescriptorSetLayout(m_device, &sl, nullptr, &m_smokeSimSetLayout), "smoke sim set", error))
             return false;
@@ -557,7 +613,7 @@ void Device::UpdateSmokeDrift(double now)
             continue;
         for (size_t k = 0; k < m_smokeVolumes.size(); ++k) {
             const SmokeVolume& p = m_smokeVolumes[k];
-            if (!p.key || p.parent || p.age < kWarmUp || now - p.lastSeen > 0.25)
+            if (!p.key || p.parent || p.key == kSandKey || p.age < kWarmUp || now - p.lastSeen > 0.25)
                 continue;
             const float* c = p.corner;
             const float sz = p.source.size;
@@ -613,6 +669,139 @@ void Device::UpdateSmokeDrift(double now)
     }
 }
 
+// The sand volume's ground: each column's height (from the ground the grass captures; else the floor's estimate) and how
+// much sand it gives (bare ground all, green ground a quarter).
+void Device::MakeSandGround(const float corner[3], float size, uint32_t n)
+{
+    m_sandGround.assign(size_t(n) * n * 2, 0.0f);
+    const float h = size / float(n);
+    float guess = 0.0f;                          // (unknown ground: as high as the floor's estimate)
+    for (const SmokeVolume& v : m_smokeVolumes)
+        if (v.key == kSandKey) guess = v.source.pos[1] + 1.5f;
+    for (uint32_t z = 0; z < n; ++z)
+        for (uint32_t x = 0; x < n; ++x) {
+            float y = guess, feed = 1.0f;
+            uint32_t colour = 0;
+            if (GroundAt(corner[0] + (float(x) + 0.5f) * h, corner[2] + (float(z) + 0.5f) * h, &y, &colour, nullptr)) {
+                const float r = float((colour >> 16) & 0xFF), g = float((colour >> 8) & 0xFF), b = float(colour & 0xFF);
+                if (g > r * 1.05f && g > b) feed = 0.25f;
+            }
+            float* c = &m_sandGround[(size_t(z) * n + x) * 2];
+            c[0] = (y - corner[1]) / size;
+            c[1] = feed;
+        }
+    std::memcpy(m_sandGroundCorner, corner, sizeof(m_sandGroundCorner));
+    m_sandGroundN = n;
+    m_sandGroundFrame = m_frameNumber;
+}
+
+// The sand volume (RVK_SandBlow): kept round the camera while a sand or ash storm blows; when it ends the volume is let
+// go (it fades as a gone source's). Its dust devil comes and goes.
+void Device::UpdateSandVolume(double now, float dt)
+{
+    if (!SandActive()) {
+        m_sandDevil.life = 0.0f;
+        return;
+    }
+    SmokeVolume* v = nullptr;
+    for (SmokeVolume& x : m_smokeVolumes)
+        if (x.key == kSandKey) v = &x;
+    if (!v) {
+        for (SmokeVolume& x : m_smokeVolumes)
+            if (!x.key && !v) v = &x;
+        if (!v && m_smokeVolumes.size() < kSmokeMax)
+            v = &m_smokeVolumes.emplace_back();
+        if (!v) {                                // all taken: the farthest smoke's (the sand round the camera first)
+            float farthest = -1.0f;
+            for (SmokeVolume& x : m_smokeVolumes) {
+                const float d = std::hypot(x.source.pos[0] - m_frameEye[0], x.source.pos[2] - m_frameEye[2]);
+                if (d > farthest) { farthest = d; v = &x; }
+            }
+        }
+        if (!v)
+            return;
+        v->key = kSandKey;
+        v->parent = 0;
+        v->fresh = true;
+        v->age = 0.0f;
+        v->simWait = v->lastStep = 0.0f;
+        v->source = SmokeSource{};
+        v->source.pos[1] = 1e30f;                // (placed below)
+        Log("sand: blowing sand round the camera (storm %.2f, RVK_SandBlow %.2f; %u^3 cells, %.0f units a side)",
+            double(m_sand), double(m_sandBlow), SandCells(m_smokeParams), double(kSandBox));
+    }
+    SmokeSource& s = v->source;
+    s.size = kSandBox;
+    s.life = 4.0f;
+    s.rate = s.heat = s.speed = 0.0f;
+    // Round the camera, a little ahead of it.
+    float fx = m_frameForward[0], fz = m_frameForward[2];
+    const float fl = std::hypot(fx, fz);
+    if (fl > 1e-3f) { fx /= fl; fz /= fl; } else { fx = fz = 0.0f; }
+    s.pos[0] = m_frameEye[0] + fx * kSandBox * 0.15f;
+    s.pos[2] = m_frameEye[2] + fz * kSandBox * 0.15f;
+    // Its floor: under the lowest ground known in it (else under the character nearest the camera, or the camera);
+    // moved only when that is a unit or more off (a still box keeps its sand).
+    float low = 1e30f;
+    for (int j = 0; j <= 8; ++j)
+        for (int i = 0; i <= 8; ++i) {
+            float y;
+            if (GroundAt(s.pos[0] + (float(i) / 8.0f - 0.5f) * kSandBox, s.pos[2] + (float(j) / 8.0f - 0.5f) * kSandBox, &y,
+                         nullptr, nullptr))
+                low = std::min(low, y);
+        }
+    if (low > 1e29f) {
+        low = m_frameEye[1] - 2.0f;
+        float best = 12.0f;
+        for (const WaterBody& b : m_waterBodies) {
+            const float d = std::hypot(b.x - m_frameEye[0], b.z - m_frameEye[2]);
+            if (d < best) { best = d; low = b.minY; }
+        }
+    }
+    const float floorY = low - 1.5f;
+    if (std::fabs(floorY - s.pos[1]) > 1.0f)
+        s.pos[1] = floorY;
+    v->lastSeen = now;
+
+    // The dust devil: now and then (about every 15 s in a full storm) one comes in from the upwind side of the box,
+    // carried through by the wind about as fast, wandering a little; it whirls for 6..14 s or until it leaves the box.
+    SandDevil& d = m_sandDevil;
+    if (d.life > 0.0f) {
+        d.age += dt;
+        float wind[2];
+        SandWind(m_windDir, m_windStrength, m_windTime, wind);
+        d.vel[0] = 0.8f * wind[0] + d.drift[0];
+        d.vel[1] = 0.8f * wind[1] + d.drift[1];
+        d.pos[0] += d.vel[0] * dt;
+        d.pos[2] += d.vel[1] * dt;
+        float y;
+        if (GroundAt(d.pos[0], d.pos[2], &y, nullptr, nullptr))
+            d.pos[1] = y;
+        if (d.age > d.life || std::fabs(d.pos[0] - s.pos[0]) > 0.45f * kSandBox || std::fabs(d.pos[2] - s.pos[2]) > 0.45f * kSandBox)
+            d.life = 0.0f;
+    } else if (v->age > kWarmUp && (Random01(m_sandRandom) < dt * std::min(m_sand * 2.5f, 1.0f) / 15.0f ||
+                                    (getenv("RANDYVK_SAND_DEVIL") && d.age == 0.0f))) {
+        // (Tests, RANDYVK_SAND_DEVIL: one at once, coming past 10 units ahead of the camera.)
+        const bool test = d.age == 0.0f && getenv("RANDYVK_SAND_DEVIL");
+        const float across = test ? 0.0f : (Random01(m_sandRandom) - 0.5f) * 0.6f * kSandBox;
+        const float bx = test ? m_frameEye[0] + fx * 10.0f : s.pos[0], bz = test ? m_frameEye[2] + fz * 10.0f : s.pos[2];
+        const float back = test ? 12.0f : 0.38f * kSandBox;
+        d.pos[0] = bx - m_windDir[0] * back - m_windDir[1] * across;
+        d.pos[2] = bz - m_windDir[1] * back + m_windDir[0] * across;
+        d.pos[1] = s.pos[1] + 1.5f;
+        GroundAt(d.pos[0], d.pos[2], &d.pos[1], nullptr, nullptr);
+        d.radius = 1.5f + 1.5f * Random01(m_sandRandom);   // (a few cells at least: the grid's ~0.5 units)
+        d.spin = (6.0f + 4.0f * Random01(m_sandRandom)) * (Random01(m_sandRandom) < 0.5f ? -1.0f : 1.0f);
+        d.life = 6.0f + 8.0f * Random01(m_sandRandom);
+        d.age = 1e-6f;
+        const float wa = Random01(m_sandRandom) * 6.2831853f;
+        d.drift[0] = 0.6f * std::cos(wa);
+        d.drift[1] = 0.6f * std::sin(wa);
+        Log("sand: a dust devil at %.1f %.1f %.1f, radius %.1f, for %.0f s", double(d.pos[0]), double(d.pos[1]),
+            double(d.pos[2]), double(d.radius), double(d.life));
+    }
+}
+
 // The smoke: simulated, then drawn over the finished scene (EndScene: its rendering just closed).
 void Device::RenderSmoke(VkCommandBuffer cmd)
 {
@@ -622,9 +811,15 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
     m_smokeLastClock = now;
     if (g_residual.readAt && m_frameNumber >= g_residual.readAt)
         LogSmokeResidual();
-    if (!P.enable || !m_smokeSimPipeline || !m_smokePipeline || !m_scene || !m_hdr || m_smokeVolumes.empty())
+    if (m_smokeSimPipeline && m_hdr)
+        UpdateSandVolume(now, dt);
+    const bool sandVolume = std::any_of(m_smokeVolumes.begin(), m_smokeVolumes.end(),
+                                        [](const SmokeVolume& v) { return v.key == kSandKey; });
+    if ((!P.enable && !sandVolume) || !m_smokeSimPipeline || !m_smokePipeline || !m_scene || !m_hdr ||
+        m_smokeVolumes.empty())
         return;
-    UpdateSmokeDrift(now);
+    if (P.enable)
+        UpdateSmokeDrift(now);
     // Gone sources whose smoke has faded give their volumes back.
     for (SmokeVolume& v : m_smokeVolumes)
         if (v.key && now - v.lastSeen > double(v.source.life) * 1.5 + 1.0)
@@ -636,9 +831,10 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
     // The nearest live ones, up to kSmokeSimMax, within range.
     std::vector<std::pair<float, SmokeVolume*>> live;
     for (SmokeVolume& v : m_smokeVolumes) {
-        if (!v.key)
+        if (!v.key || (!P.enable && v.key != kSandKey))
             continue;
-        const float d = std::hypot(v.source.pos[0] - eye[0], v.source.pos[1] - eye[1], v.source.pos[2] - eye[2]);
+        const float d = v.key == kSandKey ? 0.0f   // (round the camera: the nearest)
+                      : std::hypot(v.source.pos[0] - eye[0], v.source.pos[1] - eye[1], v.source.pos[2] - eye[2]);
         if (d < kSmokeRange + v.source.size)
             live.emplace_back(d, &v);
     }
@@ -650,7 +846,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
     // Each volume's cells a side: RVK_SmokeRes per world unit of its box (a long-lived source's tall box keeps its
     // detail), a multiple of 4, at most RVK_SmokeQual's. A volume whose count changed, or a scratch too small for
     // one, is made again - after the GPU is done with the old (rare: a source's box or the settings changed).
-    auto cells = [&](const SmokeVolume& v) { return SmokeCells(v.source.size, P); };
+    auto cells = [&](const SmokeVolume& v) { return v.key == kSandKey ? SandCells(P) : SmokeCells(v.source.size, P); };
     uint32_t scratch = 0;
     bool remake = false;
     for (auto& [d, v] : live) {
@@ -777,7 +973,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
     for (float& s : sun) s /= sl;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_smokeSimPipeline);
     uint32_t groups = 0;
-    EnsureRingSpace(live.size() * (sizeof(SmokeBodies) + 256) + 1024);
+    EnsureRingSpace(live.size() * (sizeof(SmokeBodies) + sizeof(SandHeader) + 512) + 80u * 80u * 8u + 1024);
     Frame& f = m_frames[m_frameIndex];
     // Which volumes step this frame: warming up ones every frame; of the others those due, the most overdue first, as
     // many as keep them all stepping every kSimStep or so - each frame about the same work, not two volumes' steps in
@@ -822,9 +1018,15 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         memory(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
         const bool fed = now - v.lastSeen < 0.25;           // a source gone: its smoke goes on, nothing added
+        const bool sand = v.key == kSandKey;
         float corner[3], shift[3], wind[2];
-        SmokeWind(s, m_rainWind, wind);
-        SmokeCorner(s, wind, corner);
+        if (sand) {
+            SandWind(m_windDir, m_windStrength, m_windTime, wind);
+            SandCorner(s, n, corner);
+        } else {
+            SmokeWind(s, m_rainWind, wind);
+            SmokeCorner(s, wind, corner);
+        }
         for (int i = 0; i < 3; ++i) {
             shift[i] = (corner[i] - v.corner[i]) / s.size;
             v.corner[i] = corner[i];
@@ -846,6 +1048,13 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         p.c[3] = 2.0f / std::max(s.life, 0.3f);            // (the game's sprites fade out over their life)
         p.d[0] = 2.5f;
         p.d[1] = 18.0f;
+        if (sand) {
+            std::memset(p.b, 0, sizeof(p.b));
+            std::memset(p.c, 0, sizeof(p.c));
+            p.c[3] = 0.12f;                                 // (it settles out slowly)
+            p.d[0] = 0.0f;
+            p.d[1] = 10.0f;
+        }
         p.d[2] = wind[0];
         p.d[3] = wind[1];
         std::memcpy(p.e, shift, sizeof(shift));
@@ -867,8 +1076,8 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         }
         // The characters in the box (last frame's, moved on by how they went), nearest the source first.
         SmokeBodies bodies{};
-        bodies.info[1] = P.stir;
-        if (P.stir > 0.0f) {
+        bodies.info[1] = sand ? 1.0f : P.stir;
+        if (bodies.info[1] > 0.0f) {
             const float ahead = float(std::clamp(now - m_waterBodiesTime, 0.0, 0.1));
             std::vector<std::pair<float, const WaterBody*>> in;
             for (const WaterBody& w : m_waterBodies) {
@@ -899,6 +1108,45 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         const VkDeviceSize bodiesOffset = Allocate(sizeof(SmokeBodies), 256, &bodiesCpu);
         std::memcpy(bodiesCpu, &bodies, sizeof(bodies));
         VkDescriptorBufferInfo bodiesInfo{f.ring, bodiesOffset, sizeof(SmokeBodies)};
+        // The sand volume's block and ground (a smoke volume's: zeros, the shader's smoke).
+        SandHeader sh{};
+        VkDeviceSize sandBytes = sizeof(SandHeader) + 16;
+        if (sand) {
+            if (m_sandGroundN != n || std::memcmp(m_sandGroundCorner, corner, sizeof(corner)) != 0 ||
+                m_frameNumber > m_sandGroundFrame + 30)
+                MakeSandGround(corner, s.size, n);
+            const float strength = std::min(m_sand * 2.5f, 1.0f) * m_sandBlow * (fed ? 1.0f : 0.0f);
+            std::memcpy(sh.corner, corner, sizeof(corner));
+            sh.corner[3] = 1.0f;
+            sh.wind[0] = wind[0];
+            sh.wind[1] = wind[1];
+            sh.wind[2] = kSandSettle;
+            sh.wind[3] = float(m_windTime);
+            sh.air[0] = 0.02f * strength;                   // (x kExtinction: ~0.06 a world unit at the ground)
+            sh.air[1] = 3.0f + 5.0f * std::min(m_sand * 2.5f, 1.0f);
+            sh.air[2] = 0.08f * strength;
+            sh.air[3] = 6.0f;
+            const SandDevil& dv = m_sandDevil;
+            if (dv.life > 0.0f) {
+                const float env = std::clamp(dv.age / 2.0f, 0.0f, 1.0f) * std::clamp((dv.life - dv.age) / 2.0f, 0.0f, 1.0f);
+                for (int i = 0; i < 3; ++i) sh.devil[i] = (dv.pos[i] - corner[i]) / s.size;
+                sh.devil[3] = dv.radius / s.size;
+                sh.devil2[0] = dv.spin * env;
+                sh.devil2[1] = 8.0f * env;
+                sh.devil2[2] = 0.25f * env * m_sandBlow;
+                sh.devil3[0] = dv.vel[0];
+                sh.devil3[1] = dv.vel[1];
+            }
+            sh.devil2[3] = 0.03f * m_sandBlow;
+            sandBytes = sizeof(SandHeader) + m_sandGround.size() * sizeof(float);
+        }
+        void* sandCpu = nullptr;
+        const VkDeviceSize sandOffset = Allocate(sandBytes, 256, &sandCpu);
+        std::memset(sandCpu, 0, size_t(sandBytes));
+        std::memcpy(sandCpu, &sh, sizeof(sh));
+        if (sand)
+            std::memcpy(static_cast<uint8_t*>(sandCpu) + sizeof(sh), m_sandGround.data(), m_sandGround.size() * sizeof(float));
+        VkDescriptorBufferInfo sandInfo{f.ring, sandOffset, sandBytes};
         const uint32_t c = v.cur, o = c ^ 1u;
         // Bindings: 0 velIn, 1 densIn (sampled); 2 velOut, 3 densOut, 4 curl, 5 pIn, 6 pOut, 7 div, 8 velRead, 9 look;
         // 10 the curl image sampled (MacCormack's forward step); 11 the characters; 12 the wisps' noise.
@@ -916,8 +1164,8 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
                 {}, {VK_NULL_HANDLE, v.flow.view, VK_IMAGE_LAYOUT_GENERAL},
             };
             VkDescriptorBufferInfo boundsInfo{m_smokeBounds, 0, VK_WHOLE_SIZE};
-            VkWriteDescriptorSet w[15] = {};
-            for (uint32_t i = 0; i < 15; ++i) {
+            VkWriteDescriptorSet w[16] = {};
+            for (uint32_t i = 0; i < 16; ++i) {
                 w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 w[i].dstBinding = i;
                 w[i].descriptorCount = 1;
@@ -930,7 +1178,10 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
             w[13].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             w[13].pImageInfo = nullptr;
             w[13].pBufferInfo = &boundsInfo;
-            vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_smokeSimLayout, 0, 15, w);
+            w[15].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w[15].pImageInfo = nullptr;
+            w[15].pBufferInfo = &sandInfo;
+            vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_smokeSimLayout, 0, 16, w);
             SimPush q = p;
             q.a[0] = float(stage);
             q.e[3] = e3;
@@ -1076,11 +1327,13 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         sf.camera[3] = TaaActive() ? 1.0f : 0.0f;
         std::memcpy(sf.box, v.corner, sizeof(v.corner));
         sf.box[3] = v.source.size;
+        const bool sand = v.key == kSandKey;
         ArgbTo4(v.source.colour, sf.colour);
         for (int i = 0; i < 3; ++i)
-            sf.colour[i] = std::max(sf.colour[i], 0.1f) * P.brightness;   // (black smoke dark grey: lit and shadowed,
-                                                                          //  not a flat shape)
-        sf.look[0] = std::clamp(P.opacity, 0.0f, 8.0f);
+            sf.colour[i] = sand ? SandLit(m_sandColour, i)  // (the storm's: as bright as the haze, lit)
+                                : std::max(sf.colour[i], 0.1f) * P.brightness;   // (black smoke dark grey: lit and
+                                                                                 //  shadowed, not a flat shape)
+        sf.look[0] = sand ? 1.0f : std::clamp(P.opacity, 0.0f, 8.0f);
         sf.look[1] = v.lastStep > 0.0f ? std::clamp(v.simWait / v.lastStep, 0.0f, 1.0f) : 1.0f;
         sf.info[0] = uint32_t(&v - m_smokeVolumes.data());
         sf.info[2] = v.n;
@@ -1128,12 +1381,13 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
             sf.info[1] = used;
         }
         sf.detail[0] = P.detail;
-        sf.detail[1] = 1.2f;
-        sf.detail[2] = 2.5f;
+        sf.detail[1] = sand ? 0.8f : 1.2f;
+        sf.detail[2] = sand ? 0.9f : 2.5f;              // (sand: coarser grains of wisp, faster)
         sf.detail[3] = float(v.key % 101u) * 0.137f;
         // (Fading in while it warms up; out over the last second before its volume is given back.)
         const float ending = float(double(v.source.life) * 1.5 + 1.0 - (now - v.lastSeen));
-        sf.colour[3] = kExtinction * P.density * std::clamp(v.age / kWarmUp, 0.0f, 1.0f) * std::clamp(ending, 0.0f, 1.0f);
+        sf.colour[3] = kExtinction * (sand ? 1.0f : P.density) * std::clamp(v.age / kWarmUp, 0.0f, 1.0f) *
+                       std::clamp(ending, 0.0f, 1.0f);
         if (m_terrainAmbient[3] > 0.5f)
             std::memcpy(sf.ambient, m_terrainAmbient, 12);
         else
@@ -1183,6 +1437,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         // weighed by how near their depths are to its own (an edge keeps the smoke on its side of it).
         for (Texture* t : halfTargets)
             Transition(cmd, t, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        m_smokeHalfFrame = m_frameNumber;
         const int x0 = std::max(int(std::floor(screenLo[0])) - 3, 0), y0 = std::max(int(std::floor(screenLo[1])) - 3, 0);
         const int x1 = std::min(int(std::ceil(screenHi[0])) + 3, int(fw)), y1 = std::min(int(std::ceil(screenHi[1])) + 3, int(fh));
         if (x1 > x0 && y1 > y0) {

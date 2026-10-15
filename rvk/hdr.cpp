@@ -561,7 +561,9 @@ void Device::TonemapInputsPass(VkCommandBuffer cmd, Texture* dst, VkPipeline pip
                                        {m_pointSampler, contact->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                        {m_linearSampler, m_lut[0]->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                        {m_linearSampler, m_lut[1]->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                       {m_pointSampler, m_glow->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+                                       {m_pointSampler, m_glow->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                       {m_linearSampler, SmokeCoverValid() ? m_smokeHalf->m_view : m_scene->m_view,
+                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
     static_assert(sizeof(images) / sizeof(images[0]) == kTonemapInputs, "occlusion.glsl bindings");
     VkWriteDescriptorSet w[kTonemapInputs] = {};
     for (uint32_t i = 0; i < kTonemapInputs; ++i) {

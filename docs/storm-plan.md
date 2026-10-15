@@ -65,5 +65,15 @@ Each phase playable on its own; demo scenes for each (the grass bench with a sto
   game's storm tint left out with the new weather (RVK_StormTint).
 - Phase 2a done: the sand/ash storm's air from the game's tint (its colour, alpha = strength): tone mapping dust haze,
   RVK_SandHaze. Staged randy31-storms1.dll (not in ao-wine.sh: 0.5.0's candidate is under test).
-- Next (phase 2b): the near simulated sand volume around the camera (smoke solver), dust devils, ground streaks
-  (GPU particles). Needs an in-game look at 2a first (the game's real tint colour / alpha in its sandstorms).
+- Phase 2b (2026-10-15): the sand volume (smoke.cpp UpdateSandVolume, smoke_sim.comp's sand mode; RVK_SandBlow): one
+  more smoke volume, 32 units a side round the camera (48/64/80 cells by RVK_SmokeQual), moving a whole cell at a time,
+  its floor under the lowest ground in it. The storm's wind (wind.cpp: a sandstorm now raises the storm's strength
+  too) blows through it and in over its walls with sand in streaks; the ground under each column (the ground grass
+  captures - flat under the camera's character with grass off) is solid and gives sand off where it is bare, skimming
+  along it; characters' feet kick it up; now and then a dust devil comes in from upwind, carried through by the wind,
+  whirling sand up into a column. The tone mapping's sand haze leaves what smoke covers at a near veil (it read the
+  sky's full veil before: a devil against the sky was painted over) - the half-size smoke image's cover, binding 13.
+  Demo: --sand-storm (the grass bench on sand, the game's tint, the new weather without rain), --sand-blow X;
+  RANDYVK_SAND_DEVIL=1 sends one past 10 units ahead at once. ~0.6 ms in the demo (960 x 960).
+- Next: an in-game look at 2a + 2b in a real sandstorm (the game's tint colour and alpha, the wind's speed, how
+  thick); ground streaks finer than the grid (GPU particles) if the volume's skimming sand is too coarse; then phase 3.

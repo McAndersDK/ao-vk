@@ -3,8 +3,8 @@
 // Once a frame (BeginFrame):
 // - Where it blows: the game's weather wind while it hands one over (its rain, VisualRain_t::process), else the sky's
 //   (SkyWind: turning slowly over hours); the direction turns towards it over some seconds, never snaps.
-// - How hard: calm on a fair day, harder under cloud, and in a storm (the rain, eased in over a few seconds) up to about
-//   three times as hard (RVK_WindStorm scales the storm's part), with gust fronts several times as strong.
+// - How hard: calm on a fair day, harder under cloud, and in a storm (the rain, or a sand or ash storm's tint, eased in
+//   over a few seconds) up to about three times as hard (RVK_WindStorm scales the storm's part), with gust fronts several times as strong.
 // - Its clock (m_windTime): every wave and gust front moves on it. It runs faster in a storm - accumulated, so a change
 //   of pace never makes the plants jump.
 #include "internal.h"
@@ -42,16 +42,6 @@ void Device::UpdateWind()
         m_windDir[1] = z / l;
     }
 
-    // How hard: the storm is the rain (rain.cpp eases it towards the game's weather), eased again.
-    const float stormTarget = std::clamp(m_rain, 0.0f, 1.0f);
-    const float ease = dt > 0.0f ? 1.0f - std::exp(-dt / kStormSeconds) : 1.0f;
-    m_storm += (stormTarget - m_storm) * ease;
-    if (m_storm < 1e-3f && stormTarget == 0.0f) m_storm = 0.0f;
-    const float storm = m_storm * std::max(m_windStormScale, 0.0f);
-    const float cloud = m_cloudParams.enable ? 0.25f * SkyCloudiness() : 0.0f;
-    m_windStrength = 1.0f + cloud + 1.8f * storm;
-    m_windGusts = 1.0f + 2.5f * storm;
-
     // A sand or ash storm: the game's tint, left out in Draw, says its colour and strength; eased in and out.
     const bool tint = now - m_stormTintSeen < 0.5;
     const float sandTarget = tint ? float(m_stormTintColour >> 24) / 255.0f : 0.0f;
@@ -65,6 +55,17 @@ void Device::UpdateWind()
         const float luma = 0.3f * rgb[0] + 0.59f * rgb[1] + 0.11f * rgb[2];
         for (int i = 0; i < 3; ++i) m_sandColour[i] = 1.3f * (luma + (rgb[i] - luma) * 0.5f);
     }
+
+    // How hard: the storm is the rain (rain.cpp eases it towards the game's weather) or the sand (the game's ~0.38 a full
+    // sandstorm), eased again.
+    const float stormTarget = std::clamp(std::max(m_rain, 2.5f * m_sand), 0.0f, 1.0f);
+    const float ease = dt > 0.0f ? 1.0f - std::exp(-dt / kStormSeconds) : 1.0f;
+    m_storm += (stormTarget - m_storm) * ease;
+    if (m_storm < 1e-3f && stormTarget == 0.0f) m_storm = 0.0f;
+    const float storm = m_storm * std::max(m_windStormScale, 0.0f);
+    const float cloud = m_cloudParams.enable ? 0.25f * SkyCloudiness() : 0.0f;
+    m_windStrength = 1.0f + cloud + 1.8f * storm;
+    m_windGusts = 1.0f + 2.5f * storm;
 
     // Its clock: faster in a storm.
     m_windTimePrev = m_windTime;
@@ -92,6 +93,7 @@ void Device::SandHaze(float out[8]) const
     out[4] = float(m_windTime);
     out[5] = 0.12f + 0.25f * std::min(m_storm + m_sand, 1.0f);
     out[6] = std::min(0.45f * m_sand * m_sandHaze, 0.6f);   // (the game's 0.38: a ~17% veil close by)
+    out[7] = SmokeCoverValid() ? 1.0f : 0.0f;
 }
 
 }  // namespace rvk

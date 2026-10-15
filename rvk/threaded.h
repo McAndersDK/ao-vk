@@ -126,6 +126,7 @@ public:
     void SetWindStorm(float scale);
     void SetStormTint(bool on);
     void SetSandHaze(float amount);
+    void SetSandBlow(float amount);
     void ProfileWindow(bool start, const std::string& label);
     void ProfileManualEnd();
     void SetSunSoftness(float s);

@@ -118,6 +118,13 @@ void main()
         // (Sand in the air right in front too: a veil at every distance, P.dust2.z, under the haze that thickens
         // with it.)
         float through = exp(-P.dust.w * dist * max(surge, 0.2)) * (1.0 - P.dust2.z * clamp(surge, 0.5, 1.5));
+        // Smoke and blowing sand (drawn over the scene without depth) are near: as much as covers the pixel, the veil
+        // of a few units' air - a dust devil against the sky stays in sight.
+        if (P.dust2.w > 0.5) {
+            float cover = texture(smokeCover, uv).a;
+            float near_ = exp(-P.dust.w * 6.0 * max(surge, 0.2)) * (1.0 - P.dust2.z * clamp(surge, 0.5, 1.5));
+            through = mix(through, near_, clamp(cover, 0.0, 1.0));
+        }
         c = mix(P.dust.rgb, c, clamp(through, 0.0, 1.0));
     }
     c = max((c + Volumetric() + glow) * P.params.y, vec3(0.0));

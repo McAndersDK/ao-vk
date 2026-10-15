@@ -12,6 +12,8 @@ layout(set = 0, binding = 9) uniform sampler2D contact; // half resolution: cont
 layout(set = 0, binding = 10) uniform sampler3D lutDay;  // colour grading lookup tables (identity unless loaded)
 layout(set = 0, binding = 11) uniform sampler3D lutNight;
 layout(set = 0, binding = 12) uniform sampler2D glowRaw; // full resolution: what additive effects added (the scene's glow)
+layout(set = 0, binding = 13) uniform sampler2D smokeCover;   // half resolution: the smoke drawn this frame (A: its
+                                                              // cover; P.dust2.w > 0.5 only)
 layout(push_constant) uniform Push {
     vec4 params;        // knee, exposure, bloom strength, bloom left on objects nearer than its light (-1: no depth)
     vec4 proj;          // D3D projection m[2][2], m[3][2] (view depth from the depth buffer), indirect light strength,
@@ -30,7 +32,8 @@ layout(push_constant) uniform Push {
     vec4 air3;          // rgb: the sun's (moon's) light through the air - golden, then red low
     // A sand or ash storm (rvk wind.cpp SandHaze): the air thick with it, from the game's own storm tint.
     vec4 dust;          // rgb: its colour (as the scene's light); w: its density (per world unit; 0: none)
-    vec4 dust2;         // x: the wind's clock; y: how much it surges with the gusts; z: the veil at every distance
+    vec4 dust2;         // x: the wind's clock; y: how much it surges with the gusts; z: the veil at every distance;
+                        // w: 1 = smokeCover holds this frame's smoke (blowing sand: near, not behind the sky's veil)
                         // (0..1); w: unused
 } P;
 

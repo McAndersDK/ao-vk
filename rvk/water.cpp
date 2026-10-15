@@ -692,7 +692,7 @@ void Device::WaterLog(const char* fmt, ...)
 // their velocity, for the water's disturbance field (StepWaterSim). Once a frame, before the scene draws.
 void Device::CollectWaterBodies()
 {
-    if (!m_waterParams.enable && !m_smokeParams.enable) {   // (the smoke is stirred by them too)
+    if (!m_waterParams.enable && !m_smokeParams.enable && !SandActive()) {   // (the smoke and sand are stirred by them too)
         m_waterBodies.clear();
         return;
     }

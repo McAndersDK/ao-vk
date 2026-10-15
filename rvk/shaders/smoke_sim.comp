@@ -15,6 +15,10 @@
 // Characters (B) stir it: the smoke in one moves with it, a moving one leaves eddies behind it.
 // Velocities in world units / s, the box P.a.w world units across; the box may move with its source (P.e.xyz: by how
 // much since last frame, in box units) - the contents stay where they are in the world.
+// The sand volume (Sand.corner.w = 1; rvk/smoke.cpp sand): a box round the camera in a sand or ash storm. No source,
+// no heat: the storm's wind blows through it (and in over its walls, with the sand it carries), the ground under each
+// column (Sand.ground) is solid and gives sand off where the wind lifts it, in streaks; sand settles; a dust devil
+// (Sand.devil) whirls it up; characters' feet kick it up.
 layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 
 layout(set = 0, binding = 0) uniform sampler3D velIn;            // filtered reads (moving things along)
@@ -57,6 +61,18 @@ layout(push_constant) uniform Params {
 // Each volume's cells with smoke in them (now or a step before), for the drawing: [2 slot] the lowest, [2 slot + 1]
 // the highest (made empty before stage 7, which widens them).
 layout(set = 0, binding = 13, std430) buffer Bounds { uvec4 bounds[]; };
+// The sand volume's (rvk/smoke.cpp SandHeader; a smoke volume's: all 0).
+layout(set = 0, binding = 15, std430) readonly buffer SandBlock {
+    vec4 corner;        // xyz: the box's lowest corner (world); w: 1 = the sand volume
+    vec4 wind;          // xy: the wind (world / s, x z); z: how fast sand settles (world / s); w: the wind's clock (s)
+    vec4 air;           // x: the density blowing in at the ground; y: its scale height (world); z: the density the
+                        // ground gives off (where it is sand); w: the streaks' size (world)
+    vec4 devil;         // xyz: a dust devil's foot (box units); w: its radius (box units; 0: none)
+    vec4 devil2;        // x: its spin (world / s); y: its lift (world / s); z: the density at its foot; w: characters'
+                        // feet: the density kicked up per world / s they move
+    vec4 devil3;        // xy: how it travels (world / s, x z)
+    vec2 ground[];      // a column's (z n + x): the ground's height (box units), how much sand it gives (0..1)
+} SD;
 shared uint sLow[3], sHigh[3];
 
 // How much of a cell is inside a character (0..1) and how near it is (1 at its surface, 0 a body width away).
@@ -100,6 +116,52 @@ float Jitter(ivec3 c, uint salt)
 }
 vec3 Vel(ivec3 c) { return imageLoad(velRead, Clamp(c)).xyz; }
 
+// The sand volume.
+bool IsSand() { return SD.corner.w > 0.5; }
+bool Outside(vec3 uvw) { return any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0))); }
+// How far above the ground a point is (world; negative: in it), and how much sand the ground there gives.
+float AboveGround(vec3 uvw, out float feed)
+{
+    int n = int(P.a.y);
+    ivec2 c = clamp(ivec2(floor(uvw.xz * float(n))), ivec2(0), ivec2(n - 1));
+    vec2 g = SD.ground[c.y * n + c.x];
+    feed = g.y;
+    return (uvw.y - g.x) * P.a.w;
+}
+// Streaks of blowing sand (0..1): long along the wind, narrow across, carried by it.
+float Streaks(vec3 uvw)
+{
+    vec2 w = SD.corner.xz + uvw.xz * P.a.w;
+    float speed = length(SD.wind.xy);
+    vec2 along = speed > 1e-3 ? SD.wind.xy / speed : vec2(1.0, 0.0), across = vec2(-along.y, along.x);
+    float t = SD.wind.w;
+    vec2 q = vec2(dot(w, along) - speed * t, dot(w, across)) / SD.air.w;
+    float n = 0.65 * TileNoise(vec3(q.x * 0.25, q.y, t * 0.2), 4096) + 0.35 * TileNoise(vec3(q.x * 0.5, q.y * 2.0, t * 0.35) + 17.0, 4096);
+    return smoothstep(0.3, 0.7, n);
+}
+// The storm's wind at a point: slower near the ground, none in it.
+vec3 SandWind(vec3 uvw)
+{
+    float feed, above = AboveGround(uvw, feed);
+    if (above < 0.0) return vec3(0.0);
+    float k = clamp(0.3 + 0.7 * sqrt(above / 4.0), 0.3, 1.0);
+    return vec3(SD.wind.x * k, 0.0, SD.wind.y * k);
+}
+// The sand blowing in over the walls: thick at the ground, thinning with height, in streaks.
+float SandInflow(vec3 uvw)
+{
+    float feed, above = AboveGround(uvw, feed);
+    if (above < 0.0) return 0.0;
+    return SD.air.x * (0.35 + 0.65 * Streaks(uvw)) * exp(-above / max(SD.air.y, 0.1));
+}
+// The density (and temperature) at a point: the image's, or beyond the walls what the storm brings.
+vec2 DensAt(vec3 at)
+{
+    return IsSand() && Outside(at) ? vec2(SandInflow(at), 0.0) : texture(densIn, at).rg;
+}
+// The velocity the density moves with: sand settles through the air.
+vec3 Carry(vec3 v) { return IsSand() ? v - vec3(0.0, SD.wind.z, 0.0) : v; }
+
 void main()
 {
     int n = int(P.a.y);
@@ -110,7 +172,43 @@ void main()
     float dt = P.a.z, size = P.a.w, h = size / float(n);   // h: a cell (world)
     vec3 uvw = (vec3(id) + 0.5) / float(n);
 
-    if (stage == 0) {
+    if (stage == 0 && IsSand()) {
+        vec3 v = texelFetch(velIn, id, 0).xyz;
+        vec3 back = uvw + P.e.xyz - v * (dt / size);
+        v = Outside(back) ? SandWind(back) : texture(velIn, back).xyz;   // (in over the walls: the storm's wind)
+        float feed, above = AboveGround(uvw, feed);
+        vec3 wind = SandWind(uvw);
+        v.xz += (wind.xz - v.xz) * (1.0 - exp(-1.5 * dt));
+        // Gusty: eddies a few cells wide shoving it about, changing every few steps, as hard as the wind blows.
+        float speed = length(SD.wind.xy);
+        uint step_ = uint(P.e.w) / 8u;
+        ivec3 eddy = id / 3;
+        v += speed * 1.5 * dt * vec3(Jitter(eddy, step_), 0.6 * Jitter(eddy, step_ + 31u), Jitter(eddy, step_ + 7919u));
+        // A dust devil: whirling round its axis (fastest at its radius), drawn in and lifted at its foot.
+        if (SD.devil.w > 0.0) {
+            vec2 r = (uvw.xz - SD.devil.xz) * size;
+            float d = length(r), R = SD.devil.w * size, up = (uvw.y - SD.devil.y) * size;
+            float tall = step(-1.0, up) * (1.0 - smoothstep(6.0, 14.0, up));
+            float hold = (d < R ? 1.0 : R / max(d, 1e-3)) * (1.0 - smoothstep(3.0 * R, 5.0 * R, d)) * tall;
+            float swirl = d < R ? d / R : R / max(d, 1e-3);                  // (a Rankine vortex: fastest at R)
+            vec2 t = d > 1e-3 ? vec2(-r.y, r.x) / d : vec2(0.0);
+            vec2 inward = d > 1e-3 ? -r / d : vec2(0.0);
+            vec2 flat_ = t * SD.devil2.x * swirl + inward * abs(SD.devil2.x) * 0.3 * swirl * (1.0 - smoothstep(0.0, 2.0, up));
+            float lift = SD.devil2.y * (1.0 - smoothstep(0.6 * R, 1.6 * R, d));
+            v = mix(v, vec3(SD.devil3.x + flat_.x, lift, SD.devil3.y + flat_.y), hold * (1.0 - exp(-6.0 * dt)));
+        }
+        for (int i = 0; i < int(B.info.x); ++i) {
+            float near_, inside = InBody(uvw, i, near_);
+            vec3 bv = B.vel[i].xyz;
+            v = mix(v, bv, inside * min(B.info.y, 1.0));
+            float wake = near_ * (1.0 - inside) * length(bv) * 0.7 * B.info.y;
+            uint salt = uint(P.e.w) / 4u + uint(i) * 131u;
+            v += wake * vec3(Jitter(id / 2, salt), 0.5 * Jitter(id / 2, salt + 17u), Jitter(id / 2, salt + 7919u));
+        }
+        if (above < 0.0 || id.y == 0) v = vec3(0.0);                     // (the ground: solid)
+        v *= exp(-0.05 * dt);
+        imageStore(velOut, id, vec4(v, 0.0));
+    } else if (stage == 0) {
         vec3 v = texelFetch(velIn, id, 0).xyz;
         vec3 back = uvw + P.e.xyz - v * (dt / size);
         v = texture(velIn, back).xyz;
@@ -186,30 +284,58 @@ void main()
         float pz0 = id.z > 0 ? imageLoad(pIn, id - ivec3(0, 0, 1)).x : 0.0;
         vec3 v = Vel(id) - vec3(px1 - px0, py1 - py0, pz1 - pz0) / (2.0 * h);
         if (id.y == 0) v.y = max(v.y, 0.0);
+        float feed;
+        if (IsSand() && AboveGround(uvw, feed) < 0.0) v = vec3(0.0);
         imageStore(velOut, id, vec4(v, 0.0));
     } else if (stage == 6) {
-        vec3 v = texelFetch(velIn, id, 0).xyz;
-        imageStore(curlImg, id, vec4(texture(densIn, uvw + P.e.xyz - v * (dt / size)).rg, 0.0, 0.0));
+        vec3 v = Carry(texelFetch(velIn, id, 0).xyz);
+        imageStore(curlImg, id, vec4(DensAt(uvw + P.e.xyz - v * (dt / size)), 0.0, 0.0));
     } else if (stage == 8) {
-        vec3 v = texelFetch(velIn, id, 0).xyz;
+        vec3 v = Carry(texelFetch(velIn, id, 0).xyz);
         // (The scratch image may be bigger than this box: only its first n cells a side are this step's.)
         vec3 at = uvw - P.e.xyz + v * (dt / size);
-        float back = any(lessThan(at, vec3(0.0))) || any(greaterThan(at, vec3(1.0))) ? 0.0
+        float back = Outside(at) ? (IsSand() ? SandInflow(at) : 0.0)
                    : texture(forwardIn, at * float(n) / vec3(textureSize(forwardIn, 0))).r;
         imageStore(divImg, id, vec4(back));
     } else if (stage == 9) {
-        vec3 v = texelFetch(velIn, id, 0).xyz;
+        vec3 v = Carry(texelFetch(velIn, id, 0).xyz);
         vec3 at = (uvw + P.e.xyz - v * (dt / size)) * float(n) - 0.5;   // where it came from (cells)
         ivec3 c0 = ivec3(floor(at));
         float lo = 1e9, hi = -1e9;
         for (int k = 0; k < 8; ++k) {
             ivec3 c = c0 + ivec3(k & 1, (k >> 1) & 1, (k >> 2) & 1);
-            float x = any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, ivec3(n))) ? 0.0 : texelFetch(densIn, c, 0).r;
+            float x = any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, ivec3(n)))
+                    ? (IsSand() ? SandInflow((vec3(c) + 0.5) / float(n)) : 0.0) : texelFetch(densIn, c, 0).r;
             lo = min(lo, x);
             hi = max(hi, x);
         }
         vec2 dens = imageLoad(curlImg, id).rg;
         dens.r = clamp(dens.r + 0.5 * (texelFetch(densIn, id, 0).r - imageLoad(divImg, id).r), lo, hi);
+        if (IsSand()) {
+            // Fading slowly (it settles out, P.c.w); given off the ground where the wind lifts it - in streaks, the
+            // more where the ground is sand - at a dust devil's foot, and where characters' feet kick it up.
+            float feed, above = AboveGround(uvw, feed);
+            dens.r *= exp(-P.c.w * dt);
+            float level = 0.0;
+            if (above >= 0.0 && above < 0.8)
+                level = SD.air.z * feed * (0.25 + 0.75 * Streaks(uvw)) * (1.0 - above / 0.8);
+            if (SD.devil.w > 0.0) {
+                float d = length((uvw.xz - SD.devil.xz) * size), R = SD.devil.w * size;
+                float up = (uvw.y - SD.devil.y) * size;
+                level = max(level, SD.devil2.z * (1.0 - smoothstep(0.3 * R, 1.6 * R, d)) * (1.0 - smoothstep(0.0, 1.5, up)) *
+                                   step(0.0, above));
+            }
+            for (int i = 0; i < int(B.info.x); ++i) {
+                vec3 foot = vec3(B.pos[i].x, B.pos[i].y, B.pos[i].z);
+                float speed = length(B.vel[i].xz), d = length((uvw - foot) * size);
+                level = max(level, SD.devil2.w * speed * (1.0 - smoothstep(0.15, 0.6, d)) * step(0.0, above));
+            }
+            dens.r = max(dens.r, min(dens.r + level * 3.0 * dt, level));
+            dens.g = 0.0;
+            if (above < 0.0) dens = vec2(0.0);
+            imageStore(densOut, id, vec4(max(dens, vec2(0.0)), 0.0, 0.0));
+            return;
+        }
         vec3 d = (uvw - P.b.xyz) / max(P.b.w, 1e-4);
         float inSource = exp(-dot(d, d));
         // (Built up there over a moment - no blob popping in - up to the level, no more.)
