@@ -90,8 +90,9 @@ V3 Rotate(V3 v, V3 k, float angle)
 
 // A solid mesh's axis (a tree trunk's), model space: up its length (`k`: the model axis that stands up) in ten bands,
 // each band's middle - the vertices near the band below's middle only, so a limb reaching out doesn't pull it aside
-// (the first band: all of the lowest tenth). x y z a point; stops where the wood ends.
-void TraceAxis(const uint8_t* v, uint32_t stride, uint32_t n, int k, std::vector<float>& out)
+// (the first band: all of the lowest tenth). x y z a point; bands without a vertex are passed over. `down`: the model's
+// axis points down in the world - traced from its high end, so the first point is the foot.
+void TraceAxis(const uint8_t* v, uint32_t stride, uint32_t n, int k, bool down, std::vector<float>& out)
 {
     out.clear();
     if (!v || n < 8)
@@ -111,7 +112,7 @@ void TraceAxis(const uint8_t* v, uint32_t stride, uint32_t n, int k, std::vector
         return;
     float cx = 0.0f, cz = 0.0f, r = 0.0f;
     for (int band = 0; band < bands; ++band) {
-        const float b0 = lo + float(band) * step, b1 = b0 + step;
+        const float b0 = down ? hi - float(band + 1) * step : lo + float(band) * step, b1 = b0 + step;
         float sx = 0.0f, sz = 0.0f, near2 = 1e30f, nx = 0.0f, nz = 0.0f;
         uint32_t count = 0;
         const float reach = band == 0 ? 1e30f : std::max(2.5f * r, 0.15f * step);
@@ -126,7 +127,7 @@ void TraceAxis(const uint8_t* v, uint32_t stride, uint32_t n, int k, std::vector
         }
         if (!count) {                             // (the wood moved further than the reach: from the nearest vertex)
             if (near2 >= 1e30f)
-                break;
+                continue;                         // (no vertex at this height: a low-poly trunk's rings far apart)
             sx = nx; sz = nz; count = 1;
         }
         cx = sx / float(count);
@@ -147,6 +148,9 @@ void TraceAxis(const uint8_t* v, uint32_t stride, uint32_t n, int k, std::vector
         out.insert(out.end(), q, q + 3);
     }
 }
+
+// Half a box's extent along a unit direction.
+float extentUpOf(V3 half, V3 up) { return std::fabs(half.x * up.x) + std::fabs(half.y * up.y) + std::fabs(half.z * up.z); }
 
 // A seed from the mesh's own content (its positions and indices): the same tree bakes the same leaves and branches every
 // time (m_drawMeshKey holds a static snapshot's serial - a new one each upload: the branches changed when the leaves
@@ -286,11 +290,16 @@ void Device::CanopyParams(uint32_t primitive, uint32_t fvf, const FvfLayout& lay
         r.world = m_world;
         for (int j = 0; j < 3; ++j) { r.lo[j] = c[j] - e[j]; r.hi[j] = c[j] + e[j]; }
         r.ownDraw = m_frameDraw;
+        r.visual = m_drawVisual;
+        const SolidBox* best = nullptr;          // (the one whose foot is nearest the crown's middle)
+        float bestD = 1e30f;
         for (const SolidBox& b : m_recentSolid)
-            if (b.draw && m_frameDraw - b.draw <= 4 && TrunkUnder(b, r.lo, r.hi)) {
-                GiveTrunk(key, m_world, b);
-                break;
+            if (b.draw && m_frameDraw - b.draw <= 4 && TrunkUnder(b, r.lo, r.hi, r.visual)) {
+                const float d = std::hypot(b.axis[0] - c[0], b.axis[2] - c[2]) - (b.visual && b.visual == r.visual ? 1e6f : 0.0f);
+                if (d < bestD) { bestD = d; best = &b; }
             }
+        if (best)
+            GiveTrunk(key, m_world, *best);
     }
     if (!set.baked || set.texVersion != tex->m_alphaVersion || set.settingsVersion != m_leafVersion || set.art != art ||
         (art && set.artVersion != tex->m_leafArtVersion)) {
@@ -347,6 +356,7 @@ void Device::NoteSolidDraw(uint32_t fvf, const void* vertices, uint32_t stride, 
     SolidBox& b = m_recentSolid[m_recentSolidNext++ % 16];
     for (int i = 0; i < 3; ++i) { b.lo[i] = c[i] - e[i]; b.hi[i] = c[i] + e[i]; }
     b.draw = m_frameDraw;
+    b.visual = m_drawVisual;
     // Its axis (a trunk's), once a mesh, in the world for our own canopies to start their branches on.
     b.axisPoints = 0;
     if (m_leaf.own) {
@@ -360,7 +370,7 @@ void Device::NoteSolidDraw(uint32_t fvf, const void* vertices, uint32_t stride, 
                 const float upness = len > 0.0f ? std::fabs(w[i][1]) / len : 0.0f;
                 if (upness > best) { best = upness; k = i; }
             }
-            TraceAxis(static_cast<const uint8_t*>(vertices), stride, vertexCount, k, info.trunkAxis);
+            TraceAxis(static_cast<const uint8_t*>(vertices), stride, vertexCount, k, w[k][1] < 0.0f, info.trunkAxis);
             info.trunkAxisState = 1;
         }
         const auto& w = m_world.m;
@@ -372,7 +382,7 @@ void Device::NoteSolidDraw(uint32_t fvf, const void* vertices, uint32_t stride, 
     }
     // The own canopy drawn just before, if this stands under it: its trunk.
     if (m_recentCanopy.setKey && m_frameDraw - m_recentCanopy.ownDraw <= 4 &&
-        TrunkUnder(b, m_recentCanopy.lo, m_recentCanopy.hi))
+        TrunkUnder(b, m_recentCanopy.lo, m_recentCanopy.hi, m_recentCanopy.visual))
         GiveTrunk(m_recentCanopy.setKey, m_recentCanopy.world, b);
     const RecentCanopy& r = m_recentCanopy;
     if (r.instance && m_frameDraw - r.draw <= 4 && r.x >= b.lo[0] - 0.5f && r.x <= b.hi[0] + 0.5f &&
@@ -380,11 +390,23 @@ void Device::NoteSolidDraw(uint32_t fvf, const void* vertices, uint32_t stride, 
         m_leafGround[r.instance] = b.lo[1] + 0.05f;
 }
 
-// Whether a solid draw's box stands under a crown's (world): overlapping it across, starting below it, with an axis.
-bool Device::TrunkUnder(const SolidBox& b, const float lo[3], const float hi[3]) const
+// Whether a solid draw is a crown's trunk (world): part of the same game object when both are known (a tree's trunk
+// and canopy are one visual's pieces) - else (or as well) standing under it: its axis' foot under the crown, upright,
+// reaching up to it. (A box overlapping it was too little: a wall or a house under a crown passed - the branches ran
+// down to it.)
+bool Device::TrunkUnder(const SolidBox& b, const float lo[3], const float hi[3], uint32_t visual) const
 {
-    return b.axisPoints >= 2 && b.lo[0] <= hi[0] && b.hi[0] >= lo[0] && b.lo[2] <= hi[2] && b.hi[2] >= lo[2] &&
-           b.lo[1] < lo[1];
+    if (b.axisPoints < 2)
+        return false;
+    if (visual && b.visual && visual != b.visual)
+        return false;
+    const float* foot = &b.axis[0];
+    const float* top = &b.axis[(b.axisPoints - 1) * 3];
+    const float mx = 0.1f * (hi[0] - lo[0]), mz = 0.1f * (hi[2] - lo[2]);
+    const float rise = top[1] - foot[1], across = std::hypot(top[0] - foot[0], top[2] - foot[2]);
+    const bool ok = foot[0] >= lo[0] - mx && foot[0] <= hi[0] + mx && foot[2] >= lo[2] - mz && foot[2] <= hi[2] + mz &&
+           foot[1] < lo[1] && rise > 0.5f * across && b.hi[1] >= lo[1] - 0.25f * (hi[1] - lo[1]);
+    return ok;
 }
 
 // Our own canopy's trunk found: its axis into the canopy's model space (every instance of the tree shares it), and
@@ -613,6 +635,17 @@ void Device::BakeOwnCanopy(LeafSet& set, uint32_t primitive, const FvfLayout& la
         if (dist2) *dist2 = bd;
         return best;
     };
+    // (Short of the crown - its trace ends lower: carried on its way up to the lowest sprigs.)
+    if (trunk.size() >= 2 && Dot(trunk.back(), up) < lowest) {
+        V3 dir = trunk.back() - trunk[trunk.size() - 2];
+        if (Dot(dir, up) < 1e-4f * Length(half)) dir = up;
+        dir = Normalize(dir);
+        trunk.push_back(trunk.back() + dir * ((lowest - Dot(trunk.back(), up)) / std::max(Dot(dir, up), 0.2f)));
+    }
+    // (Branches start on its part in the crown only: from a little under the lowest sprigs.)
+    size_t trunkFrom = 0;
+    while (trunkFrom + 2 < trunk.size() && Dot(trunk[trunkFrom + 1], up) < lowest - 0.1f * extentUpOf(half, up))
+        ++trunkFrom;
     if (trunk.size() >= 2) {
         root = trunk.back();
         for (size_t i = 0; i + 1 < trunk.size(); ++i) {
@@ -716,7 +749,7 @@ void Device::BakeOwnCanopy(LeafSet& set, uint32_t primitive, const FvfLayout& la
         }
         // On the trunk where it passes closest, if that is nearer than its parent's limb (or it has none).
         float viaTrunk = 1e30f;
-        V3 trunkAt = trunk.size() >= 2 ? closestOn(trunk, mean[c], 0, &viaTrunk) : root;
+        V3 trunkAt = trunk.size() >= 2 ? closestOn(trunk, mean[c], trunkFrom, &viaTrunk) : root;
         if (trunk.size() >= 2 && (parent[c] < 0 || viaTrunk < viaParent)) {
             from = trunkAt;
             onward = Normalize(mean[c] - trunkAt + up * (0.3f * Length(mean[c] - trunkAt)));

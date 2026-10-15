@@ -2143,7 +2143,7 @@ private:
     // so it comes from the captured terrain (the ground grass), else from the trunk: a solid static mesh drawn next to
     // the canopy, standing under it. Recent solid draws' world boxes, and per tree (canopy mesh + position) what was
     // found; a trunk drawn after its canopy is matched to it then, for the next frames.
-    struct SolidBox { float lo[3], hi[3]; uint32_t draw; float axis[30]; uint32_t axisPoints; };   // (axis: world)
+    struct SolidBox { float lo[3], hi[3]; uint32_t draw; float axis[30]; uint32_t axisPoints; uint32_t visual; };   // (axis: world)
     SolidBox m_recentSolid[16] = {};
     uint32_t m_recentSolidNext = 0;
     struct RecentCanopy {
@@ -2152,11 +2152,12 @@ private:
         d3d::Matrix world{};
         float lo[3] = {}, hi[3] = {};
         uint32_t ownDraw = 0;
+        uint32_t visual = 0;                     // the game's visual object it is part of (its trunk is too)
     };
     RecentCanopy m_recentCanopy{};
     std::unordered_map<uint64_t, float> m_leafGround;   // tree instance -> ground y
     void NoteSolidDraw(uint32_t fvf, const void* vertices, uint32_t stride, uint32_t vertexCount);   // Draw: a trunk?
-    bool TrunkUnder(const SolidBox& b, const float lo[3], const float hi[3]) const;
+    bool TrunkUnder(const SolidBox& b, const float lo[3], const float hi[3], uint32_t visual) const;
     void GiveTrunk(uint64_t setKey, const d3d::Matrix& canopyWorld, const SolidBox& b);
     float LeafGround(const LeafSet& set);
     Canopy CanopyKind(uint32_t primitive, uint32_t fvf, uint32_t stride, const void* vertices, uint32_t vertexCount,
