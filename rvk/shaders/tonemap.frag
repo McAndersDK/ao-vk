@@ -118,17 +118,25 @@ void main()
         // (Sand in the air right in front too: a veil at every distance, P.dust2.z, under the haze that thickens
         // with it.)
         float through = exp(-P.dust.w * dist * max(surge, 0.2)) * (1.0 - P.dust2.z * clamp(surge, 0.5, 1.5));
-        // Smoke and blowing sand (drawn over the scene without depth) are near: as much as covers the pixel, the veil
-        // of a few units' air - a dust devil against the sky stays in sight.
+        through = clamp(through, 0.0, 1.0);
+        // Smoke and blowing sand (drawn over the scene before this, without depth) are near: the pixel taken apart
+        // again - the smoke's own light S and cover a (the half-size smoke image, premultiplied), what is behind it
+        // c - S - and each veiled by its own distance: the smoke by a few units' air, what is behind by its own. (A
+        // single veil by the depth behind gave the sand over the sky the sky's full haze and over near leaves next to
+        // none - patchy; and with it set by the cover, thin sand looking up cleared the sky's haze - the user.)
         if (P.dust2.w > 0.5) {
-            float cover = texture(smokeCover, uv).a;
-            float near_ = exp(-P.dust.w * 6.0 * max(surge, 0.2)) * (1.0 - P.dust2.z * clamp(surge, 0.5, 1.5));
-            through = mix(through, near_, clamp(cover, 0.0, 1.0));
+            vec4 smoke = texture(smokeCover, uv);
+            float a = clamp(smoke.a, 0.0, 1.0);
+            vec3 S = min(smoke.rgb, c);
+            float near_ = clamp(exp(-P.dust.w * 6.0 * max(surge, 0.2)) * (1.0 - P.dust2.z * clamp(surge, 0.5, 1.5)), 0.0, 1.0);
+            c = S * near_ + P.dust.rgb * a * (1.0 - near_) + mix(P.dust.rgb * (1.0 - a), c - S, through);
+            through = mix(through, near_, a);
+        } else {
+            c = mix(P.dust.rgb, c, through);
         }
-        c = mix(P.dust.rgb, c, clamp(through, 0.0, 1.0));
         // What the sand hides is no longer sky: the night's and the grading's sky (by far) only as much as shows
         // through - else a darker, greyer band of "sky" over a storm that covers it.
-        far *= clamp(through, 0.0, 1.0);
+        far *= through;
     }
     c = max((c + Volumetric() + glow) * P.params.y, vec3(0.0));
     // Night (RVK_NightDark x how much it is night): darker - the darks and middle tones down, the sky more; what is
