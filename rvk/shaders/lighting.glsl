@@ -47,6 +47,7 @@ void AccumulateLight(Light l, vec3 posW, vec3 normalW, vec3 toEye, float sunScal
     if (type == 3u) {
         L = -normalize(l.direction.xyz);
         att = sunScale;                          // shadowed sunlight (1 = unshadowed)
+        att = mix(att, 1.0, 0.5 * FL.windFrame.z);   // (a sandstorm: shadows softer - the sun's light spread by the dust)
     } else {
         vec3 d = l.position.xyz - posW;
         float dist = length(d);
@@ -70,6 +71,12 @@ void AccumulateLight(Light l, vec3 posW, vec3 normalW, vec3 toEye, float sunScal
     }
     ambient += att * l.ambient.rgb;
     float nl = max(dot(normalW, L), 0.0);
+    // A sandstorm (FL.windFrame.z): the sun's light partly without direction - the dust spreads it - so a low sun no
+    // longer lights the dunes' crests bright over dark lee slopes in the thick of a storm (the user). Spread, it
+    // falls on the land as on level ground (its light per area: the sun's height), a little less on steep sides -
+    // level ground as before, a high sun about as before.
+    if (type == 3u && FL.windFrame.z > 0.0)
+        nl = mix(nl, max(L.y, 0.0) * (0.6 + 0.4 * max(normalW.y, 0.0)), FL.windFrame.z);
     if (l.spot.z > 0.0 && nl > 0.0 && att > 0.0)
         att *= PointShadow(l, posW, normalW, nl);   // shadows take the light's diffuse and specular, not its ambient
     diff += att * nl * l.diffuse.rgb;

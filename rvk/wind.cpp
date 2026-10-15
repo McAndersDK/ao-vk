@@ -110,7 +110,9 @@ void Device::WindFrame(float out[4]) const
     const double ax = m_windDir[0], az = m_windDir[1];
     out[0] = float(m_windOffset[0] - (m_windPivot[0] * ax + m_windPivot[1] * az));
     out[1] = float(m_windOffset[1] - (-m_windPivot[0] * az + m_windPivot[1] * ax));
-    out[2] = out[3] = 0.0f;
+    // A sandstorm spreads the sun's light (lighting.glsl): the storm's full 0.38 ~0.6, never wholly directionless.
+    out[2] = std::clamp(m_sand * m_sandHaze * 1.6f, 0.0f, 0.75f);
+    out[3] = 0.0f;
 }
 
 void Device::WindAxes(float x, float z, float out[2]) const

@@ -127,7 +127,7 @@ struct FrameLights {               // binding 4: per-frame data (constants.glsl 
     float terrainSun[4];           // the terrain's shade from a low sun (terrain_sun.cpp): its map's corner x, z, 1 / its
                                    // size, its bindless image + 1 | sampler << 20 (the float's bits; 0 = none)
     float terrainSun2[4];          // ... x: the eye's own (0 shaded .. 1), y: its weight (0 high sun .. 1 low)
-    float windFrame[4];            // xy: the wind's patterns' frame (Device::WindFrame)
+    float windFrame[4];            // xy: the wind's patterns' frame (Device::WindFrame); z: a sandstorm's spreading of the sun
     GpuLight lights[kFrameLights];
 };
 
