@@ -425,16 +425,21 @@ void Device::BakeOwnCanopy(LeafSet& set, uint32_t primitive, const FvfLayout& la
     }
     meanAll = meanAll * (1.0f / float(bases.size()));
     const V3 root = meanAll + up * (lowest - Dot(meanAll, up) - 0.05f * Length(half));
-    auto stick = [&](V3 from, V3 to, float thick) {   // thick: its width at `from` (model units)
+    // A piece of branch from `from` to `to`, `thick` wide (model units) all along (the atlas' last cell: an even
+    // stick), a little longer at both ends so pieces in a row overlap (no seam at the joint).
+    auto stick = [&](V3 from, V3 to, float thick) {
         V3 axis = to - from;
         const float len = Length(axis);
         if (len < 1e-4f)
             return;
         V3 a = axis * (1.0f / len);
+        from = from - a * (0.4f * thick);
+        to = to + a * (0.4f * thick);
+        axis = to - from;
         V3 side = Cross(a, std::fabs(Dot(a, up)) < 0.9f ? up : V3{1, 0, 0});
         side = Normalize(side);
         V3 side2 = Normalize(Cross(a, side));
-        const float halfU = 0.5f * thick / 0.34f;   // (the stick fills ~0.34 of the cell's width at its base)
+        const float halfU = 0.5f * thick / 0.30f;   // (the stick fills ~0.30 of the cell's width)
         V3 mid = (from + to) * 0.5f, hv = axis * -0.5f;   // (v: towards the base)
         for (V3 sd : {side, side2}) {
             V3 hu = sd * halfU;
@@ -451,8 +456,24 @@ void Device::BakeOwnCanopy(LeafSet& set, uint32_t primitive, const FvfLayout& la
             branches.push_back(rec);
         }
     };
+    // A curved branch (a quadratic curve from `from` through `bend` to `to`) in `pieces`, tapering evenly from w0 to w1;
+    // its points kept (the branches off it start along it).
+    struct Limb { std::vector<V3> pts; std::vector<float> widths; };
+    auto curve = [&](V3 from, V3 bend, V3 to, float w0, float w1, int pieces, Limb* keep) {
+        V3 prev = from;
+        if (keep) { keep->pts.push_back(from); keep->widths.push_back(w0); }
+        for (int k = 1; k <= pieces; ++k) {
+            const float t = float(k) / float(pieces), u = 1.0f - t;
+            V3 p = from * (u * u) + bend * (2.0f * u * t) + to * (t * t);
+            const float w = w0 + (w1 - w0) * (float(k) - 0.5f) / float(pieces);
+            stick(prev, p, w);
+            if (keep) { keep->pts.push_back(p); keep->widths.push_back(w0 + (w1 - w0) * t); }
+            prev = p;
+        }
+    };
     // A connected frame: nearest the root first; each further cluster hangs off the nearest one already in that is
-    // nearer the root than itself (the first off the root). A limb as thick as all it carries.
+    // nearer the root than itself (the first off the root) - starting along that one's limb where it passes closest
+    // (not all from its end: a star), carrying on its way, curving up a little. As thick as all it carries.
     std::vector<uint32_t> order;
     for (uint32_t c = 0; c < clusters; ++c)
         if (members[c]) order.push_back(c);
@@ -474,18 +495,38 @@ void Device::BakeOwnCanopy(LeafSet& set, uint32_t primitive, const FvfLayout& la
         if (parent[c] >= 0) carried[parent[c]] += carried[c];
     }
     const float limbW = std::clamp(0.08f * sizeW, 0.1f, 0.45f) / scale;   // a cluster's own branch (model units)
+    std::vector<Limb> limbs(clusters);
     for (uint32_t c : order) {
-        const float thick = limbW * std::min(std::sqrt(carried[c] / 35.0f), 4.0f);
-        const V3 from = parent[c] >= 0 ? mean[parent[c]] : root;
+        float thick = limbW * std::min(std::sqrt(carried[c] / 35.0f), 4.0f);
+        V3 from = root, onward = up;
+        if (parent[c] >= 0) {                    // (the closest point of the parent's limb past its first third)
+            const Limb& pl = limbs[parent[c]];
+            float best = 1e30f;
+            size_t at = pl.pts.size() - 1;
+            for (size_t i = pl.pts.size() / 3; i < pl.pts.size(); ++i) {
+                V3 d = pl.pts[i] - mean[c];
+                if (Dot(d, d) < best) { best = Dot(d, d); at = i; }
+            }
+            from = pl.pts[at];
+            onward = Normalize(pl.pts[at] - pl.pts[at > 0 ? at - 1 : 0] + up * 1e-3f);
+            thick = std::min(thick, 0.85f * pl.widths[at]);
+        }
         V3 d = mean[c] - from;
-        V3 bend = from + d * 0.5f + up * (0.1f * Length(d));
-        stick(from, bend, thick);
-        stick(bend, mean[c], thick * 0.8f);
-        // Twigs to a few of its sprigs.
+        const float len = Length(d);
+        if (len < 1e-4f)
+            continue;
+        V3 bend = from + Normalize(d * (1.0f / len) + onward * 0.6f) * (0.45f * len) + up * (0.08f * len);
+        const int pieces = std::clamp(int(len / (2.0f * thick + 1e-4f)), 2, 5);
+        curve(from, bend, mean[c], thick, thick * 0.55f, pieces, &limbs[c]);
+        // Twigs to a few of its sprigs: off the limb's last part, thin and even, stopping short of the sprig's own.
+        const Limb& l = limbs[c];
         uint32_t twigs = 0;
-        for (size_t i = 0; i < bases.size() && twigs < 6; ++i)
-            if (of[i] == c && rng.Unit() < 6.0f / float(members[c] + 1)) {
-                stick(mean[c], bases[i], limbW * 0.4f);
+        for (size_t i = 0; i < bases.size() && twigs < 4; ++i)
+            if (of[i] == c && rng.Unit() < 4.0f / float(members[c] + 1)) {
+                const size_t at = l.pts.size() - 1 - (rng.Next() % std::min<size_t>(l.pts.size(), 2));
+                V3 start = l.pts[at], end = start + (bases[i] - start) * 0.85f;
+                V3 mid = (start + end) * 0.5f + up * (0.06f * Length(end - start));
+                curve(start, mid, end, limbW * 0.3f, limbW * 0.22f, 2, nullptr);
                 ++twigs;
             }
     }
