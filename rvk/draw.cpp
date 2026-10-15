@@ -2109,13 +2109,18 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
         m_rs[d3d::RS_ZFUNC] == d3d::CMP_ALWAYS && m_rs[d3d::RS_ZENABLE] && m_rs[d3d::RS_ZWRITEENABLE] &&
         (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZRHW && m_textures[0] && m_textures[0]->m_width <= 16 &&
         m_textures[0]->m_height <= 16) {
-        ++m_stormTintSkipped;
         const FvfLayout layout = DecodeFvf(fvf);  // (its colour and strength: our storm's air, wind.cpp SandHaze)
-        if (vertices && layout.offset[2] >= 0) {
-            std::memcpy(&m_stormTintColour, static_cast<const uint8_t*>(vertices) + layout.offset[2], 4);
+        uint32_t colour = 0;
+        if (vertices && layout.offset[2] >= 0)
+            std::memcpy(&colour, static_cast<const uint8_t*>(vertices) + layout.offset[2], 4);
+        // A black one is no storm: the game's fade in from black after a load (the same sprite) - drawn as it is.
+        const uint32_t brightest = std::max({(colour >> 16) & 0xFFu, (colour >> 8) & 0xFFu, colour & 0xFFu});
+        if (brightest > 0x10) {
+            ++m_stormTintSkipped;
+            m_stormTintColour = colour;
             m_stormTintSeen = m_frameClock;
+            return;
         }
-        return;
     }
     ++m_frameDraw;
     // GPU profiling: which class of scene draw this is (splits the "scene" block; see ProfileSceneClass).
