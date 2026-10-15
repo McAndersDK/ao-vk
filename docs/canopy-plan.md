@@ -79,6 +79,29 @@ game's own textures so it sits in AO's zones; this is the first thing to look at
   the storm.
 - Falling leaves: in our art, more in gusts, carried along the wind in a storm.
 
+## Phase 0 result (2026-10-15): ao-assets `python -m aoassets trees` (work/trees: inventory.tsv, types.md, sheet.png)
+
+2.13 M placed objects; tree-sized canopies (3..45 units) placed 380 k times, in 143 textures - most not foliage (wreck
+debris, gratings, crystals, glass: 100 textures, 9 k placed). Foliage: leaves 33 textures (295 k placed), bare
+branches 5 (64 k: the "spooky" leafless trees), hanging moss 5 (12 k). The leaves are concentrated:
+
+| # | texture | placed | playfields | tree heights | look |
+|---|---|---|---|---|---|
+| 1 | leaves_hires (1010004:6269) | 132 k | 64 | 7.5 - 31 | small olive-yellow leaves on twigs |
+| 2 | applestyletrees_newleaves (42116) | 94 k | 49 | 3 - 44 | small dark green leaves, dense |
+| 4 | mcclean_leaves (42065) | 17 k | 50 | 8 - 18 | small dark green |
+| 6 | frazettatreeleaves (24590) | 11 k | 33 | 14 - 19 | broad rounded leaves, mottled green |
+| 7 | enigmatreeleaves3 (42840) | 8 k | 4 | 3 - 44 | teal alien leaves |
+| 9 | curvedtrees_leave1_opac (20983) | 7.6 k | 39 | 7 - 10 | broad, oak-like |
+| 10 | deserttree_smallestleaves (26301) | 5.7 k | 18 | 4.3 | dry, brown-orange, small |
+| 11 | penumbra_frozen_jungletrees_leaves (207223) | 4.8 k | 4 | 25 - 43 | frosted white |
+| 12 | dryleaves (26302) | 4.7 k | 30 | 4 - 9 | autumn brown |
+| 13 | new_leaves_cluster2 (206288) | 3.8 k | 57 | 12 - 43 | small yellow-green, airy |
+
+The first two are 77% of the leafy trees placed, these ten ~98%. The tail (23 textures, ~5 k placed) takes the default
+profile. Name-sort errors to remember: potteplant_branch1 is a leafy plant, smushroom_texture_deadleaf a giant
+mushroom's leaf (not a crown).
+
 ## Phases
 
 0. Inventory: a log line per tree canopy type met in game (texture id, mesh name, size, count) and an ao-assets scan of
