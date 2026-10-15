@@ -83,7 +83,10 @@ float DustDepth(vec2 uv, float z)
         float along = dot(p.xz, wd) + P.gust3.z, across = dot(p.xz, side) + P.gust3.w;
         float n = 0.65 * GustNoise(vec3(along / 70.0, h / 22.0 + P.gust2.w * 0.015, across / 40.0)) +
                   0.35 * GustNoise(vec3(along / 24.0 + 3.1, h / 9.0, across / 14.0 + 7.7));
-        float billow = (0.1 + 2.6 * smoothstep(0.34, 0.68, n)) * mix(1.4, 0.55, smoothstep(0.0, 40.0, h));
+        // (Between billows never under ~half as thick: at 0.1 the gaps let a third of land 700 units off show
+        // through - with a low sun, grey-blue ridges and the march's dither on them in an orange-brown storm - the
+        // user. The same average.)
+        float billow = (0.45 + 2.0 * smoothstep(0.34, 0.68, n)) * mix(1.4, 0.55, smoothstep(0.0, 40.0, h));
         float near_ = smoothstep(P.gust2.y, 1.6 * P.gust2.y, t * L);   // (none yet where the near sand is)
         sum += mix(1.0, billow, near_ * P.gust2.z);
     }
