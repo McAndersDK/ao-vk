@@ -170,15 +170,18 @@ void main()
         // light S and cover a - the fog over what shows through it.
         vec4 fog = SandFogAt();
         float T = clamp(fog.a, 0.0, 1.0);
+        // What shows through reddened: the dust takes blue first (exp(-k tau) = T^k per colour) - distant hills go
+        // red-brown in the storm, not just paler (the user).
+        vec3 Tc = pow(vec3(max(T, 1e-6)), vec3(0.6, 1.0, 1.6));
         if (smokeNear) {
             vec4 smoke = texture(smokeCover, gl_FragCoord.xy / vec2(textureSize(scene, 0)));
             float a = clamp(smoke.a, 0.0, 1.0);
             vec3 S = min(smoke.rgb, c);
-            c = S + (c - S) * T + fog.rgb * (1.0 - a);
+            c = S + (c - S) * Tc + fog.rgb * (1.0 - a);
             far *= mix(T, 1.0, a);
             volumetric = mix(T, 1.0, a);
         } else {
-            c = c * T + fog.rgb;
+            c = c * Tc + fog.rgb;
             far *= T;
             volumetric = T;
         }
