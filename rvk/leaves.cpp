@@ -299,9 +299,12 @@ float Device::LeafGround(const LeafSet& set)
 // enough to cover the cards' leafy part about twice over. (LeafRecord: half u across the sprig, half v towards its base
 // - the texture's v grows down the cell, to the twig's base.)
 void Device::BakeOwnCanopy(LeafSet& set, uint32_t primitive, const FvfLayout& layout, const void* vertices,
-                           uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount, void* outLeaves)
+                           uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount, void* outLeaves,
+                           void* outBranches)
 {
     auto& leaves = *static_cast<std::vector<LeafRecord>*>(outLeaves);
+    auto& branches = *static_cast<std::vector<LeafRecord>*>(outBranches);
+    std::vector<V3> bases;                       // each sprig's twig base (the branches reach them)
     Texture* tex = m_textures[0];
     const auto& mask = tex->m_alphaMask;
     const uint32_t mw = tex->m_alphaW, mh = tex->m_alphaH;
@@ -372,7 +375,7 @@ void Device::BakeOwnCanopy(LeafSet& set, uint32_t primitive, const FvfLayout& la
             across = Normalize(across);
             V3 hu = across * (0.5f * size), hv = reach * (-0.5f * size);   // (v: towards the twig's base)
             V3 mid = p + reach * (0.45f * size);
-            const uint32_t cell = rng.Next() % 16u;
+            const uint32_t cell = rng.Next() % 15u;   // (the 16th: a piece of branch)
             LeafRecord rec{};
             rec.centre[0] = mid.x;
             rec.centre[1] = mid.y;
@@ -384,7 +387,107 @@ void Device::BakeOwnCanopy(LeafSet& set, uint32_t primitive, const FvfLayout& la
             const uint32_t uh = 2046;            // (0.125: the cell's half, a hair inside it)
             rec.uvHalfPhase = uh | uh << 12 | (rng.Next() >> 24) << 24;
             leaves.push_back(rec);
+            bases.push_back(p);
         }
+    }
+    if (bases.empty())
+        return;
+    // Its branches (the game's cards had them painted in; without them the sprigs float): the sprigs' bases gathered
+    // into clusters (k-means: a branch's end each), a limb from the top of the trunk (under the crown's middle) to each,
+    // arching up a little, and from each cluster twigs to a few of its sprigs. Each piece two crossed cards of the
+    // atlas' last cell (a stick, wide at its base); a limb as thick as the sprigs it carries.
+    const uint32_t clusters = std::clamp<uint32_t>(uint32_t(bases.size() / 35), 4u, 48u);
+    std::vector<V3> mean(clusters);
+    std::vector<uint32_t> of(bases.size(), 0), members(clusters, 0);
+    for (uint32_t c = 0; c < clusters; ++c) mean[c] = bases[rng.Next() % bases.size()];
+    for (int iteration = 0; iteration < 6; ++iteration) {
+        std::vector<V3> sum(clusters, V3{0, 0, 0});
+        std::fill(members.begin(), members.end(), 0u);
+        for (size_t i = 0; i < bases.size(); ++i) {
+            float best = 1e30f;
+            for (uint32_t c = 0; c < clusters; ++c) {
+                V3 d = bases[i] - mean[c];
+                float d2 = Dot(d, d);
+                if (d2 < best) { best = d2; of[i] = c; }
+            }
+            sum[of[i]] = sum[of[i]] + bases[i];
+            ++members[of[i]];
+        }
+        for (uint32_t c = 0; c < clusters; ++c)
+            if (members[c]) mean[c] = sum[c] * (1.0f / float(members[c]));
+    }
+    // The crown's root: under the middle of its sprigs, at their lowest.
+    V3 meanAll{0, 0, 0};
+    float lowest = 1e30f;
+    for (const V3& b : bases) {
+        meanAll = meanAll + b;
+        lowest = std::min(lowest, Dot(b, up));
+    }
+    meanAll = meanAll * (1.0f / float(bases.size()));
+    const V3 root = meanAll + up * (lowest - Dot(meanAll, up) - 0.05f * Length(half));
+    auto stick = [&](V3 from, V3 to, float thick) {   // thick: its width at `from` (model units)
+        V3 axis = to - from;
+        const float len = Length(axis);
+        if (len < 1e-4f)
+            return;
+        V3 a = axis * (1.0f / len);
+        V3 side = Cross(a, std::fabs(Dot(a, up)) < 0.9f ? up : V3{1, 0, 0});
+        side = Normalize(side);
+        V3 side2 = Normalize(Cross(a, side));
+        const float halfU = 0.5f * thick / 0.34f;   // (the stick fills ~0.34 of the cell's width at its base)
+        V3 mid = (from + to) * 0.5f, hv = axis * -0.5f;   // (v: towards the base)
+        for (V3 sd : {side, side2}) {
+            V3 hu = sd * halfU;
+            LeafRecord rec{};
+            rec.centre[0] = mid.x;
+            rec.centre[1] = mid.y;
+            rec.centre[2] = mid.z;
+            rec.halfUxy = Halves(hu.x, hu.y);
+            rec.halfUzVx = Halves(hu.z, hv.x);
+            rec.halfVyz = Halves(hv.y, hv.z);
+            rec.uv = unorm16(0.875f) | unorm16(0.875f) << 16;
+            const uint32_t uh = 2046;
+            rec.uvHalfPhase = uh | uh << 12;
+            branches.push_back(rec);
+        }
+    };
+    // A connected frame: nearest the root first; each further cluster hangs off the nearest one already in that is
+    // nearer the root than itself (the first off the root). A limb as thick as all it carries.
+    std::vector<uint32_t> order;
+    for (uint32_t c = 0; c < clusters; ++c)
+        if (members[c]) order.push_back(c);
+    auto toRoot = [&](uint32_t c) { V3 d = mean[c] - root; return Dot(d, d); };
+    std::sort(order.begin(), order.end(), [&](uint32_t x, uint32_t y) { return toRoot(x) < toRoot(y); });
+    std::vector<int> parent(clusters, -1);
+    for (size_t k = 1; k < order.size(); ++k) {
+        float best = 1e30f;
+        for (size_t j = 0; j < k; ++j) {
+            V3 d = mean[order[k]] - mean[order[j]];
+            const float d2 = Dot(d, d);
+            if (d2 < best) { best = d2; parent[order[k]] = int(order[j]); }
+        }
+    }
+    std::vector<float> carried(clusters, 0.0f);
+    for (size_t k = order.size(); k-- > 0;) {
+        const uint32_t c = order[k];
+        carried[c] += float(members[c]);
+        if (parent[c] >= 0) carried[parent[c]] += carried[c];
+    }
+    const float limbW = std::clamp(0.08f * sizeW, 0.1f, 0.45f) / scale;   // a cluster's own branch (model units)
+    for (uint32_t c : order) {
+        const float thick = limbW * std::min(std::sqrt(carried[c] / 35.0f), 4.0f);
+        const V3 from = parent[c] >= 0 ? mean[parent[c]] : root;
+        V3 d = mean[c] - from;
+        V3 bend = from + d * 0.5f + up * (0.1f * Length(d));
+        stick(from, bend, thick);
+        stick(bend, mean[c], thick * 0.8f);
+        // Twigs to a few of its sprigs.
+        uint32_t twigs = 0;
+        for (size_t i = 0; i < bases.size() && twigs < 6; ++i)
+            if (of[i] == c && rng.Unit() < 6.0f / float(members[c] + 1)) {
+                stick(mean[c], bases[i], limbW * 0.4f);
+                ++twigs;
+            }
     }
 }
 
@@ -417,8 +520,9 @@ bool Device::BakeLeaves(LeafSet& set, uint32_t primitive, const FvfLayout& layou
     Rng rng(m_drawMeshKey ^ 0x5EEDull);
     const uint32_t count = indices ? indexCount : vertexCount;
     const uint32_t triangles = primitive == d3d::TriangleList ? count / 3 : (count >= 3 ? count - 2 : 0);
+    std::vector<LeafRecord> branches;            // (our own canopy's: first, never thinned - BakeOwnCanopy)
     if (set.art)
-        BakeOwnCanopy(set, primitive, layout, vertices, vertexCount, indices, indexCount, &leaves);
+        BakeOwnCanopy(set, primitive, layout, vertices, vertexCount, indices, indexCount, &leaves, &branches);
     for (uint32_t t = 0; t < (set.art ? 0u : triangles); ++t) {
         uint32_t k[3];
         if (primitive == d3d::TriangleList) { k[0] = 3 * t; k[1] = 3 * t + 1; k[2] = 3 * t + 2; }
@@ -491,8 +595,9 @@ bool Device::BakeLeaves(LeafSet& set, uint32_t primitive, const FvfLayout& layou
     // Shuffled: any first part of the set is an even thinning (the distance level of detail draws a first part).
     for (size_t i = leaves.size(); i > 1; --i)
         std::swap(leaves[i - 1], leaves[rng.Next() % i]);
-    if (leaves.size() > kMaxLeavesPerSet)
-        leaves.resize(kMaxLeavesPerSet);
+    if (leaves.size() + branches.size() > kMaxLeavesPerSet)
+        leaves.resize(kMaxLeavesPerSet - std::min<size_t>(branches.size(), kMaxLeavesPerSet));
+    leaves.insert(leaves.begin(), branches.begin(), branches.end());
     const uint32_t n = uint32_t(leaves.size());
     if (n) {
         VmaVirtualAllocationCreateInfo ai{};

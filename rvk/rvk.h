@@ -2150,7 +2150,8 @@ private:
     void CanopyParams(uint32_t primitive, uint32_t fvf, const detail::FvfLayout& layout, const void* vertices,
                       uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount);
     void BakeOwnCanopy(LeafSet& set, uint32_t primitive, const detail::FvfLayout& layout, const void* vertices,
-                       uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount, void* outLeaves);
+                       uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount, void* outLeaves,
+                       void* outBranches);
     bool BakeLeaves(LeafSet& set, uint32_t primitive, const detail::FvfLayout& layout, const void* vertices,
                     uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount);
     bool GrowLeafPool(uint32_t minLeaves);

@@ -250,6 +250,8 @@ void LeafVertex(vec2 originXZ)
     float gust = Gust(aa, FL.wind.z) * FL.leaves.z;
     float gustPrev = Gust(aa, FL.taa.w) * FL.leaves.z;
     float f = FL.leaves.y * size;
+    if ((D.leafSet.y & 0x80000000u) != 0u && uv.x > 0.75 && uv.y > 0.75)
+        f = 0.0;                                 // (our own canopy's branches - the atlas' last cell: no flutter)
     // (Flapping most at the far edge: the old sprigs' top; our own canopy's sprigs' tip, their twig's base at +v.)
     float tip = (D.leafSet.y & 0x80000000u) != 0u ? 0.5 - 0.5 * corner.y : 0.5 + 0.5 * corner.y;
     inPos = vec4(pos + n * f * LeafFlutter(phase, tip, FL.wind.z, gust), 1.0);
