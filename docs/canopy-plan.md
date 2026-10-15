@@ -1,5 +1,14 @@
 # Trees: our own canopies in place of the game's cards
 
+**Changed course (2026-10-15, the user):** our own canopies came out sparse next to the game's (one layer of sprigs
+where the game's cards overlap many times), and generated branches never sat right (bones, spikes, the wrong trunk).
+Kept from it: the leaf art generator, RVK_LeafOwn (off unless *_leaves.png are installed). Now instead:
+1. ao-assets `repaint`: each canopy texture made sharp at 1024 px - the original's layout, branches and density, crisp
+   leaves over its leafy parts (randy-vk materials: <type>_<id>_d.png albedo, _n.png normal map).
+2. RVK_CrownShade: the game's canopies lit as one rounded crown (ffp.vert), darker inside and under, each tree's
+   colour its own.
+The plan below is the first approach's, for the record.
+
 Status: plan (2026-10-15), branch `storms` (user: this work goes there). Trees only - shrubs and palms keep today's
 leaves (leaves.cpp). New leaf art per tree type (user), not cut from the game's textures. Under RVK_LeafOn
 (Experimental) until tuned; the game's canopy comes back with it off, and beyond the leaves' distance.
