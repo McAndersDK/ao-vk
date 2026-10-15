@@ -1433,7 +1433,7 @@ void Device::DrawShadowItem(VkCommandBuffer cmd, ShadowBind& bind, ShadowItem& i
                     }
                     const float reach = std::max(m_leaf.distance, 1.0f);
                     const float keep = std::clamp((reach - std::sqrt(d2)) / (0.5f * reach), 0.0f, 1.0f);
-                    r.origin[3] = keep * keep / 0.35f;
+                    r.origin[3] = 0.5f * keep * keep / 0.35f;   // (the core as the scene draws it: half thinned)
                     r.alpha[3] = 1.0f;           // (its sprigs: leaf_shadow.vert, no round mask)
                 }
                 r.leafWind[0] = wind[0];

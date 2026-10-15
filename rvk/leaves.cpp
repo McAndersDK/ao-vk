@@ -88,72 +88,8 @@ V3 Rotate(V3 v, V3 k, float angle)
     return v * c + Cross(k, v) * s + k * (Dot(k, v) * (1.0f - c));
 }
 
-// A solid mesh's axis (a tree trunk's), model space: up its length (`k`: the model axis that stands up) in ten bands,
-// each band's middle - the vertices near the band below's middle only, so a limb reaching out doesn't pull it aside
-// (the first band: all of the lowest tenth). x y z a point; bands without a vertex are passed over. `down`: the model's
-// axis points down in the world - traced from its high end, so the first point is the foot.
-void TraceAxis(const uint8_t* v, uint32_t stride, uint32_t n, int k, bool down, std::vector<float>& out)
-{
-    out.clear();
-    if (!v || n < 8)
-        return;
-    const int a = (k + 1) % 3, b = (k + 2) % 3;
-    auto at = [&](uint32_t i, float p[3]) { std::memcpy(p, v + size_t(i) * stride, 12); };
-    float lo = 1e30f, hi = -1e30f;
-    for (uint32_t i = 0; i < n; ++i) {
-        float p[3];
-        at(i, p);
-        lo = std::min(lo, p[k]);
-        hi = std::max(hi, p[k]);
-    }
-    const int bands = 10;
-    const float step = (hi - lo) / float(bands);
-    if (!(step > 1e-4f))
-        return;
-    float cx = 0.0f, cz = 0.0f, r = 0.0f;
-    for (int band = 0; band < bands; ++band) {
-        const float b0 = down ? hi - float(band + 1) * step : lo + float(band) * step, b1 = b0 + step;
-        float sx = 0.0f, sz = 0.0f, near2 = 1e30f, nx = 0.0f, nz = 0.0f;
-        uint32_t count = 0;
-        const float reach = band == 0 ? 1e30f : std::max(2.5f * r, 0.15f * step);
-        for (uint32_t i = 0; i < n; ++i) {
-            float p[3];
-            at(i, p);
-            if (p[k] < b0 || p[k] > b1)
-                continue;
-            const float d2 = (p[a] - cx) * (p[a] - cx) + (p[b] - cz) * (p[b] - cz);
-            if (d2 < near2) { near2 = d2; nx = p[a]; nz = p[b]; }
-            if (band == 0 || d2 <= reach * reach) { sx += p[a]; sz += p[b]; ++count; }
-        }
-        if (!count) {                             // (the wood moved further than the reach: from the nearest vertex)
-            if (near2 >= 1e30f)
-                continue;                         // (no vertex at this height: a low-poly trunk's rings far apart)
-            sx = nx; sz = nz; count = 1;
-        }
-        cx = sx / float(count);
-        cz = sz / float(count);
-        float spread = 0.0f;
-        uint32_t m = 0;
-        for (uint32_t i = 0; i < n; ++i) {
-            float p[3];
-            at(i, p);
-            if (p[k] < b0 || p[k] > b1)
-                continue;
-            const float d = std::hypot(p[a] - cx, p[b] - cz);
-            if (band == 0 || d <= 3.0f * std::max(r, 0.05f)) { spread += d; ++m; }
-        }
-        r = m ? std::max(spread / float(m), 0.05f) : r;
-        float q[3];
-        q[a] = cx; q[b] = cz; q[k] = 0.5f * (b0 + b1);
-        out.insert(out.end(), q, q + 3);
-    }
-}
-
-// Half a box's extent along a unit direction.
-float extentUpOf(V3 half, V3 up) { return std::fabs(half.x * up.x) + std::fabs(half.y * up.y) + std::fabs(half.z * up.z); }
-
-// A seed from the mesh's own content (its positions and indices): the same tree bakes the same leaves and branches every
-// time (m_drawMeshKey holds a static snapshot's serial - a new one each upload: the branches changed when the leaves
+// A seed from the mesh's own content (its positions and indices): the same tree bakes the same leaves every
+// time (m_drawMeshKey holds a static snapshot's serial - a new one each upload: the leaves changed when they
 // were turned off and on).
 uint64_t ContentSeed(const void* vertices, uint32_t stride, uint32_t vertexCount, const uint16_t* indices,
                      uint32_t indexCount)
@@ -291,25 +227,6 @@ void Device::CanopyParams(uint32_t primitive, uint32_t fvf, const FvfLayout& lay
     }
     // A tree with its own leaf art (RVK_LeafOwn): baked from it (again when the art changes - hot reload).
     Texture* art = set.kind == Canopy::Tree && m_leaf.own ? tex->m_leafArt : nullptr;
-    if (art && set.trunk.empty()) {              // its trunk: a solid draw just before, or (NoteSolidDraw) just after
-        float c[3], e[3];
-        DrawWorldBox(c, e);
-        RecentCanopy& r = m_recentCanopy;
-        r.setKey = key;
-        r.world = m_world;
-        for (int j = 0; j < 3; ++j) { r.lo[j] = c[j] - e[j]; r.hi[j] = c[j] + e[j]; }
-        r.ownDraw = m_frameDraw;
-        r.visual = m_drawVisual;
-        const SolidBox* best = nullptr;          // (the one whose foot is nearest the crown's middle)
-        float bestD = 1e30f;
-        for (const SolidBox& b : m_recentSolid)
-            if (b.draw && m_frameDraw - b.draw <= 4 && TrunkUnder(b, r.lo, r.hi, r.visual)) {
-                const float d = std::hypot(b.axis[0] - c[0], b.axis[2] - c[2]) - (b.visual && b.visual == r.visual ? 1e6f : 0.0f);
-                if (d < bestD) { bestD = d; best = &b; }
-            }
-        if (best)
-            GiveTrunk(key, m_world, *best);
-    }
     if (!set.baked || set.texVersion != tex->m_alphaVersion || set.settingsVersion != m_leafVersion || set.art != art ||
         (art && set.artVersion != tex->m_leafArtVersion)) {
         if (m_leafBakesThisFrame >= kBakesPerFrame)
@@ -354,7 +271,7 @@ void Device::CrownOf(LeafSet& set) const
 
 // A solid static draw (opaque, depth-writing, lit, world-space): remembered a little while as a possible trunk, and
 // matched to the canopy drawn just before it if it stands under that one.
-void Device::NoteSolidDraw(uint32_t fvf, const void* vertices, uint32_t stride, uint32_t vertexCount)
+void Device::NoteSolidDraw(uint32_t fvf)
 {
     if (!m_leaf.on || !m_drawMesh || !m_drawMeshStatic || m_target != m_scene || IsTerrain(fvf) ||
         (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZ || !m_rs[d3d::RS_ZWRITEENABLE] || !m_rs[d3d::RS_LIGHTING] ||
@@ -365,81 +282,10 @@ void Device::NoteSolidDraw(uint32_t fvf, const void* vertices, uint32_t stride, 
     SolidBox& b = m_recentSolid[m_recentSolidNext++ % 16];
     for (int i = 0; i < 3; ++i) { b.lo[i] = c[i] - e[i]; b.hi[i] = c[i] + e[i]; }
     b.draw = m_frameDraw;
-    b.visual = m_drawVisual;
-    // Its axis (a trunk's), once a mesh, in the world for our own canopies to start their branches on.
-    b.axisPoints = 0;
-    if (m_leaf.own) {
-        const MeshInfo& info = *m_drawMesh;
-        if (!info.trunkAxisState && vertices) {
-            const auto& w = m_world.m;
-            int k = 1;
-            float best = -1.0f;
-            for (int i = 0; i < 3; ++i) {
-                const float len = std::sqrt(w[i][0] * w[i][0] + w[i][1] * w[i][1] + w[i][2] * w[i][2]);
-                const float upness = len > 0.0f ? std::fabs(w[i][1]) / len : 0.0f;
-                if (upness > best) { best = upness; k = i; }
-            }
-            TraceAxis(static_cast<const uint8_t*>(vertices), stride, vertexCount, k, w[k][1] < 0.0f, info.trunkAxis);
-            info.trunkAxisState = 1;
-        }
-        const auto& w = m_world.m;
-        for (size_t i = 0; i + 2 < info.trunkAxis.size() && b.axisPoints < 10; i += 3, ++b.axisPoints) {
-            const float* q = &info.trunkAxis[i];
-            for (int j = 0; j < 3; ++j)
-                b.axis[b.axisPoints * 3 + j] = q[0] * w[0][j] + q[1] * w[1][j] + q[2] * w[2][j] + w[3][j];
-        }
-    }
-    // The own canopy drawn just before, if this stands under it: its trunk.
-    if (m_recentCanopy.setKey && m_frameDraw - m_recentCanopy.ownDraw <= 4 &&
-        TrunkUnder(b, m_recentCanopy.lo, m_recentCanopy.hi, m_recentCanopy.visual))
-        GiveTrunk(m_recentCanopy.setKey, m_recentCanopy.world, b);
     const RecentCanopy& r = m_recentCanopy;
     if (r.instance && m_frameDraw - r.draw <= 4 && r.x >= b.lo[0] - 0.5f && r.x <= b.hi[0] + 0.5f &&
         r.z >= b.lo[2] - 0.5f && r.z <= b.hi[2] + 0.5f && b.lo[1] < r.bottom)
         m_leafGround[r.instance] = b.lo[1] + 0.05f;
-}
-
-// Whether a solid draw is a crown's trunk (world): part of the same game object when both are known (a tree's trunk
-// and canopy are one visual's pieces) - else (or as well) standing under it: its axis' foot under the crown, upright,
-// reaching up to it. (A box overlapping it was too little: a wall or a house under a crown passed - the branches ran
-// down to it.)
-bool Device::TrunkUnder(const SolidBox& b, const float lo[3], const float hi[3], uint32_t visual) const
-{
-    if (b.axisPoints < 2)
-        return false;
-    if (visual && b.visual && visual != b.visual)
-        return false;
-    const float* foot = &b.axis[0];
-    const float* top = &b.axis[(b.axisPoints - 1) * 3];
-    const float mx = 0.1f * (hi[0] - lo[0]), mz = 0.1f * (hi[2] - lo[2]);
-    const float rise = top[1] - foot[1], across = std::hypot(top[0] - foot[0], top[2] - foot[2]);
-    const bool ok = foot[0] >= lo[0] - mx && foot[0] <= hi[0] + mx && foot[2] >= lo[2] - mz && foot[2] <= hi[2] + mz &&
-           foot[1] < lo[1] && rise > 0.5f * across && b.hi[1] >= lo[1] - 0.25f * (hi[1] - lo[1]);
-    return ok;
-}
-
-// Our own canopy's trunk found: its axis into the canopy's model space (every instance of the tree shares it), and
-// the set baked again with it if it was baked without.
-void Device::GiveTrunk(uint64_t setKey, const d3d::Matrix& canopyWorld, const SolidBox& b)
-{
-    auto it = m_leafSets.find(setKey);
-    if (it == m_leafSets.end() || !it->second.trunk.empty())
-        return;
-    d3d::Matrix inv;
-    if (!InvertMatrix(canopyWorld, &inv))
-        return;
-    LeafSet& set = it->second;
-    for (uint32_t i = 0; i < b.axisPoints; ++i) {
-        const float* p = &b.axis[i * 3];
-        for (int j = 0; j < 3; ++j)
-            set.trunk.push_back(p[0] * inv.m[0][j] + p[1] * inv.m[1][j] + p[2] * inv.m[2][j] + inv.m[3][j]);
-    }
-    if (set.baked)
-        set.baked = false;                       // (again, with it)
-    static uint32_t logged = 0;
-    if (logged < 20 && ++logged)
-        Log("leaves: a tree's trunk found (%u axis points, from %.1f to %.1f up in the canopy's space)", b.axisPoints,
-            double(set.trunk[1]), double(set.trunk[set.trunk.size() - 2]));
 }
 
 // The ground under the current canopy (see m_leafGround): the captured terrain, the trunk drawn next to it, what was
@@ -481,12 +327,9 @@ float Device::LeafGround(const LeafSet& set)
 // enough to cover the cards' leafy part about twice over. (LeafRecord: half u across the sprig, half v towards its base
 // - the texture's v grows down the cell, to the twig's base.)
 void Device::BakeOwnCanopy(LeafSet& set, uint32_t primitive, const FvfLayout& layout, const void* vertices,
-                           uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount, void* outLeaves,
-                           void* outBranches)
+                           uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount, void* outLeaves)
 {
     auto& leaves = *static_cast<std::vector<LeafRecord>*>(outLeaves);
-    auto& branches = *static_cast<std::vector<LeafRecord>*>(outBranches);
-    std::vector<V3> bases;                       // each sprig's twig base (the branches reach them)
     Texture* tex = m_textures[0];
     const auto& mask = tex->m_alphaMask;
     const uint32_t mw = tex->m_alphaW, mh = tex->m_alphaH;
@@ -508,15 +351,14 @@ void Device::BakeOwnCanopy(LeafSet& set, uint32_t primitive, const FvfLayout& la
     const V3 half{std::max(0.5f * (hi[0] - lo[0]), 0.05f), std::max(0.5f * (hi[1] - lo[1]), 0.05f),
                   std::max(0.5f * (hi[2] - lo[2]), 0.05f)};
     const float heightW = 2.0f * std::fabs(Dot(half, V3{std::fabs(up.x), std::fabs(up.y), std::fabs(up.z)})) * scale;
-    const float sizeW = std::clamp(0.11f * heightW, 1.0f, 3.2f) * std::clamp(m_leaf.size, 0.25f, 3.5f);
+    const float sizeW = std::clamp(0.12f * heightW, 1.0f, 3.4f) * std::clamp(m_leaf.size, 0.25f, 3.5f);
     const float size = sizeW / scale;            // model units
     const float perArea = 4.5f * std::clamp(m_leaf.density, 0.1f, 4.0f) / (0.45f * size * size);
-    // Random numbers of their own for each triangle, each sample and each cluster (from the mesh's content and where
-    // they are), not one sequence: the canopy's texture arrives at low quality first and is baked again at full - one
-    // sample landing otherwise shifted every number after it, and the whole crown changed (the user: turned off and on,
-    // the branches came out different).
+    // Random numbers of their own for each triangle and each sample (from the mesh's content and where they are), not
+    // one sequence: the canopy's texture arrives at low quality first and is baked again at full - one sample landing
+    // otherwise shifted every number after it, and the whole crown changed (the user: turned off and on, it came out
+    // different).
     const uint64_t seed = ContentSeed(vertices, stride, vertexCount, indices, indexCount) ^ 0xC0A0B7ull;
-    double wantTotal = 0.0;
     const uint32_t count = indices ? indexCount : vertexCount;
     const uint32_t triangles = primitive == d3d::TriangleList ? count / 3 : (count >= 3 ? count - 2 : 0);
     auto unorm16 = [](float x) { return uint32_t(std::clamp(x, 0.0f, 1.0f) * 65535.0f + 0.5f); };
@@ -539,7 +381,6 @@ void Device::BakeOwnCanopy(LeafSet& set, uint32_t primitive, const FvfLayout& la
         if (area < 1e-8f)
             continue;
         float want = area * perArea;
-        wantTotal += want;
         Rng tr(seed ^ (uint64_t(t) + 1) * 0x9E3779B97F4A7C15ull);
         uint32_t tries = uint32_t(want) + (tr.Unit() < want - std::floor(want) ? 1u : 0u);
         tries = std::min<uint32_t>(tries, 8192);
@@ -551,241 +392,38 @@ void Device::BakeOwnCanopy(LeafSet& set, uint32_t primitive, const FvfLayout& la
             float v = t0[1] + (t1[1] - t0[1]) * r1 + (t2[1] - t0[1]) * r2;
             if (MaskAlpha(mask, mw, mh, u, v) < 0.5f)
                 continue;
-            V3 p = p0 + e1 * r1 + e2 * r2;
+            const V3 onCard = p0 + e1 * r1 + e2 * r2;
             // Out of the crown (an ellipsoid's normal there), a direction along its surface, the sprig between.
-            V3 d = p - centre;
+            V3 d = onCard - centre;
             V3 n = Normalize(V3{d.x / (half.x * half.x), d.y / (half.y * half.y), d.z / (half.z * half.z)});
-            V3 r{rng.Unit() - 0.5f, rng.Unit() - 0.5f, rng.Unit() - 0.5f};
-            V3 tangent = Normalize(r - n * Dot(r, n));
-            float lean = 0.25f + 0.55f * rng.Unit();
-            V3 reach = Normalize(tangent * std::cos(lean) + n * std::sin(lean) - up * (0.3f * rng.Unit()));
-            V3 across = Cross(reach, n);
-            if (Length(across) < 1e-4f)
-                across = Cross(reach, up);
-            across = Normalize(across);
-            V3 hu = across * (0.5f * size), hv = reach * (-0.5f * size);   // (v: towards the twig's base)
-            V3 mid = p + reach * (0.45f * size);
-            const uint32_t cell = rng.Next() % 15u;   // (the 16th: a piece of branch)
-            LeafRecord rec{};
-            rec.centre[0] = mid.x;
-            rec.centre[1] = mid.y;
-            rec.centre[2] = mid.z;
-            rec.halfUxy = Halves(hu.x, hu.y);
-            rec.halfUzVx = Halves(hu.z, hv.x);
-            rec.halfVyz = Halves(hv.y, hv.z);
-            rec.uv = unorm16((float(cell % 4u) + 0.5f) * 0.25f) | unorm16((float(cell / 4u) + 0.5f) * 0.25f) << 16;
-            const uint32_t uh = 2046;            // (0.125: the cell's half, a hair inside it)
-            rec.uvHalfPhase = uh | uh << 12 | (rng.Next() >> 24) << 24;
-            leaves.push_back(rec);
-            bases.push_back(p);
-        }
-    }
-    if (bases.empty())
-        return;
-    // Its branches (the game's cards had them painted in; without them the sprigs float): the sprigs' bases gathered
-    // into clusters (k-means: a branch's end each), a limb from the top of the trunk (under the crown's middle) to each,
-    // arching up a little, and from each cluster twigs to a few of its sprigs. Each piece two crossed cards of the
-    // atlas' last cell (a stick, wide at its base); a limb as thick as the sprigs it carries.
-    // (How many, and where they start: from the crown's shape - not the samples that happened to land on leaf.)
-    const uint32_t clusters = std::clamp<uint32_t>(uint32_t(wantTotal / 90.0), 4u, 48u);
-    std::vector<V3> mean(clusters);
-    std::vector<uint32_t> of(bases.size(), 0), members(clusters, 0);
-    for (uint32_t c = 0; c < clusters; ++c) {    // (the sprig nearest each of points spread over the crown)
-        const float z = 1.0f - 2.0f * (float(c) + 0.5f) / float(clusters), r = std::sqrt(std::max(1.0f - z * z, 0.0f));
-        const float phi = 2.3999632f * float(c);
-        const V3 target = centre + V3{half.x * r * std::cos(phi), half.y * z, half.z * r * std::sin(phi)} * 0.7f;
-        float best = 1e30f;
-        for (const V3& b : bases) {
-            V3 d = b - target;
-            if (Dot(d, d) < best) { best = Dot(d, d); mean[c] = b; }
-        }
-    }
-    for (int iteration = 0; iteration < 6; ++iteration) {
-        std::vector<V3> sum(clusters, V3{0, 0, 0});
-        std::fill(members.begin(), members.end(), 0u);
-        for (size_t i = 0; i < bases.size(); ++i) {
-            float best = 1e30f;
-            for (uint32_t c = 0; c < clusters; ++c) {
-                V3 d = bases[i] - mean[c];
-                float d2 = Dot(d, d);
-                if (d2 < best) { best = d2; of[i] = c; }
-            }
-            sum[of[i]] = sum[of[i]] + bases[i];
-            ++members[of[i]];
-        }
-        for (uint32_t c = 0; c < clusters; ++c)
-            if (members[c]) mean[c] = sum[c] * (1.0f / float(members[c]));
-    }
-    // The crown's root: under the middle of its sprigs, at their lowest.
-    V3 meanAll{0, 0, 0};
-    float lowest = 1e30f;
-    for (const V3& b : bases) {
-        meanAll = meanAll + b;
-        lowest = std::min(lowest, Dot(b, up));
-    }
-    meanAll = meanAll * (1.0f / float(bases.size()));
-    V3 root = meanAll + up * (lowest - Dot(meanAll, up) - 0.05f * Length(half));
-    // Its trunk (GiveTrunk: the axis of the solid draw under it, canopy model space): the root where it reaches the
-    // crown's lowest sprigs (or its top, short of them), and every branch may start on it.
-    std::vector<V3> trunk;
-    for (size_t i = 0; i + 2 < set.trunk.size(); i += 3)
-        trunk.push_back(V3{set.trunk[i], set.trunk[i + 1], set.trunk[i + 2]});
-    // (The closest point of a polyline to q, from its point `from` on.)
-    auto closestOn = [](const std::vector<V3>& line, V3 q, size_t from, float* dist2) {
-        V3 best = line.empty() ? q : line[std::min(from, line.size() - 1)];
-        float bd = 1e30f;
-        for (size_t i = from; i + 1 < line.size(); ++i) {
-            V3 a = line[i], ab = line[i + 1] - a;
-            const float t = std::clamp(Dot(q - a, ab) / std::max(Dot(ab, ab), 1e-12f), 0.0f, 1.0f);
-            V3 p = a + ab * t, d = q - p;
-            if (Dot(d, d) < bd) { bd = Dot(d, d); best = p; }
-        }
-        if (line.size() == 1) { V3 d = q - best; bd = Dot(d, d); }
-        if (dist2) *dist2 = bd;
-        return best;
-    };
-    // (Short of the crown - its trace ends lower: carried on its way up to the lowest sprigs.)
-    if (trunk.size() >= 2 && Dot(trunk.back(), up) < lowest) {
-        V3 dir = trunk.back() - trunk[trunk.size() - 2];
-        if (Dot(dir, up) < 1e-4f * Length(half)) dir = up;
-        dir = Normalize(dir);
-        trunk.push_back(trunk.back() + dir * ((lowest - Dot(trunk.back(), up)) / std::max(Dot(dir, up), 0.2f)));
-    }
-    // (Branches start on its part in the crown only: from a little under the lowest sprigs.)
-    size_t trunkFrom = 0;
-    while (trunkFrom + 2 < trunk.size() && Dot(trunk[trunkFrom + 1], up) < lowest - 0.1f * extentUpOf(half, up))
-        ++trunkFrom;
-    if (trunk.size() >= 2) {
-        root = trunk.back();
-        for (size_t i = 0; i + 1 < trunk.size(); ++i) {
-            const float h0 = Dot(trunk[i], up), h1 = Dot(trunk[i + 1], up);
-            if (h0 <= lowest && h1 >= lowest) {
-                root = trunk[i] + (trunk[i + 1] - trunk[i]) * ((lowest - h0) / std::max(h1 - h0, 1e-6f));
-                break;
+            // Two layers: one about the card, one deeper in the crown (volume: one layer on the cards was thin).
+            for (int layer = 0; layer < 2; ++layer) {
+                const float depth = layer == 0 ? 0.4f * (rng.Unit() - 0.5f) : -(0.4f + 0.8f * rng.Unit());
+                V3 p = onCard + n * (depth * size);
+                V3 r{rng.Unit() - 0.5f, rng.Unit() - 0.5f, rng.Unit() - 0.5f};
+                V3 tangent = Normalize(r - n * Dot(r, n));
+                float lean = 0.25f + 0.55f * rng.Unit();
+                V3 reach = Normalize(tangent * std::cos(lean) + n * std::sin(lean) - up * (0.3f * rng.Unit()));
+                V3 across = Cross(reach, n);
+                if (Length(across) < 1e-4f)
+                    across = Cross(reach, up);
+                across = Normalize(across);
+                V3 hu = across * (0.5f * size), hv = reach * (-0.5f * size);   // (v: towards the twig's base)
+                V3 mid = p + reach * (0.45f * size);
+                const uint32_t cell = rng.Next() % 16u;
+                LeafRecord rec{};
+                rec.centre[0] = mid.x;
+                rec.centre[1] = mid.y;
+                rec.centre[2] = mid.z;
+                rec.halfUxy = Halves(hu.x, hu.y);
+                rec.halfUzVx = Halves(hu.z, hv.x);
+                rec.halfVyz = Halves(hv.y, hv.z);
+                rec.uv = unorm16((float(cell % 4u) + 0.5f) * 0.25f) | unorm16((float(cell / 4u) + 0.5f) * 0.25f) << 16;
+                const uint32_t uh = 2046;            // (0.125: the cell's half, a hair inside it)
+                rec.uvHalfPhase = uh | uh << 12 | (rng.Next() >> 24) << 24;
+                leaves.push_back(rec);
             }
         }
-    }
-    // A piece of branch from `from` to `to`, `thick` wide (model units) all along (the atlas' last cell: an even
-    // stick), a little longer at both ends so pieces in a row overlap (no seam at the joint).
-    auto stick = [&](V3 from, V3 to, float thick) {
-        V3 axis = to - from;
-        const float len = Length(axis);
-        if (len < 1e-4f)
-            return;
-        V3 a = axis * (1.0f / len);
-        from = from - a * (0.4f * thick);
-        to = to + a * (0.4f * thick);
-        axis = to - from;
-        V3 side = Cross(a, std::fabs(Dot(a, up)) < 0.9f ? up : V3{1, 0, 0});
-        side = Normalize(side);
-        V3 side2 = Normalize(Cross(a, side));
-        const float halfU = 0.5f * thick / 0.30f;   // (the stick fills ~0.30 of the cell's width)
-        V3 mid = (from + to) * 0.5f, hv = axis * -0.5f;   // (v: towards the base)
-        for (V3 sd : {side, side2}) {
-            V3 hu = sd * halfU;
-            LeafRecord rec{};
-            rec.centre[0] = mid.x;
-            rec.centre[1] = mid.y;
-            rec.centre[2] = mid.z;
-            rec.halfUxy = Halves(hu.x, hu.y);
-            rec.halfUzVx = Halves(hu.z, hv.x);
-            rec.halfVyz = Halves(hv.y, hv.z);
-            rec.uv = unorm16(0.875f) | unorm16(0.875f) << 16;
-            const uint32_t uh = 2046;
-            rec.uvHalfPhase = uh | uh << 12;
-            branches.push_back(rec);
-        }
-    };
-    // A curved branch (a quadratic curve from `from` through `bend` to `to`) in `pieces`, tapering evenly from w0 to w1;
-    // its points kept (the branches off it start along it).
-    struct Limb { std::vector<V3> pts; std::vector<float> widths; };
-    auto curve = [&](V3 from, V3 bend, V3 to, float w0, float w1, int pieces, Limb* keep) {
-        V3 prev = from;
-        if (keep) { keep->pts.push_back(from); keep->widths.push_back(w0); }
-        for (int k = 1; k <= pieces; ++k) {
-            const float t = float(k) / float(pieces), u = 1.0f - t;
-            V3 p = from * (u * u) + bend * (2.0f * u * t) + to * (t * t);
-            const float w = w0 + (w1 - w0) * (float(k) - 0.5f) / float(pieces);
-            stick(prev, p, w);
-            if (keep) { keep->pts.push_back(p); keep->widths.push_back(w0 + (w1 - w0) * t); }
-            prev = p;
-        }
-    };
-    // A connected frame: nearest the root first; each further cluster hangs off the nearest one already in that is
-    // nearer the root than itself (the first off the root) - starting along that one's limb where it passes closest
-    // (not all from its end: a star), carrying on its way, curving up a little. As thick as all it carries.
-    std::vector<uint32_t> order;
-    for (uint32_t c = 0; c < clusters; ++c)
-        if (members[c]) order.push_back(c);
-    auto toRoot = [&](uint32_t c) { V3 d = mean[c] - root; return Dot(d, d); };
-    std::sort(order.begin(), order.end(), [&](uint32_t x, uint32_t y) { return toRoot(x) < toRoot(y); });
-    std::vector<int> parent(clusters, -1);
-    for (size_t k = 1; k < order.size(); ++k) {
-        float best = 1e30f;
-        for (size_t j = 0; j < k; ++j) {
-            V3 d = mean[order[k]] - mean[order[j]];
-            const float d2 = Dot(d, d);
-            if (d2 < best) { best = d2; parent[order[k]] = int(order[j]); }
-        }
-    }
-    std::vector<float> carried(clusters, 0.0f);
-    for (size_t k = order.size(); k-- > 0;) {
-        const uint32_t c = order[k];
-        carried[c] += float(members[c]);
-        if (parent[c] >= 0) carried[parent[c]] += carried[c];
-    }
-    const float limbW = std::clamp(0.08f * sizeW, 0.1f, 0.45f) / scale;   // a cluster's own branch (model units)
-    std::vector<Limb> limbs(clusters);
-    for (uint32_t c : order) {
-        float thick = limbW * std::min(std::sqrt(carried[c] / 35.0f), 4.0f);
-        V3 from = root, onward = up;
-        float viaParent = 1e30f;                 // (the attachment on its parent's limb, how far)
-        V3 parentAt{};
-        float parentW = 0.0f;
-        V3 parentOnward = up;
-        if (parent[c] >= 0) {                    // (the closest point of the parent's limb past its first third)
-            const Limb& pl = limbs[parent[c]];
-            float best = 1e30f;
-            size_t at = pl.pts.size() - 1;
-            for (size_t i = pl.pts.size() / 3; i < pl.pts.size(); ++i) {
-                V3 d = pl.pts[i] - mean[c];
-                if (Dot(d, d) < best) { best = Dot(d, d); at = i; }
-            }
-            parentAt = pl.pts[at];
-            parentOnward = Normalize(pl.pts[at] - pl.pts[at > 0 ? at - 1 : 0] + up * 1e-3f);
-            parentW = pl.widths[at];
-            viaParent = best;
-        }
-        // On the trunk where it passes closest, if that is nearer than its parent's limb (or it has none).
-        float viaTrunk = 1e30f;
-        V3 trunkAt = trunk.size() >= 2 ? closestOn(trunk, mean[c], trunkFrom, &viaTrunk) : root;
-        if (trunk.size() >= 2 && (parent[c] < 0 || viaTrunk < viaParent)) {
-            from = trunkAt;
-            onward = Normalize(mean[c] - trunkAt + up * (0.3f * Length(mean[c] - trunkAt)));
-        } else if (parent[c] >= 0) {
-            from = parentAt;
-            onward = parentOnward;
-            thick = std::min(thick, 0.85f * parentW);
-        }
-        V3 d = mean[c] - from;
-        const float len = Length(d);
-        if (len < 1e-4f)
-            continue;
-        V3 bend = from + Normalize(d * (1.0f / len) + onward * 0.6f) * (0.45f * len) + up * (0.08f * len);
-        const int pieces = std::clamp(int(len / (2.0f * thick + 1e-4f)), 2, 5);
-        curve(from, bend, mean[c], thick, thick * 0.55f, pieces, &limbs[c]);
-        // Twigs to a few of its sprigs: off the limb's last part, thin and even, stopping short of the sprig's own.
-        const Limb& l = limbs[c];
-        Rng rng(seed ^ (uint64_t(c) + 1) * 0x2545F4914F6CDD1Dull);
-        uint32_t twigs = 0;
-        for (size_t i = 0; i < bases.size() && twigs < 4; ++i)
-            if (of[i] == c && rng.Unit() < 4.0f / float(members[c] + 1)) {
-                const size_t at = l.pts.size() - 1 - (rng.Next() % std::min<size_t>(l.pts.size(), 2));
-                V3 start = l.pts[at], end = start + (bases[i] - start) * 0.85f;
-                V3 mid = (start + end) * 0.5f + up * (0.06f * Length(end - start));
-                curve(start, mid, end, limbW * 0.3f, limbW * 0.22f, 2, nullptr);
-                ++twigs;
-            }
     }
 }
 
@@ -818,9 +456,8 @@ bool Device::BakeLeaves(LeafSet& set, uint32_t primitive, const FvfLayout& layou
     Rng rng(ContentSeed(vertices, layout.stride, vertexCount, indices, indexCount) ^ 0x5EEDull);
     const uint32_t count = indices ? indexCount : vertexCount;
     const uint32_t triangles = primitive == d3d::TriangleList ? count / 3 : (count >= 3 ? count - 2 : 0);
-    std::vector<LeafRecord> branches;            // (our own canopy's: first, never thinned - BakeOwnCanopy)
     if (set.art)
-        BakeOwnCanopy(set, primitive, layout, vertices, vertexCount, indices, indexCount, &leaves, &branches);
+        BakeOwnCanopy(set, primitive, layout, vertices, vertexCount, indices, indexCount, &leaves);
     for (uint32_t t = 0; t < (set.art ? 0u : triangles); ++t) {
         uint32_t k[3];
         if (primitive == d3d::TriangleList) { k[0] = 3 * t; k[1] = 3 * t + 1; k[2] = 3 * t + 2; }
@@ -893,9 +530,8 @@ bool Device::BakeLeaves(LeafSet& set, uint32_t primitive, const FvfLayout& layou
     // Shuffled: any first part of the set is an even thinning (the distance level of detail draws a first part).
     for (size_t i = leaves.size(); i > 1; --i)
         std::swap(leaves[i - 1], leaves[rng.Next() % i]);
-    if (leaves.size() + branches.size() > kMaxLeavesPerSet)
-        leaves.resize(kMaxLeavesPerSet - std::min<size_t>(branches.size(), kMaxLeavesPerSet));
-    leaves.insert(leaves.begin(), branches.begin(), branches.end());
+    if (leaves.size() > kMaxLeavesPerSet)
+        leaves.resize(kMaxLeavesPerSet);
     const uint32_t n = uint32_t(leaves.size());
     if (n) {
         VmaVirtualAllocationCreateInfo ai{};
