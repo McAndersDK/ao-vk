@@ -1204,7 +1204,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
             std::memset(p.c, 0, sizeof(p.c));
             p.c[3] = 0.12f;                                 // (it settles out slowly)
             p.d[0] = 0.0f;
-            p.d[1] = 3.0f;                              // (sand: little swirl - billowing read as smoke, the user)
+            p.d[1] = 10.0f;
         }
         p.d[2] = wind[0];
         p.d[3] = wind[1];

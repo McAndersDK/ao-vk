@@ -164,25 +164,6 @@ void main()
         // Sand: its grain instead.
         if (S.info.w == 1u) {
             dens *= SandGrain(p, uvw);
-            // The wind's frame here (as SandGrain's): along it, across it - the specks and the ribbons carried with
-            // it (S.sand.z: how far, wrapped at 32 - their scales whole multiples of the noise's repeat over that).
-            vec2 wv = S.look.zw;
-            float speed = length(wv);
-            vec2 wa = speed > 1e-3 ? wv / speed : vec2(1.0, 0.0), wc = vec2(-wa.y, wa.x);
-            vec2 wr = p.xz - S.sand.xy;
-            float along = dot(wr, wa), across = dot(wr, wc) + S.sand.w;
-            // Its fine grain: a finer noise breaking it into specks within each cell - sand, not a smooth cloud.
-            float specks = Wisps(vec3(3.0 * (along + S.sand.z), 3.0 * p.y, 3.0 * across) + 11.3);
-            dens *= 0.45 + 1.1 * smoothstep(0.35, 0.65, specks);
-            // Saltation: the grains hopping along the ground - a thin layer (its height over the ground: the flow
-            // image's w) of sharp ribbons racing along the wind half as fast again as the dust over them, where the
-            // sand blows (none where the simulation has none: a lee, a sheltered room).
-            float above = texture(flow, uvw).w * 4.0;
-            if (above > -0.2 && above < 1.2) {
-                float ribbon = Wisps(vec3(0.5 * (along + 1.5 * S.sand.z), 2.0 * max(above, 0.0), 4.0 * across));
-                float salt = smoothstep(0.45, 0.62, ribbon) * exp(-max(above, 0.0) / 0.3) * smoothstep(-0.2, 0.05, above);
-                dens += 0.18 * salt * smoothstep(0.002, 0.02, now.x) * clamp(S.detail.x, 0.0, 1.0);
-            }
             // (Contrast: thick sand thicker, thin sand thinner about a typical density - the veil broken into masses.)
             float k = S.sandLook.x;
             if (k != 1.0) dens = 0.03 * pow(dens / 0.03, mix(1.0, 1.6, clamp((k - 1.0) / 2.0, 0.0, 1.0)) * min(k, 1.0));
@@ -203,10 +184,8 @@ void main()
         vec3 lit = S.ambient.rgb * mix(0.45, 1.0, sunIn) + sun * sunIn;
         if (S.info.w == 1u) {                     // (sand, RVK_SandContrast: its own shade deeper, its lit side brighter)
             float k = S.sandLook.x;
-            // (Flat-ish: light bounces about among the grains - the dark undersides read as smoke; still a little
-            // shade with the contrast.)
-            float shade = max(mix(0.75 / k, 1.0, sunIn) * mix(1.0, 0.9, clamp(k - 1.0, 0.0, 1.0)), 0.5);
-            lit = S.ambient.rgb * shade + sun * (0.25 + 0.75 * sunIn) * (0.7 + 0.3 * k);
+            lit = S.ambient.rgb * max(mix(0.45 / k, 1.0, sunIn) * mix(1.0, 0.85, clamp(k - 1.0, 0.0, 1.0)), 0.3) +
+                  sun * sunIn * (0.7 + 0.3 * k);         // (never darker than a third of the sky's light: dusty, not black)
         }
         for (uint k = 0u; k < lamps; ++k) {
             Light li = FL.lights[S.lamps[k >> 2u][k & 3u]];
