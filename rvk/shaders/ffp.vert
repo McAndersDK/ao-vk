@@ -349,6 +349,7 @@ void main()
         // ffp_main.glsl LeafMask).
         vec3 modelPos = inPos.xyz;
         float crownShade = 1.0;
+        vec3 treeTint = vec3(1.0);                // (the crown shading: this tree's colour)
         if (D.leaf.w > 0.0 && FL.leafView.y > 0.0) {   // (a palm, D.leaf.w < 0, only sways: its fronds are whole)
             float keep = LeafKeep();
             crownShade = mix(1.0, CrownShade(modelPos), keep);
@@ -377,7 +378,8 @@ void main()
             // motion where it is see-through (the ambient occlusion, motion blur and TAA read those).
             if (meanAlpha < 0.92) vCutout = 0.35;
         }
-        if (D.leaf.w != 0.0) {                   // a canopy with leaves: its branches sway (its cards and its leaves)
+        if (D.leaf.w != 0.0 && FL.leafView.y > 0.0) {   // a canopy with leaves: its branches sway (its cards and its
+                                                         // leaves; the crown shading alone: not)
             vec3 now = BranchSway(inPos.xyz, FL.wind.z, D.world[3].xz);
             posW.xyz += now;
 #ifdef RVK_LEAF
@@ -416,6 +418,32 @@ void main()
         vec3 normalW = mat3(D.world) * (hasNormal ? inNormal : vec3(0.0));
         if ((C.flags.x & F_NORMALIZE) != 0u && dot(normalW, normalW) > 0.0)
             normalW = normalize(normalW);
+#ifndef RVK_LEAF
+        // The crown shading (RVK_CrownShade, FL.leafView.w): a tree's or shrub's canopy - the game's cards - lit as one
+        // rounded crown: each card's normal turned out of the crown (its side facing out), then bent most of the way
+        // to the crown's own outward direction there (the sunny side bright, the far side and the underside darker);
+        // darker towards its middle and under it (CrownShade, deeper); each tree's colour a little its own.
+        if (D.leaf.w > 0.0 && FL.leafView.w > 0.0) {
+            float k = FL.leafView.w;
+            vec3 outW = mat3(D.world) * (inPos.xyz - D.leaf.xyz);
+            float len = length(normalW), lo = length(outW);
+            if (lo > 1e-5 && len > 1e-5) {
+                outW /= lo;
+                vec3 n = normalW / len;
+                if (dot(n, outW) < 0.0) n = -n;
+                normalW = normalize(mix(n, outW, 0.6 * k)) * len;
+            }
+            vec3 d = (inPos.xyz - D.leaf.xyz) / D.leaf.w;
+            float r = length(d);
+            float inside = mix(0.78, 1.0, smoothstep(0.1, 0.95, r)) * (1.0 - 0.08 * clamp(-d.y, 0.0, 1.0));
+            crownShade *= mix(1.0, inside, k);
+            // (Each tree its own: a hash of where it stands - value +-7%, hue a touch warmer or cooler.)
+            uint h = floatBitsToUint(D.world[3].x) * 0x9E3779B9u ^ floatBitsToUint(D.world[3].z) * 0x85EBCA6Bu;
+            h ^= h >> 15; h *= 0x2C1B3C6Du; h ^= h >> 12;
+            float v = float(h & 0xFFFFu) / 65535.0 - 0.5, w = float(h >> 16) / 65535.0 - 0.5;
+            treeTint = mix(vec3(1.0), (1.0 + 0.14 * v) * vec3(1.0 + 0.05 * w, 1.0, 1.0 - 0.05 * w), k);
+        }
+#endif
         normalV = mat3(C.view) * normalW;
 
         vPosW = posW.xyz;
@@ -458,8 +486,8 @@ void main()
                 specular = vec4(mSpecular.rgb * spec, specular.a);
             }
         }
-        diffuse.rgb *= crownShade;
-        vMatAmbient *= crownShade;
+        diffuse.rgb *= crownShade * treeTint;
+        vMatAmbient *= crownShade * treeTint;
         vMatEmissive *= crownShade;
         // Material colours for per-pixel lighting stay unclamped; the fragment shader clamps the lit result.
         bool perPixel = (C.flags.x & (F_LIGHTING | F_PERPIXEL)) == (F_LIGHTING | F_PERPIXEL);

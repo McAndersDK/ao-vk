@@ -392,6 +392,10 @@ public:
         m_leaf = s;
         m_frameLightsDirty = true;
     }
+    // RVK_CrownShade: tree and shrub canopies (the game's cards) lit as one rounded crown - their normals bent out from
+    // its centre, darker inside and under, each tree's colour a little its own (ffp.vert), with the leaves off too.
+    void SetCrownShade(float amount) { m_crownShade = amount; m_frameLightsDirty = true; }
+    float m_crownShade = 1.0f;
     // RVK_GrassShadow: the blades cast the sun's shadow (into its nearest cascade: onto the ground and each other).
     void SetGrassShadows(bool on) { m_grassShadows = on; }
     // RVK_GrassEven: the blades' colour from one green (1) rather than the ground texel under each (0); baked.

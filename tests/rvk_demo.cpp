@@ -3167,6 +3167,7 @@ float g_leafCamHeight = -1.0f;     // --leaf-cam-height H: ... this high (defaul
 float g_leafCamYaw = 0.0f;         // --leaf-cam-yaw R: ... turned R radians about the row's middle
 int g_leafFilm = 0;                // --leaf-film N: ~60 frames a second, a screenshot every N frames (film_NNN.bmp)
 int g_leafForest = 0;              // --leaf-forest N: an N x N grid of the trees (12 units apart), seen from eye height
+float g_crownShade = 1.0f;         // --crown-shade X: RVK_CrownShade
 std::string g_leafArt;             // --leaf-art ATLAS.png[,NORMAL.png]: a tree type's own leaf art (ao-assets leaf-art)
                                    // on every canopy (cut-out part) of the trees - leaves.cpp BakeOwnCanopy
 
@@ -3285,6 +3286,7 @@ void RunLeafScene(D& dev, int frames, const std::string& shot, const std::string
     auto groundPixels = Checker(64, 8, 0xFF4A6A30, 0xFF42602A);
     Texture* ground = dev.CreateTexture(64, 64, groundPixels.data());
     dev.SetLeaves(g_leafSettings);
+    dev.SetCrownShade(g_crownShade);
     for (int frame = 0; frame < frames; ++frame) {
         if (frame == frames - 1) {
             dev.RequestScreenshot(shot);
@@ -3677,6 +3679,7 @@ int main(int argc, char** argv)
         else if (a == "--leaf-off") g_leafSettings.on = false;
         else if (a == "--leaf-art" && i + 1 < argc) g_leafArt = argv[++i];
         else if (a == "--leaf-no-own") g_leafSettings.own = false;
+        else if (a == "--crown-shade" && i + 1 < argc) g_crownShade = float(std::atof(argv[++i]));
         else if (a == "--leaf-shadow-off") g_leafSettings.shadows = false;
         else if (a == "--leaf-fall" && i + 1 < argc) g_leafSettings.fall = float(std::atof(argv[++i]));
         else if (a == "--leaf-density" && i + 1 < argc) g_leafSettings.density = float(std::atof(argv[++i]));

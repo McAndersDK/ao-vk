@@ -61,6 +61,7 @@ Setting g_settings[] = {
     {"RVK_Albedo",     "Replacement textures", "Lighting",     Bool,  0, 1, 1, 1, nullptr, 0},
     {"RVK_LeafLightOn","Sunlight through leaves",                                  "Lighting",         Bool,  0, 1, 1, 1, nullptr, 0},
     {"RVK_LeafLight",  "Strength",                                                 "Lighting",         Float, 0.25f, 2, 0.25f, 1, nullptr, 0, "RVK_LeafLightOn"},
+    {"RVK_CrownShade", "Tree crowns lit as one rounded mass (darker inside, each tree's colour its own)", "Lighting", Float, 0, 1, 0.1f, 1, nullptr, 0},
     {"RVK_PtLight",    "Point light intensity (lamps, fires, other lights)",       "Lighting",         Float, 0.25f, 2, 0.05f, 0.3f, nullptr, 0},
     {"RVK_CharLight",  "Character light intensity", "Lighting",  Float, 0.1f, 2, 0.05f, 0.25f, nullptr, 0},
     {"RVK_TessOn",     "Rounder characters (Phong tessellation)",                  "Lighting",         Bool,  0, 1, 1, 1, nullptr, 0},
@@ -303,7 +304,7 @@ Setting* Find(const char* name)
 // so switching it back on restores them). Settings not listed here only tune something these switch off.
 struct Vanilla { const char* name; float value; };
 const Vanilla kVanilla[] = {
-    {"RVK_PixelLight", 0}, {"RVK_LightOver", 0}, {"RVK_Bump", 0}, {"RVK_NormalMaps", 0}, {"RVK_Pbr", 0}, {"RVK_Albedo", 0}, {"RVK_LeafLight", 0}, {"RVK_Headroom", 1},
+    {"RVK_PixelLight", 0}, {"RVK_LightOver", 0}, {"RVK_Bump", 0}, {"RVK_NormalMaps", 0}, {"RVK_Pbr", 0}, {"RVK_Albedo", 0}, {"RVK_LeafLight", 0}, {"RVK_CrownShade", 0}, {"RVK_Headroom", 1},
     {"RVK_Sway", 0}, {"RVK_FolEdges", 0}, {"RVK_GrassPush", 0}, {"RVK_GrassOn", 0}, {"RVK_LeafOn", 0}, {"RVK_PlantDetail", 0}, {"RVK_FoliageLod", 0}, {"RVK_PtLight", 1}, {"RVK_CharLight", 1}, {"RVK_Tess", 0}, {"RVK_Aniso", 1}, {"RVK_SunShadow", 0}, {"RVK_Contact", 0}, {"RVK_PtShadows", 0},
     {"RVK_Hdr", 0}, {"RVK_Bloom", 0}, {"RVK_BloomFx", 0}, {"RVK_NightGlow", 0}, {"RVK_MoonLight", 0}, {"RVK_NightDark", 0}, {"RVK_Mist", 0}, {"RVK_Sun", 0}, {"RVK_GameSun", 1}, {"RVK_Ao", 0}, {"RVK_Gi", 0},
     {"RVK_Volume", 0}, {"RVK_VolLand", 0}, {"RVK_Ssr", 0}, {"RVK_MBlur", 0}, {"RVK_Taa", 0}, {"RVK_Fxaa", 0}, {"RVK_Saturation", 1}, {"RVK_Contrast", 1},
@@ -485,6 +486,7 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
                       V("RVK_Vignette"));
     else if (is("RVK_SunSoft")) d->SetSunSoftness(V(n));
     else if (is("RVK_LeafLightOn") || is("RVK_LeafLight")) d->SetLeafLight(V("RVK_LeafLight"));
+    else if (is("RVK_CrownShade")) d->SetCrownShade(V(n));
     else if (is("RVK_NightGlow")) d->SetNightGlow(V(n));
     else if (is("RVK_MoonLight")) d->SetMoonLight(V(n));
     else if (is("RVK_NightDark")) d->SetNightDark(V(n));

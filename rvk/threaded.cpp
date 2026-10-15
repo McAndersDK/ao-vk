@@ -802,6 +802,11 @@ void ThreadedDevice::SetEmissiveMap(Texture* texture, Texture* emissive)
     Enqueue([this, texture, emissive](const uint8_t*) { m_device.SetEmissiveMap(texture, emissive); });
 }
 
+void ThreadedDevice::SetCrownShade(float amount)
+{
+    Enqueue([this, amount](const uint8_t*) { m_device.SetCrownShade(amount); });
+}
+
 void ThreadedDevice::SetLeafArt(Texture* texture, Texture* atlas, Texture* normal)
 {
     Enqueue([this, texture, atlas, normal](const uint8_t*) { m_device.SetLeafArt(texture, atlas, normal); });

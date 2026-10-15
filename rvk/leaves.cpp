@@ -250,8 +250,8 @@ void Device::CanopyParams(uint32_t primitive, uint32_t fvf, const FvfLayout& lay
     m_drawLeafKey = 0;
     m_drawLeafCount = 0;
     m_drawLeafFall = 0;
-    if (!m_leaf.on || m_external || m_drawGpu || !m_drawMesh || !m_leafPipelines[0] || !m_drawMeshStatic ||
-        m_drawMesh->firstFrame + 2 > m_frameNumber || m_target != m_scene)
+    if ((!m_leaf.on && m_crownShade <= 0.0f) || m_external || m_drawGpu || !m_drawMesh || !m_leafPipelines[0] ||
+        !m_drawMeshStatic || m_drawMesh->firstFrame + 2 > m_frameNumber || m_target != m_scene)
         return;
     Texture* tex = m_textures[0];
     if (!tex || tex->m_alphaMask.empty() || !m_rs[d3d::RS_LIGHTING] || !m_rs[d3d::RS_ZWRITEENABLE])
@@ -267,6 +267,15 @@ void Device::CanopyParams(uint32_t primitive, uint32_t fvf, const FvfLayout& lay
     set.lastFrame = m_frameNumber;
     if (set.kind == Canopy::None)
         return;
+    if (!m_leaf.on) {                            // (the crown shading alone, RVK_CrownShade: its crown, no leaves)
+        if (set.kind == Canopy::Palm)
+            return;
+        if (set.radius <= 0.0f)
+            CrownOf(set);
+        m_drawLeaves = &set;
+        m_drawLeafKey = key;
+        return;
+    }
     ++m_canopyCount[uint32_t(set.kind)];
     if ((set.kind == Canopy::Tree && !m_leaf.trees) || (set.kind == Canopy::Shrub && !m_leaf.shrubs) ||
         (set.kind == Canopy::Palm && !m_leaf.palms))
@@ -1025,13 +1034,17 @@ void Device::UpdateLeaves()
         m_leafDirty = false;
         ++m_leafVersion;
     }
-    if (!m_leaf.on) {
+    if (!m_leaf.on) {                            // (the crown shading keeps the sets' crowns, not their leaves)
         if (!m_leafSets.empty()) {
-            for (auto& [key, set] : m_leafSets)
+            for (auto& [key, set] : m_leafSets) {
                 FreeLeaves(set);
-            m_leafSets.clear();
+                set.baked = false;
+            }
+            if (m_crownShade <= 0.0f)
+                m_leafSets.clear();
         }
-        return;
+        if (m_crownShade <= 0.0f)
+            return;
     }
     if ((m_frameNumber & 255) == 0)
         for (auto it = m_leafSets.begin(); it != m_leafSets.end();) {

@@ -300,7 +300,7 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
     fl->leafView[0] = std::max(m_leaf.distance, 1.0f);
     fl->leafView[1] = m_leaf.on ? 1.0f : 0.0f;
     fl->leafView[2] = m_leaf.on ? m_leaf.fall : 0.0f;
-    fl->leafView[3] = 0.0f;
+    fl->leafView[3] = std::clamp(m_crownShade, 0.0f, 1.0f);   // (the crown shading, ffp.vert)
     fl->taa[0] = TaaActive() ? m_taaJitter[0] : 0.0f;
     fl->taa[1] = TaaActive() ? m_taaJitter[1] : 0.0f;
     fl->taa[2] = FrameNoise();                   // noise patterns move on each frame (averaged by the TAA)
