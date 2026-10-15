@@ -129,6 +129,7 @@ public:
     void SetSandBlow(float amount);
     void SetSandProcedural(bool on);
     void SetSandContrast(float k);
+    void SetSandClear(float d);
     void SetSandForce(float amount, bool ash);
     void ProfileWindow(bool start, const std::string& label);
     void ProfileManualEnd();

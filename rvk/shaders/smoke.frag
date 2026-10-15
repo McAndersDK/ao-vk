@@ -174,13 +174,18 @@ void main()
             if (fray > 0.0)
                 dens *= mix(1.0, 2.0 * smoothstep(0.3, 0.7, Detail(p, texture(flow, uvw).xyz * kSmokeFlowMax)), fray);
         }
+        // (Sand: clear round the camera - RVK_SandClear units, fading in over as many again - so the player always sees
+        // out; the sand swirls a little way off, not in front of the eyes.)
+        if (S.info.w == 1u && S.sandLook.y > 0.0)
+            dens *= smoothstep(0.35 * S.sandLook.y, 1.6 * S.sandLook.y, enter + (float(i) + noise) * ds);
         float a = 1.0 - exp(-dens * S.colour.w * ds);
         // The sky's light, too, less inside the smoke (as far in as the sun's is shadowed, about).
         float sunIn = now.y;
         vec3 lit = S.ambient.rgb * mix(0.45, 1.0, sunIn) + sun * sunIn;
         if (S.info.w == 1u) {                     // (sand, RVK_SandContrast: its own shade deeper, its lit side brighter)
             float k = S.sandLook.x;
-            lit = S.ambient.rgb * mix(0.45 / k, 1.0, sunIn) * mix(1.0, 0.85, clamp(k - 1.0, 0.0, 1.0)) + sun * sunIn * (0.7 + 0.3 * k);
+            lit = S.ambient.rgb * max(mix(0.45 / k, 1.0, sunIn) * mix(1.0, 0.85, clamp(k - 1.0, 0.0, 1.0)), 0.3) +
+                  sun * sunIn * (0.7 + 0.3 * k);         // (never darker than a third of the sky's light: dusty, not black)
         }
         for (uint k = 0u; k < lamps; ++k) {
             Light li = FL.lights[S.lamps[k >> 2u][k & 3u]];
@@ -210,6 +215,7 @@ void main()
     // How opaque (premultiplied, its shape and shading kept): up to 1 see-through as a whole; above, the smoke's cover
     // as if it were that many times as thick (1 - transmit^k) - its dense parts hide what is behind.
     float cover = S.look.x <= 1.0 ? alpha * S.look.x : 1.0 - pow(transmit, S.look.x);
+    if (S.info.w == 1u) cover = min(cover, 0.7);   // (sand: what is behind always shows through)
     light *= cover / max(alpha, 1e-5);
     alpha = cover;
     outScene = vec4(light, alpha);

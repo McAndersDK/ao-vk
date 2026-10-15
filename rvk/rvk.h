@@ -331,6 +331,7 @@ public:
     void SetSandBlow(float amount) { m_sandBlow = amount; }        // RVK_SandBlow (smoke.cpp: the sand volume)
     void SetSandProcedural(bool on) { m_sandProcedural = on; }     // RVK_SandProc (smoke_sim.comp stage 12)
     void SetSandContrast(float k) { m_sandContrast = k; }          // RVK_SandContrast (smoke.frag)
+    void SetSandClear(float d) { m_sandClear = d; }                // RVK_SandClear (smoke.frag)
     void SetSandForce(float amount, bool ash) { m_sandForce = amount; m_sandAsh = ash; }   // RVK_SandForce, RVK_SandAsh
     // A free camera for debugging (Ctrl+Shift+C, the proxy's keys and mouse; draw.cpp): once a frame, before its draws.
     // On, it starts where the game's camera is; every view the game sets is re-expressed about it.
@@ -1883,6 +1884,7 @@ private:
     float m_sandColour[3] = {0.75f, 0.47f, 0.19f};   // its colour (linear)
     float m_sandHaze = 0.1f;                     // RVK_SandHaze: x
     float m_sandBlow = 1.0f;                     // RVK_SandBlow: the blowing sand round the camera (smoke.cpp), x
+    float m_sandClear = 6.0f;                    // RVK_SandClear: the sand clear round the camera (world units)
     float m_sandContrast = 2.0f;                 // RVK_SandContrast: the drawn sand's contrast (1 as made)
     float m_sandBoxSize = 32.0f;                 // the sand volume's box (smoke.cpp: 32, 48, 64 by the camera's zoom)
     bool m_sandProcedural = false;               // RVK_SandProc: the sand made procedurally (else simulated: the user's pick)

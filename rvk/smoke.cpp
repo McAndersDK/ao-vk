@@ -1578,6 +1578,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
             sf.sand[3] = float(std::fmod(m_sandOffset[1], 16.0));
             sf.info[3] = 1;
             sf.sandLook[0] = std::max(m_sandContrast, 0.25f);
+            sf.sandLook[1] = std::max(m_sandClear, 0.0f);
         }
         // (Fading in while it warms up; out over the last second before its volume is given back.)
         const float ending = float(double(v.source.life) * 1.5 + 1.0 - (now - v.lastSeen));

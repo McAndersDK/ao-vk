@@ -18,7 +18,8 @@ layout(set = 0, binding = 0) uniform SmokeFrame {
                         // from the state a step before to the latest (the simulation steps less often than frames)
     vec4 sand;          // the sand volume's streak pattern (rvk Device::m_sandPivot): xy its pivot (world x z), zw its
                         // offset (along, across; wrapped at 32, 16)
-    vec4 sandLook;      // x: the sand's contrast (RVK_SandContrast: 1 as made, more: crisper, darker in its own shade)
+    vec4 sandLook;      // x: the sand's contrast (RVK_SandContrast: 1 as made, more: crisper, darker in its own shade);
+                        // y: the clear zone round the camera (RVK_SandClear, world units; 0 none)
     uvec4 info;         // x: its slot in the bounds; y: lamps; z: cells a side; w: 1 = the sand volume (look.zw: the
                         // storm's wind, world / s, x z)
     uvec4 lamps[2];     // the lamps reaching the box (indices in FL.lights)
