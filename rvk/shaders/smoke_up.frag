@@ -38,5 +38,5 @@ void main()
     }
     vec4 smoke = sum / weights;
     outScene = smoke;
-    outLocal = vec4(smoke.a, 0.0, 0.0, smoke.a);   // (smoke.frag's local fraction)
+    outLocal = vec4(smoke.a * smoke.a, 0.0, 0.0, smoke.a);   // (smoke.frag's local fraction)
 }

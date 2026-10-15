@@ -203,7 +203,9 @@ void main()
 #ifndef RVK_SMOKE_HALF
     // The local-fraction target as covered as the scene: R (whose ambient occlusion is waived) towards 1 - the tone
     // mapping's occlusion, applied after this, must not darken the smoke; its reflectivity (G) and sun share (B, the
-    // contact shadows) fade behind it. (Half size: smoke_up.frag does the same.)
-    outLocal = vec4(alpha, 0.0, 0.0, alpha);
+    // contact shadows) fade behind it. R by the cover squared: the occlusion is waived for the whole pixel, what shows
+    // through too - thin smoke or sand over dense grass lit it up (a 30% veil: the grass ~45% brighter); thick smoke
+    // still has it all. (Half size: smoke_up.frag does the same.)
+    outLocal = vec4(alpha * alpha, 0.0, 0.0, alpha);
 #endif
 }

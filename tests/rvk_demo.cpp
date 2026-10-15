@@ -1151,6 +1151,7 @@ bool g_sandStorm = false;         // --sand-storm: the grass bench in a desert s
                                   // the new weather without rain: our haze and blowing sand)
 float g_sandBlow = 1.0f;          // --sand-blow X: RVK_SandBlow
 uint32_t g_sandRes = 0;           // --sand-res N: RVK_SandRes
+float g_windStorm = 1.0f;         // --wind-storm X: RVK_WindStorm
 float g_sandForce = 0.0f;         // --sand-force X: RVK_SandForce
 bool g_sandAsh = false;           // --sand-ash: RVK_SandAsh
 bool g_grassBenchStill = false;   // --grass-bench-still: the camera stays where it starts (to watch the wind)
@@ -3728,6 +3729,7 @@ int main(int argc, char** argv)
         else if (a == "--sand-storm") { g_grassFieldOn = g_grassBench = g_grassBenchStorm = g_sandStorm = true; hdr = true; }
         else if (a == "--sand-blow" && i + 1 < argc) g_sandBlow = float(std::atof(argv[++i]));
         else if (a == "--sand-res" && i + 1 < argc) g_sandRes = uint32_t(std::atoi(argv[++i]));
+        else if (a == "--wind-storm" && i + 1 < argc) g_windStorm = float(std::atof(argv[++i]));
         else if (a == "--sand-force" && i + 1 < argc) g_sandForce = float(std::atof(argv[++i]));
         else if (a == "--sand-ash") g_sandAsh = true;
         else if (a == "--grass-bench-platform") g_grassBenchPlatform = true;
@@ -3889,6 +3891,7 @@ int main(int argc, char** argv)
         dev.SetWeatherParams(weather);
     }
     dev.SetSandBlow(g_sandBlow);
+    dev.SetWindStorm(g_windStorm);
     dev.SetSandForce(g_sandForce, g_sandAsh);
     dev.SetTonemap(knee, 1.0f);
     dev.SetBloom(bloom, 1.0f);

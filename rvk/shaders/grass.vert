@@ -349,7 +349,7 @@ void main()
         lit *= 1.0 + GF.trail2.x * layAmount * (0.22 * facing - 0.14) * (0.5 + 0.5 * t);
     }
     // A gust bends the blades over, showing more of their lighter faces: the sweep shows as a brighter band.
-    lit *= 1.0 + 0.45 * (gust - kGustMean * GF.look.w) * t;   // (around the gusts' mean: the brightness stays)
+    lit *= 1.0 + 0.45 * (gust - kGustMean * GrassGusts(GF.look.w)) * t;   // (around the gusts' mean: the brightness stays)
     vAlbedo = albedo;
     vec3 colour = albedo * light * lit + extra;
     // Towards the field's edge, and for blades drawn wider than they are, the colour goes over to the lit ground's:

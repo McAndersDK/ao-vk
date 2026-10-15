@@ -12,6 +12,9 @@ float Gust(vec2 xz, vec2 wd, float time)
     return g * g * strength;                     // narrow fronts, calm between (mean ~0.15)
 }
 const float kGustMean = 0.15;
+// The grass's share of the gusts' strength (x the wind's): levelling off in a storm (at most 2) - a blade can only lie
+// flat, and a gust front past that pins it there, still.
+float GrassGusts(float gusts) { return gusts <= 1.0 ? gusts : 1.0 + 1.0 - exp(-(gusts - 1.0) / 1.5); }
 
 // Leaves (leaves.cpp): a canopy's branches swaying - its own cards and its leaves alike, in the scene (ffp.vert) and in
 // the sun's shadow (shadow.vert), so the leaves stay on their branches and the light through them moves with them.

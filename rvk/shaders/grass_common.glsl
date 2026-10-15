@@ -110,13 +110,27 @@ BladeAt ShapeBlade(Blade bl, uint vi, vec3 camera, float R, vec4 wind, float tim
     b.gust = 0.0;
     float gustBefore = 0.0;
     if (gusts > 0.0) {
-        b.gust = Gust(b.root.xz, wd, wind.x) * gusts;
-        gustBefore = Gust(b.root.xz, wd, timeBefore) * gusts;
+        b.gust = Gust(b.root.xz, wd, wind.x) * GrassGusts(gusts);
+        gustBefore = Gust(b.root.xz, wd, timeBefore) * GrassGusts(gusts);
     }
-    float amp = 0.16 * b.height * b.fade * wind.w * b.t * b.t, gustAmp = 0.7 * b.height * b.fade * wind.w * b.t * b.t;
+    // In a strong wind (a storm: strength over ~1.2) the lean levels off - a blade can't go flatter than flat; pushed
+    // past its furthest bend it would lie pinned there, still - and it thrashes instead: quick, uneven, a little across
+    // the wind too.
+    float s = wind.w, lean = s <= 1.0 ? s : 1.0 + 1.3 * (1.0 - exp(-(s - 1.0) / 1.2));
+    float storm = clamp((s - 1.2) / 2.5, 0.0, 1.0);
+    float amp = 0.16 * b.height * b.fade * lean * b.t * b.t, gustAmp = 0.7 * b.height * b.fade * lean * b.t * b.t;
     float above = b.height * b.t * b.fade;
-    b.bendNow = BendKeepingLength(wdir * (amp * Sway(b.root.xz, wd, wind.x, b.phase, b.gust) + gustAmp * b.gust), above);
+    vec3 across = vec3(-wd.y, 0.0, wd.x);
+    float along = dot(b.root.xz, wd);
+    vec2 thrash = storm * vec2(sin(wind.x * 6.1 + b.phase * 2.3 + along * 1.1) + 0.5 * sin(wind.x * 9.7 + b.phase * 3.7),
+                               sin(wind.x * 5.3 + b.phase * 1.9));
+    vec2 thrashBefore = storm * vec2(sin(timeBefore * 6.1 + b.phase * 2.3 + along * 1.1) + 0.5 * sin(timeBefore * 9.7 + b.phase * 3.7),
+                                     sin(timeBefore * 5.3 + b.phase * 1.9));
+    float shake = 0.16 * b.height * b.fade * b.t * b.t;
+    b.bendNow = BendKeepingLength(wdir * (amp * Sway(b.root.xz, wd, wind.x, b.phase, b.gust) + gustAmp * b.gust +
+                                          shake * 0.9 * thrash.x) + across * (shake * 0.5 * thrash.y), above);
     b.bendBefore = BendKeepingLength(wdir * (amp * Sway(b.root.xz, wd, timeBefore, b.phase, gustBefore) +
-                                             gustAmp * gustBefore), above);
+                                             gustAmp * gustBefore + shake * 0.9 * thrashBefore.x) +
+                                     across * (shake * 0.5 * thrashBefore.y), above);
     return b;
 }
