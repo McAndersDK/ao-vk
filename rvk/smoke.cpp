@@ -194,6 +194,7 @@ struct SmokeFrame {
     d3d::Matrix viewProj, view;
     float camera[4], box[4], colour[4], ambient[4], proj[4], viewport[4], fogColour[4], fogParams[4], detail[4], look[4];
     float sand[4];                              // the sand's streak pattern: its pivot (x z), its offset (along, across)
+    float sandLook[4];                          // x: the sand's contrast (RVK_SandContrast)
     uint32_t info[4];                           // x: its slot in the bounds; y: lamps; z: cells a side
     uint32_t lamps[kLamps];                     // their indices in the frame lights
 };
@@ -333,6 +334,7 @@ void Device::SmokeSourceFrame(uint64_t key, const SmokeSource& source)
         v->key = key;
         v->parent = 0;
         v->fresh = true;
+        v->lastSize = 0.0f;
         v->age = 0.0f;
         float wind[2];
         SmokeWind(source, m_rainWind, wind);
@@ -378,6 +380,7 @@ void Device::DestroySmokeImages()
         destroy(v.look);
         destroy(v.flow);
         v.fresh = true;
+        v.lastSize = 0.0f;
         v.age = 0.0f;
         v.n = 0;
     }
@@ -680,6 +683,7 @@ void Device::UpdateSmokeDrift(double now)
             d->source.rate = d->source.heat = d->source.speed = 0.0f;
             d->source.radius = 0.05f;
             d->fresh = true;
+            d->lastSize = 0.0f;
             d->age = kWarmUp;                    // (no warming up: it starts from what it is handed)
             d->simWait = 0.0f;
             d->lastStep = 0.0f;
@@ -785,6 +789,7 @@ void Device::UpdateSandVolume(double now, float dt)
         v->key = kSandKey;
         v->parent = 0;
         v->fresh = true;
+        v->lastSize = 0.0f;
         v->age = 0.0f;
         v->simWait = v->lastStep = 0.0f;
         v->source = SmokeSource{};
@@ -1003,6 +1008,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
                 destroy(v->look);
                 v->n = 0;
                 v->fresh = true;
+                v->lastSize = 0.0f;
             }
         }
         if (scratch > m_smokeN) {
@@ -1162,10 +1168,15 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
             SmokeWind(s, m_rainWind, wind);
             SmokeCorner(s, wind, corner);
         }
+        // (The last step's box: where it was and, the sand's box following the zoom, how big - this step's read from it
+        // at the same places in the world: smoke_sim.comp Before.)
+        const float lastSize = v.lastSize > 0.0f ? v.lastSize : s.size;
         for (int i = 0; i < 3; ++i) {
-            shift[i] = (corner[i] - v.corner[i]) / s.size;
+            shift[i] = (corner[i] - v.corner[i]) / lastSize;
             v.corner[i] = corner[i];
         }
+        const float scale = s.size / lastSize;
+        v.lastSize = s.size;
         const float step = warming ? simDt * kWarmSpeed : simDt;
         SimPush p{};
         p.a[1] = float(n);
@@ -1198,6 +1209,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         p.g[0] = float(slot);
         p.g[1] = 1.0f / (sand ? kSandFlowMax : kFlowMax);
         p.g[2] = kEdgeFade;
+        p.g[3] = scale;
         // A drift cloud: its source's box (stage 9 takes the smoke that box lets go of): this box's coordinates ->
         // that one's, uvw * h.w + h.xyz; its density read through binding 10.
         const SmokeVolume* parent = nullptr;
@@ -1565,6 +1577,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
             sf.sand[2] = float(std::fmod(m_sandOffset[0], 32.0));
             sf.sand[3] = float(std::fmod(m_sandOffset[1], 16.0));
             sf.info[3] = 1;
+            sf.sandLook[0] = std::max(m_sandContrast, 0.25f);
         }
         // (Fading in while it warms up; out over the last second before its volume is given back.)
         const float ending = float(double(v.source.life) * 1.5 + 1.0 - (now - v.lastSeen));

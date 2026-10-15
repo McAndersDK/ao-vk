@@ -54,7 +54,7 @@ layout(push_constant) uniform Params {
                 // from 0; else from the image's); stage 0: the step's number (the source's jitter)
     vec4 f;     // xyz: towards the sun (unit); w: the smoke's extinction (per world unit at density 1)
     vec4 g;     // x: the volume's slot in the bounds; y: stage 11: 1 / the flow image's range (world / s); z: the band
-                // along a box's walls and top its smoke leaves over (box units)
+                // along a box's walls and top its smoke leaves over (box units); w: its size over the last step's
     vec4 h;     // a drift cloud (w > 0): its source's box, uvw * w + xyz (stage 9 takes what that box lets go of)
 } P;
 
@@ -122,6 +122,10 @@ float Jitter(ivec3 c, uint salt)
 }
 vec3 Vel(ivec3 c) { return imageLoad(velRead, Clamp(c)).xyz; }
 
+// Where a point of this step's box was in the last step's (box units): the box may have moved (P.e.xyz) and, the sand's,
+// changed its size (P.g.w: this size over the last; 1 as a rule); After: the other way.
+vec3 Before(vec3 uvw) { return uvw * P.g.w + P.e.xyz; }
+vec3 After(vec3 old) { return (old - P.e.xyz) / P.g.w; }
 // The sand volume.
 bool IsSand() { return SD.corner.w > 0.5; }
 bool Outside(vec3 uvw) { return any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0))); }
@@ -254,7 +258,7 @@ void main()
 
     if (stage == 0 && IsSand()) {
         vec3 v = texelFetch(velIn, id, 0).xyz;
-        vec3 back = uvw + P.e.xyz - v * (dt / size);
+        vec3 back = Before(uvw) - v * (dt / size);
         v = Outside(back) ? SandWind(back) : texture(velIn, back).xyz;   // (in over the walls: the storm's wind)
         float feed, above = AboveGround(uvw, feed);
         vec3 wind = SandWind(uvw);
@@ -294,7 +298,7 @@ void main()
         imageStore(velOut, id, vec4(v, 0.0));
     } else if (stage == 0) {
         vec3 v = texelFetch(velIn, id, 0).xyz;
-        vec3 back = uvw + P.e.xyz - v * (dt / size);
+        vec3 back = Before(uvw) - v * (dt / size);
         v = texture(velIn, back).xyz;
         float temperature = texelFetch(densIn, id, 0).g;
         v.y += P.d.x * temperature * dt;                                 // buoyancy
@@ -373,17 +377,17 @@ void main()
         imageStore(velOut, id, vec4(v, 0.0));
     } else if (stage == 6) {
         vec3 v = Carry(texelFetch(velIn, id, 0).xyz);
-        imageStore(curlImg, id, vec4(DensAt(uvw + P.e.xyz - v * (dt / size)), 0.0, 0.0));
+        imageStore(curlImg, id, vec4(DensAt(Before(uvw) - v * (dt / size)), 0.0, 0.0));
     } else if (stage == 8) {
         vec3 v = Carry(texelFetch(velIn, id, 0).xyz);
         // (The scratch image may be bigger than this box: only its first n cells a side are this step's.)
-        vec3 at = uvw - P.e.xyz + v * (dt / size);
+        vec3 at = After(uvw) + v * (dt / size);
         float back = Outside(at) ? (IsSand() ? SandInflow(at) : 0.0)
                    : texture(forwardIn, at * float(n) / vec3(textureSize(forwardIn, 0))).r;
         imageStore(divImg, id, vec4(back));
     } else if (stage == 9) {
         vec3 v = Carry(texelFetch(velIn, id, 0).xyz);
-        vec3 at = (uvw + P.e.xyz - v * (dt / size)) * float(n) - 0.5;   // where it came from (cells)
+        vec3 at = (Before(uvw) - v * (dt / size)) * float(n) - 0.5;   // where it came from (cells)
         ivec3 c0 = ivec3(floor(at));
         float lo = 1e9, hi = -1e9;
         for (int k = 0; k < 8; ++k) {
@@ -536,7 +540,7 @@ void main()
         // frames) - read where this cell was then, as the box may have moved with its source since (P.e).
         float now = texelFetch(densIn, id, 0).r;
         float sunlit = exp(-optical * P.f.w * stepLen * size);
-        vec2 last = vec2(texture(forwardIn, uvw + P.e.xyz).r, sunlit);
+        vec2 last = vec2(texture(forwardIn, Before(uvw)).r, sunlit);
         imageStore(lookImg, id, vec4(now, sunlit, last));
         // The bounds (the drawing skips smoke thinner than this): the group's, then the volume's.
         if (max(now, last.x) >= 1e-4) {

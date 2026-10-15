@@ -1159,6 +1159,8 @@ bool g_terrainPbr = false;        // --terrain-pbr: the bench's ground texture g
                                   // rough grass), per-pixel lighting, no grass field: the ground's PBR (MAT_BASE) path
 int g_grassBenchFilm = 0;         // --grass-bench-film N: ~60 frames a second, a screenshot every N (film_NNN.bmp)
 float g_grassBenchRise = 0.0f;    // --grass-bench-rise H: the camera H units higher
+int g_grassBenchZoomAt = 0;        // --grass-bench-zoom F H: from frame F the camera H units higher instead
+float g_grassBenchZoomRise = 0.0f;
 float g_grassBenchPitch = -1.0f;  // --grass-bench-pitch R: the camera looking R radians down, raised to match (top-down)
 bool g_grassFieldTex = true;   // --grass-field-any: over every ground, not only where the ground texture is green
 bool g_grassFieldTan = false;  // --grass-field-tan: leave the terrain's tan ground (a filter that must reject it)
@@ -1186,7 +1188,8 @@ void AddCube(std::vector<VtxMesh>& v, std::vector<uint16_t>& idx, float cx, floa
 // camera, as placed objects (a pack written here and loaded as the game's: statels.cpp, sand_map.cpp) and drawn as
 // grey boxes; --sand-wind X Z: the storm's wind that way (the game's weather wind, each frame).
 bool g_sandObstacles = false;
-bool g_sandArch = false;             // --sand-arch: an arch in place of the wall
+bool g_sandArch = false;
+float g_sandContrast = 2.0f;         // --sand-contrast K: RVK_SandContrast             // --sand-arch: an arch in place of the wall
 bool g_sandSim = true;               // the sand simulated (RVK_SandProc 0); --sand-proc: procedural
 bool g_sandWindSet = false;
 float g_sandWind[2] = {1.0f, 0.0f};
@@ -1377,7 +1380,8 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
         const float ex = -60.0f + 0.06f * t, ez = 10.0f * std::sin(t * 0.004f);
         const float yaw = 0.6f * std::sin(t * 0.007f) + g_grassBenchYaw;
         const float pitch = g_grassBenchPitch >= 0.0f ? std::min(g_grassBenchPitch, 1.5f) : 0.197f;
-        const float ey = height(ex, ez) + 1.0f + 6.0f * std::sin(pitch) + g_grassBenchRise;
+        const float rise = g_grassBenchZoomAt > 0 && frame >= g_grassBenchZoomAt ? g_grassBenchZoomRise : g_grassBenchRise;
+        const float ey = height(ex, ez) + 1.0f + 6.0f * std::sin(pitch) + rise;
         const float fwd = 6.0f * std::cos(pitch);
         dev.SetTransform(View, LookAtLH({ex, ey, ez}, {ex + fwd * std::cos(yaw), ey - 6.0f * std::sin(pitch), ez + fwd * std::sin(yaw)},
                                         {0, 1, 0}));
@@ -3876,12 +3880,17 @@ int main(int argc, char** argv)
         else if (a == "--grass-bench-lamp") g_grassBenchLamp = true;
         else if (a == "--grass-bench-still") g_grassBenchStill = true;
         else if (a == "--grass-bench-rise" && i + 1 < argc) g_grassBenchRise = float(std::atof(argv[++i]));
+        else if (a == "--grass-bench-zoom" && i + 2 < argc) {
+            g_grassBenchZoomAt = std::atoi(argv[++i]);
+            g_grassBenchZoomRise = float(std::atof(argv[++i]));
+        }
         else if (a == "--terrain-pbr") { g_terrainPbr = g_grassBench = g_grassBenchStill = true; hdr = true; }
         else if (a == "--grass-bench-storm") g_grassBenchStorm = true;
         else if (a == "--sand-obstacles") g_sandObstacles = true;
         else if (a == "--sand-arch") g_sandObstacles = g_sandArch = true;
         else if (a == "--sand-sim") g_sandSim = true;
         else if (a == "--sand-proc") g_sandSim = false;
+        else if (a == "--sand-contrast" && i + 1 < argc) g_sandContrast = float(std::atof(argv[++i]));
         else if (a == "--sand-wind" && i + 2 < argc) {
             g_sandWind[0] = float(std::atof(argv[++i]));
             g_sandWind[1] = float(std::atof(argv[++i]));
@@ -4053,6 +4062,7 @@ int main(int argc, char** argv)
     }
     dev.SetSandBlow(g_sandBlow);
     dev.SetSandProcedural(!g_sandSim);
+    dev.SetSandContrast(g_sandContrast);
     dev.SetWindStorm(g_windStorm);
     dev.SetSandForce(g_sandForce, g_sandAsh);
     dev.SetTonemap(knee, 1.0f);

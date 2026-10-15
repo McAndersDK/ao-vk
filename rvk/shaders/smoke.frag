@@ -65,8 +65,11 @@ float SandGrain(vec3 p, vec3 uvw)
     float along = dot(r, a) + S.sand.z, across = dot(r, c) + S.sand.w;
     float ribbons = Wisps(vec3(0.25 * along, 2.0 * p.y + 0.25 * S.sand.z, 1.5 * across));
     float streaks = Wisps(vec3(along + 0.5 * S.sand.z, 6.0 * p.y, 5.0 * across) + 3.7);
-    float crisp = smoothstep(0.40, 0.60, 0.6 * ribbons + 0.4 * streaks);
-    return mix(1.0, 2.2 * crisp, clamp(S.detail.x, 0.0, 1.0) * (1.0 - 0.6 * smoothstep(1.0, 5.0, churn)));
+    // (RVK_SandContrast: the ribbons' edges sharper and the gaps between them clearer.)
+    float k = S.sandLook.x, edge = 0.1 / k;
+    float crisp = smoothstep(0.5 - edge, 0.5 + edge, 0.6 * ribbons + 0.4 * streaks);
+    float most = 1.0 + 1.2 * k;
+    return mix(1.0, most * crisp, clamp(S.detail.x * (0.6 + 0.4 * k), 0.0, 1.0) * (1.0 - 0.6 * smoothstep(1.0, 5.0, churn)));
 }
 
 float Fog(float d)
@@ -161,6 +164,9 @@ void main()
         // Sand: its grain instead.
         if (S.info.w == 1u) {
             dens *= SandGrain(p, uvw);
+            // (Contrast: thick sand thicker, thin sand thinner about a typical density - the veil broken into masses.)
+            float k = S.sandLook.x;
+            if (k != 1.0) dens = 0.03 * pow(dens / 0.03, mix(1.0, 1.6, clamp((k - 1.0) / 2.0, 0.0, 1.0)) * min(k, 1.0));
             if (dens < 1e-4)
                 continue;
         } else {
@@ -172,6 +178,10 @@ void main()
         // The sky's light, too, less inside the smoke (as far in as the sun's is shadowed, about).
         float sunIn = now.y;
         vec3 lit = S.ambient.rgb * mix(0.45, 1.0, sunIn) + sun * sunIn;
+        if (S.info.w == 1u) {                     // (sand, RVK_SandContrast: its own shade deeper, its lit side brighter)
+            float k = S.sandLook.x;
+            lit = S.ambient.rgb * mix(0.45 / k, 1.0, sunIn) * mix(1.0, 0.85, clamp(k - 1.0, 0.0, 1.0)) + sun * sunIn * (0.7 + 0.3 * k);
+        }
         for (uint k = 0u; k < lamps; ++k) {
             Light li = FL.lights[S.lamps[k >> 2u][k & 3u]];
             float d = distance(li.position.xyz, p);

@@ -144,6 +144,7 @@ Setting g_settings[] = {
     {"RVK_SandAsh",    "Sand and ash storms: the forced one is an ash storm (grey) instead of sand", "Experimental", Bool, 0, 1, 1, 0, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_SandRes",    "Sand and ash storms: the blowing sand's cells a side (its 32-unit box; finer costs more; 0: by RVK_SmokeQual - 48, 64, 80)", "Experimental", Choice, 0, 128, 1, 0, nullptr, 0, "RVK_WeatherOn", "0 48 64 80 96 112 128"},
     {"RVK_SandProc",   "Sand and ash storms: the blowing sand made procedurally (cheaper; off: simulated - the default)", "Experimental", Bool, 0, 1, 1, 0, nullptr, 0, "RVK_WeatherOn"},
+    {"RVK_SandContrast", "Sand and ash storms: the blowing sand's contrast (crisper streaks, deeper shade; 1 = soft)", "Experimental", Float, 0.5f, 3, 0.1f, 2.0f, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_SandBlow",   "Sand and ash storms: sand blowing round you, simulated - streaks, eddies, dust devils, kicked up by feet (x; 0: none)", "Experimental", Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
 
     {"RVK_SmokeOn",    "Simulated smoke (needs HDR)",  "Experimental",    Bool,  0, 1, 1, 0, nullptr, 0},
@@ -481,6 +482,7 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
     else if (is("RVK_SandHaze")) d->SetSandHaze(V(n));
     else if (is("RVK_SandBlow")) d->SetSandBlow(V(n));
     else if (is("RVK_SandProc")) d->SetSandProcedural(V(n) != 0.0f);
+    else if (is("RVK_SandContrast")) d->SetSandContrast(V(n));
     else if (is("RVK_SandForce") || is("RVK_SandAsh")) d->SetSandForce(V("RVK_SandForce"), V("RVK_SandAsh") != 0.0f);
     else if (is("RVK_Saturation") || is("RVK_Contrast") || is("RVK_Warmth") || is("RVK_NightTint") ||
              is("RVK_Vignette") || is("RVK_LutAmount"))

@@ -1005,6 +1005,11 @@ void ThreadedDevice::SetSandForce(float amount, bool ash)
     Enqueue([this, amount, ash](const uint8_t*) { m_device.SetSandForce(amount, ash); });
 }
 
+void ThreadedDevice::SetSandContrast(float k)
+{
+    Enqueue([this, k](const uint8_t*) { m_device.SetSandContrast(k); });
+}
+
 void ThreadedDevice::SetSandProcedural(bool on)
 {
     Enqueue([this, on](const uint8_t*) { m_device.SetSandProcedural(on); });

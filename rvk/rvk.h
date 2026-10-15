@@ -330,6 +330,7 @@ public:
     void SetSandHaze(float amount) { m_sandHaze = amount; }        // RVK_SandHaze (wind.cpp)
     void SetSandBlow(float amount) { m_sandBlow = amount; }        // RVK_SandBlow (smoke.cpp: the sand volume)
     void SetSandProcedural(bool on) { m_sandProcedural = on; }     // RVK_SandProc (smoke_sim.comp stage 12)
+    void SetSandContrast(float k) { m_sandContrast = k; }          // RVK_SandContrast (smoke.frag)
     void SetSandForce(float amount, bool ash) { m_sandForce = amount; m_sandAsh = ash; }   // RVK_SandForce, RVK_SandAsh
     // A free camera for debugging (Ctrl+Shift+C, the proxy's keys and mouse; draw.cpp): once a frame, before its draws.
     // On, it starts where the game's camera is; every view the game sets is re-expressed about it.
@@ -1882,6 +1883,7 @@ private:
     float m_sandColour[3] = {0.75f, 0.47f, 0.19f};   // its colour (linear)
     float m_sandHaze = 0.1f;                     // RVK_SandHaze: x
     float m_sandBlow = 1.0f;                     // RVK_SandBlow: the blowing sand round the camera (smoke.cpp), x
+    float m_sandContrast = 2.0f;                 // RVK_SandContrast: the drawn sand's contrast (1 as made)
     float m_sandBoxSize = 32.0f;                 // the sand volume's box (smoke.cpp: 32, 48, 64 by the camera's zoom)
     bool m_sandProcedural = false;               // RVK_SandProc: the sand made procedurally (else simulated: the user's pick)
     float m_sandForce = 0.0f;                    // RVK_SandForce: a sand (ash) storm this strong whatever the game's weather
@@ -1988,6 +1990,7 @@ private:
         SmokeSource source;
         double lastSeen = -1e9;                  // m_frameClock it was last handed over
         float corner[3] = {0, 0, 0};             // the box's lowest corner (world)
+        float lastSize = 0.0f;                   // its size the last step (0: none yet; the sand's follows the zoom)
         bool fresh = true;                       // its images to be cleared first
         float age = 0.0f;                        // seconds simulated (warming up: faster, fading in)
         uint64_t parent = 0;                     // a drift cloud (smoke a character carries out of a source's box):
