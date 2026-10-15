@@ -1,0 +1,103 @@
+# Trees: our own canopies in place of the game's cards
+
+Status: plan (2026-10-15), branch `storms` (user: this work goes there). Trees only - shrubs and palms keep today's
+leaves (leaves.cpp). New leaf art per tree type (user), not cut from the game's textures. Under RVK_LeafOn
+(Experimental) until tuned; the game's canopy comes back with it off, and beyond the leaves' distance.
+
+## Why
+
+An AO tree is two meshes: a bark trunk and a canopy of a few big alpha-tested cards with a painted cluster of leaves on
+each (a 20-unit jungle crown is 54 triangles). Today's leaves (leaves.cpp, 0.4) scatter sprigs cut from that texture
+over the cards and keep a thinned core of the cards. Up close the crown still reads as flat cards, the painted leaves
+are blurry, and in wind the crown slides as a block over a trunk that doesn't move (in a storm, several units: it
+detaches - the user's "glitchy against the wind").
+
+## What there is to build on
+
+- Canopy detection (leaves.cpp CanopyKind): lit, static, depth-writing, mostly-holes texture, upright, tree <= 45 units.
+- Its trunk (NoteSolidDraw / LeafGround): the solid draw standing under it, remembered per instance.
+- The leaf pool (LeafRecord, 32 B a sprig), bake per mesh + texture, a shuffled order so any first part is an even
+  thinning (distance LOD), drawn through the canopy's own vertex path (leaf.vert = ffp.vert -DRVK_LEAF): its lights,
+  fog, shadows, PBR. Leaf sun shadows per cascade (leaf_shadow.vert). Falling leaves.
+- Tree identity: every texture's RDB id (Texture::m_rdbId) and mesh ids (meshids.cpp: geometry hash -> rdb mesh and
+  name, e.g. 'jungle_talltree_20m.abiff').
+- One wind (wind.cpp): direction, strength, gust fronts (wind.glsl Gust), shared with the grass.
+- ao-assets: rdb.db access, generators (`ao-assets generate`), the workbench viewer.
+
+## Design
+
+### A tree type = its canopy texture
+
+Many tree meshes share a leaf texture (336 meshes are named *tree*, many of them dead, fallen or stumps; the living
+canopies use far fewer textures). The type is keyed by the canopy texture's RDB id; the mesh name only refines it (a
+"leaning" or "small" variant: size). A profile per type (randy-vk/trees/types.ini, hot-reloaded like materials):
+
+- leaf: shape (oval, long and narrow, round, lobed (oak-like), compound (fern-like fronds of leaflets), needles,
+  broad tropical), size (world), colour (from the game texture's leaf texels - keeps the zone's palette - with a
+  spread: yellower young tips, darker old leaves), gloss, translucency.
+- sprig: leaves per twig, their arrangement (alternate, opposite, whorled, a fan), twig colour and length.
+- crown: density, how far out leaves stand from the cards, droop.
+- Types without a profile: a default built from the texture's colour and the crown's size.
+
+### The leaf art (generated, ao-assets)
+
+`ao-assets generate tree-leaves`: per profile, an atlas of sprigs - 8 to 16 variants, 256 px each - painted
+procedurally: the leaf outline (from the shape), a midrib and veins, a colour gradient (base to tip, edge darkening),
+serration for lobed and oval leaves, the twig; plus a normal map (the veins and the leaf's fold) and a translucency
+mask. Files: randy-vk/trees/<type>.png (+ _n.png). Mipmapped with alpha kept (coverage-preserving mips, so far leaves
+don't thin out). Viewed and tuned in the workbench before the game. Art style: realistic-leaning, but colours from the
+game's own textures so it sits in AO's zones; this is the first thing to look at with the user (phase 1).
+
+### The crown (baked per canopy mesh)
+
+- Where the foliage is: points over the game's cards where its texture is leaf (alpha), as today, giving the crown's
+  shape the artist made. From them: the crown's hull (an ellipsoid fit, plus the points' density), its centre, and
+  clusters (k-means, 20 - 200 by size) = branch ends.
+- Sprigs: placed mostly on an outer shell of each cluster (where leaves get light), sparser inside; turned to face out
+  from the cluster and up, with a random twist; droop by profile. Each sprig records its cluster (a branch: sways
+  together) and how deep in the crown it is (shading).
+- Counts: a 20-unit tree ~2,000 - 5,000 sprigs at full density, shuffled for the distance thinning (as today).
+- The game's cards are not drawn where ours are (the canopy draw skipped while its leaves are drawn); a crossfade
+  (dithered, both drawn for ~10% of the leaf distance) where ours end.
+
+### Shading
+
+- Normals: each sprig's own (normal map) bent towards the direction out from the crown's centre - the crown shades as
+  one rounded mass (lit side, shadow side), not card by card.
+- Depth in the crown: inner sprigs darker (ambient), a cheap stand-in for the crown shadowing itself; the sun shadow
+  map (leaf shadows, existing) does the rest.
+- Translucency: sun behind the crown -> the leaves glow at its edges (RVK_LeafLight's backlight, per leaf).
+- Colour spread per sprig and per tree (no two trees identical).
+
+### Wind (the trees' part of the storm work)
+
+- The trunk bends: the trunk draw sways with the crown (height-squared bend from its base, the same function for the
+  trunk, the canopy's crossfade and our sprigs) - nothing detaches.
+- In a storm the tree leans downwind and the lean levels off (as the grass, wind.glsl GrassGusts); swings around the
+  lean, never far upwind; gust fronts (Gust, shared) push it further as they pass.
+- Three scales: trunk (slow), branches (per cluster, own phase), leaves (fast flutter, per sprig); all livelier with
+  the storm.
+- Falling leaves: in our art, more in gusts, carried along the wind in a storm.
+
+## Phases
+
+0. Inventory: a log line per tree canopy type met in game (texture id, mesh name, size, count) and an ao-assets scan of
+   the tree meshes' canopy textures -> the type list, with thumbnails in the workbench. Pick the first 6 - 10 types
+   (the common zones' trees) for profiles.
+1. Leaf art generator + workbench preview; the user picks the look on a few types.
+2. Crown bake + replacement drawing for trees (the game's cards off near, crossfade far); default profile for the
+   rest. Demo: tools/extract-tree.py trees, --leaf-tree.
+3. Shading: crown normals, depth darkening, translucency, colour spread.
+4. Wind: trunk bend, storm lean, three scales; falling leaves in the new art.
+5. Profiles for the remaining types; tuning in game; costs (target: a forest view <= 1.5 ms GPU at default density).
+
+Each phase: the demo (pixel-identical where trees aren't involved), the harness, crash and hang reports, validation.
+
+## Risks
+
+- Canopies the classifier gets wrong (a tree's dead branches, vines, signs): the inventory shows them; per-type
+  "leave alone" in types.ini.
+- Trees whose leaf texture is also used by shrubs: keyed by texture + size class.
+- Cost of many sprigs in forests: the distance thinning and the crossfade to the game's cards bound it; shadows draw
+  fewer.
+- Trunks the pairing misses (the crown then can't bend with it): fall back to swaying the crown only, gently.
