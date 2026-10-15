@@ -179,6 +179,13 @@ void main()
             // soft core of a world unit, fading out over the outer half of its range (no hard edge in the air).
             float dc = sqrt(d * d + 1.0);
             float att = min(1.0 / max(li.atten.x + li.atten.y * dc + li.atten.z * dc * dc, 1e-3), 1.0);
+            // A spot light only in its cone (lighting.glsl's falloff): a hall's floodlights, a thousand units in range,
+            // lit all the air round them.
+            if (uint(li.position.w) == 2u) {
+                float rho = dot((p - li.position.xyz) / max(d, 1e-4), normalize(li.direction.xyz));
+                att *= rho <= li.spot.y ? 0.0 : rho >= li.spot.x ? 1.0
+                     : pow(clamp((rho - li.spot.y) / max(li.spot.x - li.spot.y, 1e-6), 0.0, 1.0), max(li.atten.w, 1e-3));
+            }
             lit += li.diffuse.rgb * (att * (1.0 - smoothstep(0.5, 1.0, d / li.direction.w)));
         }
         light += transmit * a * lit * S.colour.rgb;
