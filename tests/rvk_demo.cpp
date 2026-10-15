@@ -3168,6 +3168,7 @@ float g_leafCamYaw = 0.0f;         // --leaf-cam-yaw R: ... turned R radians abo
 int g_leafFilm = 0;                // --leaf-film N: ~60 frames a second, a screenshot every N frames (film_NNN.bmp)
 int g_leafForest = 0;              // --leaf-forest N: an N x N grid of the trees (12 units apart), seen from eye height
 float g_crownShade = 1.0f;         // --crown-shade X: RVK_CrownShade
+bool g_freeCam = false;            // --free-cam: the free camera on from frame 10, turning and moving ahead (Device::SetFreeCam)
 std::string g_leafArt;             // --leaf-art ATLAS.png[,NORMAL.png]: a tree type's own leaf art (ao-assets leaf-art)
                                    // on every canopy (cut-out part) of the trees - leaves.cpp BakeOwnCanopy
 
@@ -3305,6 +3306,15 @@ void RunLeafScene(D& dev, int frames, const std::string& shot, const std::string
         const float lookY = g_leafForest > 0 ? camY + 3.0f : tallest * 0.45f;
         const float lookZ = g_leafForest > 0 ? 30.0f : 0.0f;
         dev.SetTransform(View, LookAtLH({ex, camY, ez}, {mid, lookY, lookZ}, {0, 1, 0}));
+        if (g_freeCam && frame >= 10) {
+            Device::FreeCamInput in;
+            in.on = true;
+            in.look[0] = 0.01f;
+            in.look[1] = 0.004f;
+            in.move[2] = 1.0f;
+            in.dt = 1.0f / 60.0f;
+            dev.SetFreeCam(in);
+        }
         dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.5f, 500.0f));
         dev.SetTransform(World, Identity());
         dev.SetRenderState(RS_ZENABLE, 1);
@@ -3680,6 +3690,7 @@ int main(int argc, char** argv)
         else if (a == "--leaf-art" && i + 1 < argc) g_leafArt = argv[++i];
         else if (a == "--leaf-no-own") g_leafSettings.own = false;
         else if (a == "--crown-shade" && i + 1 < argc) g_crownShade = float(std::atof(argv[++i]));
+        else if (a == "--free-cam") g_freeCam = true;
         else if (a == "--leaf-shadow-off") g_leafSettings.shadows = false;
         else if (a == "--leaf-fall" && i + 1 < argc) g_leafSettings.fall = float(std::atof(argv[++i]));
         else if (a == "--leaf-density" && i + 1 < argc) g_leafSettings.density = float(std::atof(argv[++i]));

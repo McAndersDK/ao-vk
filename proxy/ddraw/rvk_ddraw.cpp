@@ -387,6 +387,60 @@ void RvkState::Present()
         device->SetHideInterface(!device->HideInterface());
         RvkLog("interface %s", device->HideInterface() ? "hidden" : "shown");
     }
+    // Ctrl+Shift+C: a free camera for debugging (not a setting): numpad 8 / 5 / 4 / 6 forward, back, left, right,
+    // 9 / 3 up, down; + / - faster, slower; the middle mouse button held to look about. Keys only while the game's
+    // window has the focus. (The game still picks what it draws from its own camera: far from it, things are missing.)
+    {
+        static bool freeCam = false, wasOn = false;
+        static float speed = 8.0f;
+        static LARGE_INTEGER last{}, freq{};
+        static POINT lastCursor{};
+        static bool looking = false;
+        if (pressed('C')) {
+            freeCam = !freeCam;
+            RvkLog("free camera %s (numpad 8/5/4/6 move, 9/3 up/down, +/- speed, middle mouse button: look)",
+                   freeCam ? "on" : "off");
+        }
+        if (freeCam || wasOn) {
+            rvk::Device::FreeCamInput in;
+            in.on = freeCam;
+            LARGE_INTEGER now;
+            QueryPerformanceCounter(&now);
+            if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
+            in.dt = last.QuadPart ? float(double(now.QuadPart - last.QuadPart) / double(freq.QuadPart)) : 0.0f;
+            last = now;
+            DWORD pid = 0;
+            GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+            if (freeCam && pid == GetCurrentProcessId()) {
+                auto key = [](int k) { return (GetAsyncKeyState(k) & 0x8000) != 0; };
+                in.move[0] = (key(VK_NUMPAD6) ? 1.0f : 0.0f) - (key(VK_NUMPAD4) ? 1.0f : 0.0f);
+                in.move[1] = (key(VK_NUMPAD9) ? 1.0f : 0.0f) - (key(VK_NUMPAD3) ? 1.0f : 0.0f);
+                in.move[2] = (key(VK_NUMPAD8) ? 1.0f : 0.0f) - (key(VK_NUMPAD5) ? 1.0f : 0.0f);
+                static bool plusDown = false, minusDown = false;
+                bool plus = key(VK_ADD), minus = key(VK_SUBTRACT);
+                if (plus && !plusDown) speed = std::min(speed * 1.5f, 400.0f);
+                if (minus && !minusDown) speed = std::max(speed / 1.5f, 0.5f);
+                plusDown = plus;
+                minusDown = minus;
+                POINT cursor;
+                GetCursorPos(&cursor);
+                if (key(VK_MBUTTON)) {
+                    if (looking) {
+                        in.look[0] = float(cursor.x - lastCursor.x) * 0.004f;
+                        in.look[1] = -float(cursor.y - lastCursor.y) * 0.004f;
+                    }
+                    looking = true;
+                } else {
+                    looking = false;
+                }
+                lastCursor = cursor;
+            }
+            in.speed = speed;
+            device->SetFreeCam(in);
+            wasOn = freeCam;
+            if (!freeCam) last.QuadPart = 0;
+        }
+    }
     // Ctrl+Shift+F11: lighting debug view (not a setting).
     if (pressed(VK_F11)) {
         device->SetLightingDebug(!device->LightingDebug());

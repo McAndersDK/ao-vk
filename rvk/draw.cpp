@@ -144,7 +144,19 @@ void Device::SetTransform(uint32_t type, const d3d::Matrix& m)
     d3d::Matrix* target = nullptr;
     switch (type) {
     case d3d::World: m_world = m; return;
-    case d3d::View: target = &m_view; break;
+    case d3d::View: {
+        m_gameView = m;
+        if (m.m[3][0] != 0.0f || m.m[3][1] != 0.0f || m.m[3][2] != 0.0f) {
+            m_gameMainView = m;
+            m_gameMainValid = true;
+        }
+        if (m_freeCam) {
+            ApplyFreeCam();
+            return;
+        }
+        target = &m_view;
+        break;
+    }
     case d3d::Projection: target = &m_proj; break;
     case d3d::Texture0: target = &m_texMatrix[0]; break;
     case d3d::Texture1: target = &m_texMatrix[1]; break;
@@ -155,6 +167,66 @@ void Device::SetTransform(uint32_t type, const d3d::Matrix& m)
         m_constantsDirty = true;
         if (type == d3d::View || type == d3d::Projection) ++m_cameraGen;
     }
+}
+
+// The free camera's view: each view the game sets taken back out of its main camera's and into the free one's - the main
+// view becomes the free camera's own, a view without position (the sky's) keeps its relation to it.
+void Device::ApplyFreeCam()
+{
+    const float cy = std::cos(m_freeYaw), sy = std::sin(m_freeYaw), cp = std::cos(m_freePitch), sp = std::sin(m_freePitch);
+    const float f[3] = {cp * sy, sp, cp * cy};
+    float r[3] = {f[2], 0.0f, -f[0]};            // (left-handed: the world's up x forward)
+    const float rl = std::hypot(r[0], r[2]);
+    r[0] /= rl; r[2] /= rl;
+    const float u[3] = {f[1] * r[2] - f[2] * r[1], f[2] * r[0] - f[0] * r[2], f[0] * r[1] - f[1] * r[0]};
+    d3d::Matrix F = Identity();
+    for (int i = 0; i < 3; ++i) {
+        F.m[i][0] = r[i];
+        F.m[i][1] = u[i];
+        F.m[i][2] = f[i];
+    }
+    const float* e = m_freePos;
+    F.m[3][0] = -(r[0] * e[0] + r[1] * e[1] + r[2] * e[2]);
+    F.m[3][1] = -(u[0] * e[0] + u[1] * e[1] + u[2] * e[2]);
+    F.m[3][2] = -(f[0] * e[0] + f[1] * e[1] + f[2] * e[2]);
+    d3d::Matrix inv;
+    if (!InvertMatrix(m_gameMainView, &inv))
+        return;
+    m_view = MulMatrix(MulMatrix(m_gameView, inv), F);
+    m_constantsDirty = true;
+    ++m_cameraGen;
+}
+
+void Device::SetFreeCam(const FreeCamInput& in)
+{
+    if (!in.on) {
+        if (m_freeCam) {                         // (back to the game's)
+            m_freeCam = false;
+            m_view = m_gameView;
+            m_constantsDirty = true;
+            ++m_cameraGen;
+            Log("free camera: off");
+        }
+        return;
+    }
+    if (!m_freeCam) {                            // on: where the game's camera is, looking its way
+        d3d::Matrix inv;
+        if (!m_gameMainValid || !InvertMatrix(m_gameMainView, &inv))
+            return;
+        for (int i = 0; i < 3; ++i) m_freePos[i] = inv.m[3][i];
+        m_freeYaw = std::atan2(inv.m[2][0], inv.m[2][2]);
+        m_freePitch = std::asin(std::clamp(inv.m[2][1], -1.0f, 1.0f));
+        m_freeCam = true;
+        Log("free camera: on at (%.1f %.1f %.1f)", double(m_freePos[0]), double(m_freePos[1]), double(m_freePos[2]));
+    }
+    m_freeYaw += in.look[0];
+    m_freePitch = std::clamp(m_freePitch + in.look[1], -1.55f, 1.55f);
+    const float cy = std::cos(m_freeYaw), sy = std::sin(m_freeYaw), cp = std::cos(m_freePitch), sp = std::sin(m_freePitch);
+    const float f[3] = {cp * sy, sp, cp * cy}, r[3] = {cy, 0.0f, -sy};
+    const float step = in.speed * std::clamp(in.dt, 0.0f, 0.1f);
+    for (int i = 0; i < 3; ++i)
+        m_freePos[i] += (r[i] * in.move[0] + (i == 1 ? in.move[1] : 0.0f) + f[i] * in.move[2]) * step;
+    ApplyFreeCam();
 }
 
 void Device::SetMaterial(const d3d::Material& m)

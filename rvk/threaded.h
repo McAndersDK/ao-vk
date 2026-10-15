@@ -157,6 +157,7 @@ public:
     void SetEmissiveMap(Texture* texture, Texture* emissive);               // ... and this
     void SetLeafArt(Texture* texture, Texture* atlas, Texture* normal);     // ... and these
     void SetCrownShade(float amount);
+    void SetFreeCam(const Device::FreeCamInput& in);
     void RequestPick(float x, float y);
     Device::PickResult LastPick() const { return m_device.LastPick(); }   // (thread-safe)
     void SetPickHighlight(Texture* t);

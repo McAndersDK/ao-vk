@@ -802,6 +802,11 @@ void ThreadedDevice::SetEmissiveMap(Texture* texture, Texture* emissive)
     Enqueue([this, texture, emissive](const uint8_t*) { m_device.SetEmissiveMap(texture, emissive); });
 }
 
+void ThreadedDevice::SetFreeCam(const Device::FreeCamInput& in)
+{
+    Enqueue([this, in](const uint8_t*) { m_device.SetFreeCam(in); });
+}
+
 void ThreadedDevice::SetCrownShade(float amount)
 {
     Enqueue([this, amount](const uint8_t*) { m_device.SetCrownShade(amount); });

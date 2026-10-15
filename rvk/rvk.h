@@ -330,6 +330,16 @@ public:
     void SetSandHaze(float amount) { m_sandHaze = amount; }        // RVK_SandHaze (wind.cpp)
     void SetSandBlow(float amount) { m_sandBlow = amount; }        // RVK_SandBlow (smoke.cpp: the sand volume)
     void SetSandForce(float amount, bool ash) { m_sandForce = amount; m_sandAsh = ash; }   // RVK_SandForce, RVK_SandAsh
+    // A free camera for debugging (Ctrl+Shift+C, the proxy's keys and mouse; draw.cpp): once a frame, before its draws.
+    // On, it starts where the game's camera is; every view the game sets is re-expressed about it.
+    struct FreeCamInput {
+        bool on = false;
+        float move[3] = {};                      // right, up, forward (-1..1 each)
+        float look[2] = {};                      // turn right, up (radians)
+        float speed = 8.0f;                      // world units a second
+        float dt = 0.0f;                         // seconds since the last
+    };
+    void SetFreeCam(const FreeCamInput& in);
     void SandHaze(float out[8]) const;                             // the tone mapping's sand: dust, dust2
     bool SmokeCoverValid() const { return m_smokeHalf && m_smokeHalfFrame == m_frameNumber; }
     // Grass and plants bending out of the way of characters walking through them (0 = off; scales reach and bend).
@@ -2745,6 +2755,12 @@ private:
     std::array<uint32_t, d3d::RS_COUNT> m_rs{};
     std::array<std::array<uint32_t, d3d::TSS_COUNT>, 2> m_tss{};
     d3d::Matrix m_world{}, m_view{}, m_proj{};
+    // The free camera (SetFreeCam): the game's latest view as it set it, its latest main view (one with a camera
+    // position: not the sky's), and the free camera's place.
+    d3d::Matrix m_gameView{}, m_gameMainView{};
+    bool m_gameMainValid = false, m_freeCam = false;
+    float m_freePos[3] = {}, m_freeYaw = 0.0f, m_freePitch = 0.0f;
+    void ApplyFreeCam();
     std::array<d3d::Matrix, 2> m_texMatrix{};
     d3d::Material m_material{};
     std::vector<LightSlot> m_lights;
