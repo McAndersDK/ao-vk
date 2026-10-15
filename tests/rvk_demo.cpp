@@ -1181,6 +1181,84 @@ void AddCube(std::vector<VtxMesh>& v, std::vector<uint16_t>& idx, float cx, floa
     }
 }
 
+// Sand shelter (--sand-obstacles): a wall, a tree (a trunk, a see-through crown) and a boulder ahead of the bench's
+// camera, as placed objects (a pack written here and loaded as the game's: statels.cpp, sand_map.cpp) and drawn as
+// grey boxes; --sand-wind X Z: the storm's wind that way (the game's weather wind, each frame).
+bool g_sandObstacles = false;
+bool g_sandWindSet = false;
+float g_sandWind[2] = {1.0f, 0.0f};
+struct SandBox { float lo[3], hi[3]; bool seeThrough; };
+
+void AddBox(std::vector<VtxMesh>& v, std::vector<uint16_t>& idx, const float lo[3], const float hi[3], uint32_t colour)
+{
+    struct Face { int axis; float sign; } faces[6] = {{0, -1}, {0, 1}, {1, -1}, {1, 1}, {2, -1}, {2, 1}};
+    for (const Face& f : faces) {
+        const uint16_t base = uint16_t(v.size());
+        const int a = (f.axis + 1) % 3, b = (f.axis + 2) % 3;
+        for (int k = 0; k < 4; ++k) {
+            float p[3], n[3] = {0, 0, 0};
+            p[f.axis] = f.sign < 0 ? lo[f.axis] : hi[f.axis];
+            p[a] = (k == 1 || k == 2) ? hi[a] : lo[a];
+            p[b] = k >= 2 ? hi[b] : lo[b];
+            n[f.axis] = f.sign;
+            v.push_back({p[0], p[1], p[2], n[0], n[1], n[2], colour, 0, 0});
+        }
+        const uint16_t q[6] = {0, 1, 2, 0, 2, 3};
+        for (uint16_t i : q) idx.push_back(uint16_t(base + i));
+    }
+}
+
+// The boxes as a statel pack (statels.cpp's format, version 2): a mesh of one piece each, placed at the origin.
+bool WriteSandPack(const char* path, const std::vector<SandBox>& boxes)
+{
+    std::vector<uint8_t> out;
+    auto put = [&](const void* p, size_t n) { const uint8_t* b = static_cast<const uint8_t*>(p); out.insert(out.end(), b, b + n); };
+    auto u32 = [&](uint32_t v) { put(&v, 4); };
+    auto f32 = [&](float v) { put(&v, 4); };
+    const uint32_t n = uint32_t(boxes.size());
+    put("AOSTATEL", 8);
+    u32(2); u32(999);
+    u32(n); u32(n); u32(n); u32(1); u32(n * 8); u32(n * 36); u32(64);
+    u32(1010004); u32(1); uint16_t wh[2] = {8, 8}; put(wh, 4); u32(0);                   // the see-through mask
+    for (uint32_t i = 0; i < n; ++i) {                                                     // meshes
+        u32(i); u32(i); u32(1);
+        for (int k = 0; k < 3; ++k) f32(boxes[i].lo[k]);
+        for (int k = 0; k < 3; ++k) f32(boxes[i].hi[k]);
+    }
+    for (uint32_t i = 0; i < n; ++i) {                                                     // pieces
+        for (int r = 0; r < 16; ++r) f32(r % 5 == 0 ? 1.0f : 0.0f);
+        u32(i * 8); u32(8); u32(i * 36); u32(36);
+        int32_t tex = boxes[i].seeThrough ? 0 : -1;
+        put(&tex, 4);
+        f32(0.5f);
+        for (int k = 0; k < 3; ++k) f32(boxes[i].lo[k]);
+        for (int k = 0; k < 3; ++k) f32(boxes[i].hi[k]);
+    }
+    for (uint32_t i = 0; i < n; ++i) {                                                     // statels
+        for (int r = 0; r < 12; ++r) f32(r < 9 && r % 4 == 0 ? 1.0f : 0.0f);
+        int16_t ypr[3] = {0, 0, 0};
+        put(ypr, 6);
+        uint16_t mesh = uint16_t(i);
+        put(&mesh, 2);
+        f32(1.0f); u32(0); u32(i);
+    }
+    for (const SandBox& b : boxes)                                                         // vertices
+        for (int c = 0; c < 8; ++c) {
+            f32(c & 1 ? b.hi[0] : b.lo[0]); f32(c & 2 ? b.hi[1] : b.lo[1]); f32(c & 4 ? b.hi[2] : b.lo[2]);
+            f32(0.5f); f32(0.5f);
+        }
+    static const uint16_t kTris[36] = {0, 1, 3, 0, 3, 2, 4, 6, 7, 4, 7, 5, 0, 4, 5, 0, 5, 1,
+                                       2, 3, 7, 2, 7, 6, 0, 2, 6, 0, 6, 4, 1, 5, 7, 1, 7, 3};
+    for (uint32_t i = 0; i < n; ++i) put(kTris, sizeof(kTris));                           // indices
+    while (out.size() % 4) out.push_back(0);
+    for (int k = 0; k < 64; ++k) out.push_back(128);                                       // texels
+    FILE* f = std::fopen(path, "wb");
+    if (!f) return false;
+    std::fwrite(out.data(), 1, out.size(), f);
+    std::fclose(f);
+    return true;
+}
+
 // Ground grass benchmark (--grass-bench): a big hilly terrain drawn like AnarchyGround_t - world-space chunks of
 // non-indexed triangles, an unlit base pass with a green texture and a multiplying light pass with a lightmap - under
 // RVK_GrassOn, the camera walking and turning so tiles keep coming into range. Prints the frame time (mean and worst).
@@ -1251,10 +1329,29 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
         pbr.debug = g_pbrDebug;
         dev.SetPbr(pbr);
     }
+    std::vector<SandBox> sandBoxes;
+    std::vector<VtxMesh> sandVerts;
+    std::vector<uint16_t> sandIdx;
+    if (g_sandObstacles) {
+        auto box = [&](float x, float z, float w, float d, float lo, float hi, bool seeThrough) {
+            const float g = height(x, z);
+            sandBoxes.push_back({{x - w / 2, g + lo, z - d / 2}, {x + w / 2, g + hi, z + d / 2}, seeThrough});
+        };
+        box(-48.0f, 0.0f, 1.0f, 16.0f, -1.0f, 4.0f, false);        // a wall across the view, 12 units ahead
+        box(-53.0f, 5.0f, 0.8f, 0.8f, -1.0f, 8.0f, false);         // a tree's trunk
+        box(-53.0f, 5.0f, 6.0f, 6.0f, 5.0f, 11.0f, true);          // ... its crown
+        box(-55.0f, -6.0f, 3.0f, 3.0f, -1.0f, 2.5f, false);        // a boulder
+        WriteSandPack("sand-obstacles.bin", sandBoxes);
+        dev.LoadStatels("sand-obstacles.bin", 999);
+        for (const SandBox& b : sandBoxes)
+            if (!b.seeThrough) AddBox(sandVerts, sandIdx, b.lo, b.hi, 0xFF9A948C);
+    }
     for (int frame = 0; frame < frames; ++frame) {
-        if (frame == frames - 1)
+        if (frame == frames - 1) {
             dev.RequestScreenshot(shot);
-        else if (g_grassBenchFilm > 0 && frame >= 60 && frame % g_grassBenchFilm == 0) {
+            if (g_sandObstacles || g_sandStorm || g_sandForce > 0.0f)   // (and the sand map: sand-frame-sand.bmp)
+                dev.RequestFrameDump("sand-frame.txt");
+        } else if (g_grassBenchFilm > 0 && frame >= 60 && frame % g_grassBenchFilm == 0) {
             char name[32];
             std::snprintf(name, sizeof(name), "film_%03d.bmp", (frame - 60) / g_grassBenchFilm);
             dev.RequestScreenshot(name);
@@ -1390,6 +1487,20 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
             dev.DrawPrimitive(TriangleFan, kFvfMesh, q, 4);
             dev.SetRenderState(RS_ZWRITEENABLE, 1);
             dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
+        }
+        if (g_sandWindSet) {      // (the game's weather wind)
+            Device::WeatherState w;
+            w.wind[0] = g_sandWind[0];
+            w.wind[2] = g_sandWind[1];
+            dev.SetWeather(w);
+        }
+        if (!sandVerts.empty()) {
+            dev.SetTexture(0, nullptr);
+            dev.SetTextureStageState(0, TSS_COLOROP, TOP_SELECTARG2);
+            dev.SetRenderState(RS_LIGHTING, 1);
+            dev.DrawIndexedPrimitive(TriangleList, kFvfMesh, sandVerts.data(), uint32_t(sandVerts.size()), sandIdx.data(),
+                                     uint32_t(sandIdx.size()));
+            dev.SetTextureStageState(0, TSS_COLOROP, TOP_MODULATE);
         }
         if (g_grassBenchStorm) {   // AO's sandstorm tint: a screen-sized blended sprite 5 units ahead, writing depth, ZFUNC ALWAYS
             const float fx = std::cos(yaw), fz = std::sin(yaw), rx = -fz, rz = fx;
@@ -3757,6 +3868,12 @@ int main(int argc, char** argv)
         else if (a == "--grass-bench-still") g_grassBenchStill = true;
         else if (a == "--terrain-pbr") { g_terrainPbr = g_grassBench = g_grassBenchStill = true; hdr = true; }
         else if (a == "--grass-bench-storm") g_grassBenchStorm = true;
+        else if (a == "--sand-obstacles") g_sandObstacles = true;
+        else if (a == "--sand-wind" && i + 2 < argc) {
+            g_sandWind[0] = float(std::atof(argv[++i]));
+            g_sandWind[1] = float(std::atof(argv[++i]));
+            g_sandWindSet = true;
+        }
         else if (a == "--sand-storm") { g_grassFieldOn = g_grassBench = g_grassBenchStorm = g_sandStorm = true; hdr = true; }
         else if (a == "--sand-blow" && i + 1 < argc) g_sandBlow = float(std::atof(argv[++i]));
         else if (a == "--sand-res" && i + 1 < argc) g_sandRes = uint32_t(std::atoi(argv[++i]));

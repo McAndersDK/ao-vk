@@ -1169,6 +1169,10 @@ private:
     std::vector<StatelItem> m_statelItems;
     std::vector<StatelPlaced> m_statelPlaced;
     std::vector<Texture*> m_statelMasks;
+    std::vector<float> m_statelCpuPositions;     // the pack's vertex positions (x y z) and indices, for the CPU (the
+    std::vector<uint16_t> m_statelCpuIndices;    // sand's shelter map)
+    uint32_t m_statelGeneration = 0;             // one more each load / unload
+    void StatelItemsIn(float x0, float z0, float x1, float z1, std::vector<uint32_t>& out);
     VkBuffer m_statelBuffer = VK_NULL_HANDLE;    // vertices (position, uv: 20 bytes), then the indices
     VmaAllocation_T* m_statelAllocation = nullptr;
     VkDeviceSize m_statelIndexBase = 0;
@@ -1895,7 +1899,36 @@ private:
     double m_sandPivot[2] = {0.0, 0.0};
     double m_sandOffset[2] = {0.0, 0.0};         // (wrapped: kSandOffsetWrap)
     bool m_sandPivotSet = false;
-    std::vector<float> m_sandGround;             // per column: the ground's height (box units), how much sand it gives
+    // The sand's shelter map (sand_map.cpp): round the camera, what stands there (the ground, solid tops, see-through
+    // spans) and the heights under which the wind is held off; built in slices into the next, swapped in.
+    struct SandMap {
+        int origin[2] = {0, 0};                  // its first cell (world cells)
+        std::vector<float> ground, solid, crownLo, crownHi, feed, shelterSolid, shelterCrown;
+        bool valid = false;
+        double built = -1e9;
+        uint32_t statelGen = 0;
+    };
+    struct SandMapJob { bool active = false; uint32_t row = 0; size_t item = 0; std::vector<uint32_t> items; };
+    struct SandColumn { float ground, top, shelterSolid, shelterCrown, feed; };
+    SandMap m_sandMap, m_sandMapNext;
+    SandMapJob m_sandMapJob;
+    std::vector<float> m_sandCoarseShelter;      // the terrain grid's (terrain_sun.cpp) shelter heights
+    int m_sandCoarseOrigin[2] = {0, 0};
+    float m_sandCoarseWind[2] = {0, 0}, m_sandShelterWind[2] = {0, 0};   // the wind they were swept for
+    double m_sandCoarseMade = -1e9, m_sandMapMs = 0.0;
+    uint32_t m_sandShelterGen = 0, m_sandGroundShelterGen = ~0u;
+    float m_sandEyeShelter = 0.0f;               // the camera's (eased): the near haze held off
+    void UpdateSandMap();
+    void RasterSandItem(SandMap& m, uint32_t item);
+    float CoarseTerrainAt(float x, float z) const;
+    float CoarseShelterAt(float x, float z) const;
+    bool SandMapAt(float x, float z, SandColumn* out) const;
+    float SandMapSolidIn(float x0, float z0, float x1, float z1) const;
+    float SandShelterAt(float x, float y, float z) const;
+    void DumpSandMap(const std::string& path) const;
+    std::vector<float> m_sandGround;             // per column (4 floats): its top (the ground or a solid's; box units),
+                                                 // how much sand it gives, the shelter heights solid, see-through (box
+                                                 // units)
     float m_sandGroundCorner[3] = {1e30f, 0, 0}; // ... for the box there
     uint32_t m_sandGroundN = 0;
     uint64_t m_sandGroundFrame = 0;              // ... made then (made again now and then: the ground comes in)

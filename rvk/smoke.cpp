@@ -684,7 +684,7 @@ void Device::UpdateSmokeDrift(double now)
 // much sand it gives (bare ground all, green ground a quarter).
 void Device::MakeSandGround(const float corner[3], float size, uint32_t n)
 {
-    m_sandGround.assign(size_t(n) * n * 2, 0.0f);
+    m_sandGround.assign(size_t(n) * n * 4, 0.0f);
     const float h = size / float(n);
     float guess = 0.0f;                          // (unknown ground: as high as the floor's estimate)
     for (const SmokeVolume& v : m_smokeVolumes)
@@ -693,13 +693,33 @@ void Device::MakeSandGround(const float corner[3], float size, uint32_t n)
         for (uint32_t x = 0; x < n; ++x) {
             float y = guess, feed = 1.0f;
             uint32_t colour = 0;
-            if (GroundAt(corner[0] + (float(x) + 0.5f) * h, corner[2] + (float(z) + 0.5f) * h, &y, &colour, nullptr)) {
+            const bool known = GroundAt(corner[0] + (float(x) + 0.5f) * h, corner[2] + (float(z) + 0.5f) * h, &y, &colour,
+                                        nullptr);
+            if (known) {
                 const float r = float((colour >> 16) & 0xFF), g = float((colour >> 8) & 0xFF), b = float(colour & 0xFF);
                 if (g > r * 1.05f && g > b) feed = 0.25f;
             }
-            float* c = &m_sandGround[(size_t(z) * n + x) * 2];
-            c[0] = (y - corner[1]) / size;
+            float* c = &m_sandGround[(size_t(z) * n + x) * 4];
+            // The shelter map (sand_map.cpp): its ground where the grass has none, the solid tops over the column (a
+            // trunk thinner than the column still in it: solid in the simulation, the sand goes round), no sand
+            // given off on top of things, the shelter heights (none: as low as the column's top).
+            const float wx = corner[0] + (float(x) + 0.5f) * h, wz = corner[2] + (float(z) + 0.5f) * h;
+            SandColumn col;
+            float top = y, shelterSolid = -1e9f, shelterCrown = -1e9f;
+            if (SandMapAt(wx, wz, &col)) {
+                if (!known) top = col.ground;    // (GroundAt had nothing: the map's)
+                const float solid = SandMapSolidIn(wx - 0.5f * h, wz - 0.5f * h, wx + 0.5f * h, wz + 0.5f * h);
+                if (solid > top + 0.3f) {
+                    top = solid;
+                    feed = 0.0f;
+                }
+                shelterSolid = col.shelterSolid;
+                shelterCrown = col.shelterCrown;
+            }
+            c[0] = (top - corner[1]) / size;
             c[1] = feed;
+            c[2] = (std::max(shelterSolid, top - 10.0f) - corner[1]) / size;
+            c[3] = (std::max(shelterCrown, top - 10.0f) - corner[1]) / size;
         }
     std::memcpy(m_sandGroundCorner, corner, sizeof(m_sandGroundCorner));
     m_sandGroundN = n;
@@ -712,7 +732,13 @@ void Device::UpdateSandVolume(double now, float dt)
 {
     if (!SandActive()) {
         m_sandDevil.life = 0.0f;
+        m_sandEyeShelter = 0.0f;
         return;
+    }
+    UpdateSandMap();                             // (what shelters from the wind round the camera: sand_map.cpp)
+    {
+        const float eye = SandShelterAt(m_frameEye[0], m_frameEye[1] - 0.8f, m_frameEye[2]);
+        m_sandEyeShelter += (eye - m_sandEyeShelter) * (1.0f - std::exp(-dt / 0.6f));
     }
     SmokeVolume* v = nullptr;
     for (SmokeVolume& x : m_smokeVolumes)
@@ -1009,7 +1035,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
     for (float& s : sun) s /= sl;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_smokeSimPipeline);
     uint32_t groups = 0;
-    EnsureRingSpace(live.size() * (sizeof(SmokeBodies) + sizeof(SandHeader) + 512) + kSandCellsMax * kSandCellsMax * 8u + 1024);
+    EnsureRingSpace(live.size() * (sizeof(SmokeBodies) + sizeof(SandHeader) + 512) + kSandCellsMax * kSandCellsMax * 16u + 1024);
     Frame& f = m_frames[m_frameIndex];
     // Which volumes step this frame: warming up ones every frame; of the others those due, the most overdue first, as
     // many as keep them all stepping every kSimStep or so - each frame about the same work, not two volumes' steps in
@@ -1149,8 +1175,10 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         VkDeviceSize sandBytes = sizeof(SandHeader) + 16;
         if (sand) {
             if (m_sandGroundN != n || std::memcmp(m_sandGroundCorner, corner, sizeof(corner)) != 0 ||
-                m_frameNumber > m_sandGroundFrame + 30)
+                m_frameNumber > m_sandGroundFrame + 30 || m_sandGroundShelterGen != m_sandShelterGen) {
                 MakeSandGround(corner, s.size, n);
+                m_sandGroundShelterGen = m_sandShelterGen;
+            }
             const float strength = std::min(m_sand * 2.5f, 1.0f) * m_sandBlow * (fed ? 1.0f : 0.0f);
             std::memcpy(sh.corner, corner, sizeof(corner));
             sh.corner[3] = 1.0f;

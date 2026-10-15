@@ -19,6 +19,11 @@ void Device::RequestFrameDump(const std::string& path)
 void Device::BeginFrameDump()
 {
     m_dumpFile = std::fopen(m_dumpPath.c_str(), "w");
+    if (m_sandMap.valid) {                       // (the sand's shelter map beside it: <dump>-sand.bmp)
+        std::string sand = m_dumpPath;
+        const size_t dot = sand.rfind('.');
+        DumpSandMap((dot != std::string::npos ? sand.substr(0, dot) : sand) + "-sand.bmp");
+    }
     m_dumpPath.clear();
     if (!m_dumpFile) return;
     m_dumpDraw = 0;

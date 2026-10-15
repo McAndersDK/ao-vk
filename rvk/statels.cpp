@@ -96,7 +96,43 @@ void Device::DestroyStatels()
     m_statelCellStart.clear();
     m_statelCellItems.clear();
     m_statelStamp.clear();
+    m_statelCpuPositions.clear();
+    m_statelCpuIndices.clear();
     m_statelPlayfield = 0;
+    ++m_statelGeneration;
+}
+
+// The items whose boxes reach into [x0, x1] x [z0, z1] (world x, z), each once (the sand's shelter map, sand_map.cpp).
+void Device::StatelItemsIn(float x0, float z0, float x1, float z1, std::vector<uint32_t>& out)
+{
+    out.clear();
+    if (m_statelItems.empty())
+        return;
+    auto cell = [&](float v, float origin, uint32_t n) {
+        return int(std::clamp(std::floor((v - origin) / kStatelCell), -1.0f, float(n)));
+    };
+    const int cx0 = std::max(cell(x0, m_statelGridOrigin[0], m_statelGridW), 0);
+    const int cx1 = std::min(cell(x1, m_statelGridOrigin[0], m_statelGridW), int(m_statelGridW) - 1);
+    const int cz0 = std::max(cell(z0, m_statelGridOrigin[1], m_statelGridH), 0);
+    const int cz1 = std::min(cell(z1, m_statelGridOrigin[1], m_statelGridH), int(m_statelGridH) - 1);
+    if (++m_statelStampNow == 0) {
+        std::fill(m_statelStamp.begin(), m_statelStamp.end(), 0u);
+        m_statelStampNow = 1;
+    }
+    for (int z = cz0; z <= cz1; ++z)
+        for (int x = cx0; x <= cx1; ++x) {
+            const size_t c = size_t(z) * m_statelGridW + size_t(x);
+            for (uint32_t k = m_statelCellStart[c]; k < m_statelCellStart[c + 1]; ++k) {
+                const uint32_t i = m_statelCellItems[k];
+                if (m_statelStamp[i] == m_statelStampNow)
+                    continue;
+                m_statelStamp[i] = m_statelStampNow;
+                const StatelItem& s = m_statelItems[i];
+                if (s.boundsMax[0] < x0 || s.boundsMin[0] > x1 || s.boundsMax[2] < z0 || s.boundsMin[2] > z1)
+                    continue;
+                out.push_back(i);
+            }
+        }
 }
 
 void Device::SetStatelMode(uint32_t mode)
@@ -186,6 +222,14 @@ bool Device::LoadStatels(const char* path, uint32_t playfield)
         return false;
     }
     std::memcpy(info.pMappedData, vertices, size_t(vertexBytes));
+    // (A copy of the positions and indices for the CPU: the sand's shelter map rasterises the pieces - the buffer is
+    // write-combined, slow to read.)
+    m_statelCpuPositions.resize(size_t(h.vertices) * 3);
+    for (uint32_t i = 0; i < h.vertices; ++i)
+        std::memcpy(&m_statelCpuPositions[size_t(i) * 3], vertices + size_t(i) * 20, 12);
+    m_statelCpuIndices.resize(h.indices);
+    std::memcpy(m_statelCpuIndices.data(), indices, size_t(h.indices) * 2);
+    ++m_statelGeneration;
     std::memcpy(static_cast<uint8_t*>(info.pMappedData) + m_statelIndexBase, indices, size_t(indexBytes));
     vmaFlushAllocation(m_allocator, m_statelAllocation, 0, VK_WHOLE_SIZE);
 

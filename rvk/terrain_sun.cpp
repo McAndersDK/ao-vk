@@ -26,8 +26,8 @@ constexpr float kTsReach = 3200.0f;              // how far towards the sun a hi
 // The terrain's base pass: its vertices into the grid (each cell its highest).
 void Device::NoteTerrainSun(uint32_t fvf, const void* vertices, uint32_t vertexCount)
 {
-    if (!vertices || vertexCount == 0 || !m_hillShade)
-        return;
+    if (!vertices || vertexCount == 0 || (!m_hillShade && !SandActive()))
+        return;                                  // (the sand's shelter uses the grid too: sand_map.cpp)
     // Each terrain chunk once while the grid stays where it is: its heights don't change, and reading every terrain
     // vertex of every frame cost the render thread a millisecond and more over a city (user, 2026-10-14). (A chunk:
     // its vertices' address, count and first position - a new chunk at a freed one's address differs in those.)

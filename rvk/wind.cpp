@@ -133,6 +133,7 @@ void Device::SandHaze(float out[8]) const
     out[4] = float(m_windTime);
     out[5] = 0.12f + 0.25f * std::min(m_storm + m_sand, 1.0f);
     out[6] = std::min(0.45f * m_sand * m_sandHaze, 0.6f);   // (the game's 0.38: a ~17% veil close by)
+    out[6] *= 1.0f - 0.75f * m_sandEyeShelter;               // (in a hill's or a wall's lee: the air near clears)
     out[7] = SmokeCoverValid() ? 1.0f : 0.0f;
 }
 
