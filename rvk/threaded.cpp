@@ -406,10 +406,10 @@ bool ThreadedDevice::SetWindow(HWND window)
     return ok;
 }
 
-void ThreadedDevice::RequestFrameDump(const std::string& path)
+void ThreadedDevice::RequestFrameDump(const std::string& path, int frames)
 {
     std::string p = path;
-    Enqueue([this, p](const uint8_t*) { m_device.RequestFrameDump(p); });
+    Enqueue([this, p, frames](const uint8_t*) { m_device.RequestFrameDump(p, frames); });
 }
 
 void ThreadedDevice::RequestScreenshot(const std::string& bmpPath)

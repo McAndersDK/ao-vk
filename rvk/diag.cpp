@@ -11,15 +11,23 @@ namespace rvk {
 
 using namespace detail;
 
-void Device::RequestFrameDump(const std::string& path)
+void Device::RequestFrameDump(const std::string& path, int frames)
 {
     m_dumpPath = path;
+    m_dumpBurstLeft = m_dumpBurstIndex = 0;
+    if (frames > 1) {                            // (a run: <base>-00.txt, -01.txt ... - what changes frame to frame)
+        const size_t dot = path.rfind('.');
+        m_dumpBurstBase = dot != std::string::npos ? path.substr(0, dot) : path;
+        m_dumpBurstLeft = frames - 1;
+        m_dumpBurstIndex = 0;
+        m_dumpPath = m_dumpBurstBase + "-00.txt";
+    }
 }
 
 void Device::BeginFrameDump()
 {
     m_dumpFile = std::fopen(m_dumpPath.c_str(), "w");
-    if (m_sandMap.valid) {                       // (the sand's shelter map beside it: <dump>-sand.bmp)
+    if (m_sandMap.valid && m_dumpBurstIndex == 0) {                       // (the sand's shelter map beside it: <dump>-sand.bmp)
         std::string sand = m_dumpPath;
         const size_t dot = sand.rfind('.');
         DumpSandMap((dot != std::string::npos ? sand.substr(0, dot) : sand) + "-sand.bmp");
@@ -251,6 +259,12 @@ void Device::EndFrameDump()
     }
     std::fclose(m_dumpFile);
     m_dumpFile = nullptr;
+    if (m_dumpBurstLeft > 0) {
+        --m_dumpBurstLeft;
+        char n[16];
+        std::snprintf(n, sizeof(n), "-%02d.txt", ++m_dumpBurstIndex);
+        m_dumpPath = m_dumpBurstBase + n;
+    }
 }
 
 static void Mul(const d3d::Matrix& m, const float in[4], float out[4])

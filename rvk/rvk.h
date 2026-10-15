@@ -158,7 +158,7 @@ public:
     // recorded so far and waits for it (rendering then continues in the same frame).
     bool ReadPixels(Texture* target, void* out);
     void RequestScreenshot(const std::string& bmpPath);   // saved during the next EndFrame()
-    void RequestFrameDump(const std::string& path);       // the next frame's 3D draws, written as text (diag.cpp)
+    void RequestFrameDump(const std::string& path, int frames = 1);   // the next frame's (frames') 3D draws, as text (diag.cpp)
     void SetDumpVertexCount(uint32_t count) { m_dumpVertexCount = count; }   // frame dumps list these draws' vertices
 
     // ---- D3D7-style interface (IDirect3DDevice7 semantics and enum values) ----
@@ -2823,6 +2823,8 @@ private:
 
     std::string m_screenshotPath;
     std::string m_dumpPath;
+    std::string m_dumpBurstBase;                 // a run of frames dumped: <base>-NN.txt (RequestFrameDump frames)
+    int m_dumpBurstLeft = 0, m_dumpBurstIndex = 0;
     FILE* m_dumpFile = nullptr;
     uint32_t m_dumpDraw = 0;
     uint32_t m_frameDraw = 0;                    // draws so far this frame (Draw calls)

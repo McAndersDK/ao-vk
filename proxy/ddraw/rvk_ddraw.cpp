@@ -414,7 +414,9 @@ void RvkState::Present()
         GetLocalTime(&t);
         char base[MAX_PATH];
         std::snprintf(base, sizeof(base), "%srvk-frame-%02d%02d%02d", dir, t.wHour, t.wMinute, t.wSecond);
-        device->RequestFrameDump(std::string(base) + ".txt");
+        // (Alt too: the next 60 frames' draws, <base>-NN.txt - what the game changes frame to frame.)
+        const bool burst = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+        device->RequestFrameDump(std::string(base) + ".txt", burst ? 60 : 1);
         device->RequestScreenshot(std::string(base) + ".bmp");
         RvkLog("frame dump: %s.txt / .bmp", base);
     }
