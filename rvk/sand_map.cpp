@@ -201,7 +201,7 @@ void Device::UpdateSandMap()
                 if (GroundAt(wx, wz, &y, &colour, nullptr)) {
                     m.ground[c] = y;
                     const float r = float((colour >> 16) & 0xFF), g = float((colour >> 8) & 0xFF), b = float(colour & 0xFF);
-                    if (g > r * 1.05f && g > b) m.feed[c] = 0.25f;   // (green: grass gives less sand)
+                    if (g > r * 1.05f && g > b) m.feed[c] = 0.65f;   // (green: grass gives a little less sand)
                 } else {
                     m.ground[c] = CoarseTerrainAt(wx, wz);
                 }

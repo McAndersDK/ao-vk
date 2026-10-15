@@ -718,7 +718,7 @@ void Device::MakeSandGround(const float corner[3], float size, uint32_t n)
                                         nullptr);
             if (known) {
                 const float r = float((colour >> 16) & 0xFF), g = float((colour >> 8) & 0xFF), b = float(colour & 0xFF);
-                if (g > r * 1.05f && g > b) feed = 0.25f;
+                if (g > r * 1.05f && g > b) feed = 0.65f;   // (grass gives a little less: the storm brings sand over it too)
             }
             float* c = &m_sandGround[(size_t(z) * n + x) * kSandColumnFloats];
             // The shelter map (sand_map.cpp): its ground where the grass has none, the solid tops over the column (a
