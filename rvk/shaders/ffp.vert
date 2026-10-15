@@ -148,7 +148,7 @@ vec2 gLeafCorner;                                // where on the card (-1 .. 1)
 // A leaf's flutter: its card flapping about its middle, the far edge most (model units, along the card's normal).
 float LeafFlutter(float phase, float corner, float time, float gust)
 {
-    return sin(time * (6.0 + 2.0 * fract(phase * 7.0)) + phase * 6.2831853) * (0.15 + 0.45 * gust) * corner;
+    return sin(time * (6.0 + 2.0 * fract(phase * 7.0)) + phase * 6.2831853) * (0.15 + 0.3 * min(gust, 2.0)) * corner;
 }
 
 uint LeafHash(uint x)
@@ -175,7 +175,7 @@ bool FallingLeaf(uint slot, vec2 corner, float time, out vec3 pos, out vec3 norm
     float cycle = floor(t / kCycle), age = t - cycle * kCycle;
     uint cs = LeafHash(seed ^ (uint(cycle) * 0x85EBCA6Bu));
     vec2 wd = FL.wind.xy;
-    float gust = Gust(WindAxes(D.world[3].xz, wd, FL.windFrame.xy), time - age) * FL.leaves.z;
+    float gust = Gust(WindAxes(D.world[3].xz, wd, FL.windFrame.xy), time - age) * GrassGusts(FL.leaves.z);
     if (LeafHashU(cs) >= clamp(FL.leafView.z * (0.3 + 1.2 * gust), 0.0, 1.0)) return false;
     uint src = D.leafSet.x + LeafHash(cs ^ 0x51ED27u) % D.leafSet.z;
     uvec4 a = LV.words[2u * src], b = LV.words[2u * src + 1u];
@@ -247,8 +247,8 @@ void LeafVertex(vec2 originXZ)
     vec3 pos = centre + corner.x * halfU + corner.y * halfV;
     float size = length(halfV);
     vec2 aa = WindAxes(originXZ, FL.wind.xy, FL.windFrame.xy);
-    float gust = Gust(aa, FL.wind.z) * FL.leaves.z;
-    float gustPrev = Gust(aa, FL.taa.w) * FL.leaves.z;
+    float gust = Gust(aa, FL.wind.z) * GrassGusts(FL.leaves.z);   // (levelling off in a storm)
+    float gustPrev = Gust(aa, FL.taa.w) * GrassGusts(FL.leaves.z);
     float f = FL.leaves.y * size;
     // (Flapping most at the far edge: the old sprigs' top; our own canopy's sprigs' tip, their twig's base at +v.)
     float tip = (D.leafSet.y & 0x80000000u) != 0u ? 0.5 - 0.5 * corner.y : 0.5 + 0.5 * corner.y;

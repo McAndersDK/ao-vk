@@ -39,10 +39,15 @@ vec3 BranchSwayAt(vec3 modelPos, vec4 crown, vec2 originXZ, vec2 aa, vec2 wd, fl
     float r = min(length(d), 1.3);
     vec3 n = d / max(r, 1e-3);
     float phase = dot(n, vec3(2.3, 1.7, 3.1)) + dot(originXZ, vec2(0.31, 0.23));
-    float gust = Gust(aa, time) * gusts;          // (aa: the object's place in the wind's frame, WindAxes)
-    float swing = 0.55 * sin(time * 1.3 + phase) + 0.3 * sin(time * 2.9 + phase * 1.9) + 0.6 * gust;
+    // In a storm (the wind's strength in amount past ~1.2) the sway levels off - a crown only bends so far - and leans
+    // downwind, swaying about the lean rather than as far upwind as down; the gusts level off too (as the grass's).
+    float level = amount <= 1.0 ? amount : 1.0 + 1.3 * (1.0 - exp(-(amount - 1.0) / 1.2));
+    float storm = clamp((amount - 1.2) / 2.5, 0.0, 1.0);
+    float gust = Gust(aa, time) * GrassGusts(gusts);   // (aa: the object's place in the wind's frame, WindAxes)
+    float swing = (0.55 * sin(time * 1.3 + phase) + 0.3 * sin(time * 2.9 + phase * 1.9)) * (1.0 - 0.4 * storm) +
+                  0.6 * gust + 0.8 * storm;
     float bob = (0.4 + 0.5 * palm) * sin(time * (2.1 + 0.8 * palm) + phase * 2.7) - 0.3 * palm * gust;
-    float amp = (0.035 + 0.035 * palm) * radius * amount * r * r;
+    float amp = (0.035 + 0.035 * palm) * radius * level * r * r;
     return vec3(wd.x * swing, bob, wd.y * swing) * amp;
 }
 

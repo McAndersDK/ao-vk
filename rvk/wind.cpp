@@ -88,7 +88,9 @@ void Device::UpdateWind()
 
     // Its clock: faster in a storm.
     m_windTimePrev = m_windTime;
-    m_windTime = std::fmod(m_windTime + double(dt) * (1.0 + 0.9 * double(storm)), 3600.0);
+    // (At most 0.1 s a frame: a long frame - a zone loading - slows the plants down rather than jumping their sway by
+    // most of a swing; a storm's quick sway freaked out.)
+    m_windTime = std::fmod(m_windTime + double(std::min(dt, 0.1f)) * (1.0 + 0.9 * double(storm)), 3600.0);
     if (paused || m_windTime < m_windTimePrev)
         m_windTimePrev = m_windTime;             // wrapped, or the first frame after a pause (no motion from it)
     if (m_frameNumber % 600 == 0)
