@@ -213,6 +213,19 @@ struct SmokeResidual {
     float h = 0.0f;
 };
 SmokeResidual g_residual;
+// RANDYVK_SAND_READBACK=N: the sand volume's look image (density, sunlight) read back at frame N, its density by height
+// logged (debugging).
+struct SandReadback { VkBuffer buffer = VK_NULL_HANDLE; VmaAllocation_T* allocation = nullptr; void* cpu = nullptr;
+                      uint64_t readAt = 0; uint32_t n = 0; };
+SandReadback g_sandReadback;
+float HalfToFloat(uint16_t h)
+{
+    const uint32_t sign = uint32_t(h & 0x8000u) << 16, e = (h >> 10) & 0x1Fu, m = h & 0x3FFu;
+    uint32_t bits = e == 0 ? sign : e == 31 ? sign | 0x7F800000u | (m << 13) : sign | ((e + 112u) << 23) | (m << 13);
+    float f;
+    std::memcpy(&f, &bits, 4);
+    return e == 0 ? 0.0f : f;
+}
 
 // ... the solve's error, logged once the copy is done.
 void LogSmokeResidual()
@@ -871,6 +884,29 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
     const double now = m_frameClock;
     const float dt = m_smokeLastClock < 0.0 ? 0.0f : float(std::clamp(now - m_smokeLastClock, 0.0, 1.0 / 30.0));
     m_smokeLastClock = now;
+    if (g_sandReadback.readAt && m_frameNumber >= g_sandReadback.readAt && g_sandReadback.cpu) {
+        const uint32_t n = g_sandReadback.n;
+        const uint16_t* px = static_cast<const uint16_t*>(g_sandReadback.cpu);
+        std::string bands;
+        double total = 0.0;
+        float most = 0.0f;
+        for (uint32_t y = 0; y < n; y += n / 8) {
+            double sum = 0.0;
+            for (uint32_t z = 0; z < n; ++z)
+                for (uint32_t x = 0; x < n; ++x) {
+                    const float d = HalfToFloat(px[((size_t(z) * n + y) * n + x) * 4]);
+                    sum += d;
+                    most = std::max(most, d);
+                }
+            total += sum;
+            char b[32];
+            std::snprintf(b, sizeof(b), " %.4f", sum / double(n * n));
+            bands += b;
+        }
+        Log("sand readback: mean density by height (bottom up, every %u cells):%s; max %.4f", n / 8, bands.c_str(),
+            double(most));
+        g_sandReadback.readAt = 0;
+    }
     if (g_residual.readAt && m_frameNumber >= g_residual.readAt)
         LogSmokeResidual();
     if (m_smokeSimPipeline && m_hdr)
@@ -1189,7 +1225,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
             sh.air[0] = 0.02f * strength;                   // (x kExtinction: ~0.06 a world unit at the ground)
             sh.air[1] = 2.0f + 3.0f * std::min(m_sand * 2.5f, 1.0f);   // (the dust over the low, thick layer)
             sh.air[2] = 0.08f * strength;
-            sh.air[3] = 6.0f;
+            sh.air[3] = m_sandProcedural ? 4.0f : 6.0f;   // (the procedural sand's streaks finer: a 32-unit box)
             sh.streaks[0] = float(m_sandPivot[0]);
             sh.streaks[1] = float(m_sandPivot[1]);
             sh.streaks[2] = float(m_sandOffset[0]);
@@ -1261,7 +1297,8 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
             static const char* const kStageNames[] = {"smoke 0 advect", "smoke 1 curl", "smoke 2 vorticity",
                                                       "smoke 3 divergence", "smoke 4 pressure", "smoke 5 project",
                                                       "smoke 6 density on", "smoke 7 light", "smoke 8 density back",
-                                                      "smoke 9 density", "smoke 10 noise", "smoke 11 flow"};
+                                                      "smoke 9 density", "smoke 10 noise", "smoke 11 flow",
+                                                      "smoke 12 sand"};
             static const bool stageProfile = getenv("RANDYVK_SMOKE_STAGES") != nullptr;
             if (stageProfile)
                 ProfileMark(kStageNames[stage]);
@@ -1277,54 +1314,83 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
             groups = n / 4;
             m_smokeNoiseMade = true;
         }
-        dispatch(0, v.vel[c], v.dens[c], v.vel[o], v.dens[o], pr[0], pr[1], v.vel[c], float(m_frameNumber % 65521u));
-        dispatch(1, v.vel[c], v.dens[c], v.vel[c], v.dens[o], pr[0], pr[1], v.vel[o], 0.0f);   // curl of vel[o]
-        dispatch(2, v.vel[o], v.dens[c], v.vel[c], v.dens[o], pr[0], pr[1], v.vel[o], 0.0f);   // vorticity -> vel[c]
-        dispatch(3, v.vel[o], v.dens[c], v.vel[o], v.dens[o], pr[0], pr[1], v.vel[c], 0.0f);   // divergence of vel[c]
-        for (uint32_t k = 0; k < jacobi; ++k)                                                   // pressure: pr[0] <-> pr[1]
-            dispatch(4, v.vel[o], v.dens[c], v.vel[o], v.dens[o], pr[k & 1], pr[(k & 1) ^ 1], v.vel[c],
-                     k == 0 ? 1.0f : 0.0f);
         const SmokeImage& p0 = pr[jacobi & 1];                                                 // (the last written)
-        static const uint64_t residualFrame = getenv("RANDYVK_SMOKE_RESIDUAL") ? std::strtoull(getenv("RANDYVK_SMOKE_RESIDUAL"), nullptr, 10) : 0;
-        if (residualFrame && m_frameNumber == residualFrame && &v == live.front().second) {
-            const VkDeviceSize bytes = VkDeviceSize(n) * n * n * 4;
-            if (!g_residual.buffer) {
-                VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-                bi.size = bytes * 2;
-                bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-                VmaAllocationCreateInfo rc{};
-                rc.usage = VMA_MEMORY_USAGE_AUTO;
-                rc.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-                VmaAllocationInfo info{};
-                if (vmaCreateBuffer(m_allocator, &bi, &rc, &g_residual.buffer, &g_residual.allocation, &info) == VK_SUCCESS)
-                    g_residual.cpu = info.pMappedData;
+        if (sand && m_sandProcedural) {
+            // The sand, procedural (smoke_sim.comp stage 12): its density and velocity made afresh, no solver.
+            dispatch(12, v.vel[c], v.dens[c], v.vel[o], v.dens[o], pr[0], pr[1], v.vel[c], 0.0f);
+        } else {
+            dispatch(0, v.vel[c], v.dens[c], v.vel[o], v.dens[o], pr[0], pr[1], v.vel[c], float(m_frameNumber % 65521u));
+            dispatch(1, v.vel[c], v.dens[c], v.vel[c], v.dens[o], pr[0], pr[1], v.vel[o], 0.0f);   // curl of vel[o]
+            dispatch(2, v.vel[o], v.dens[c], v.vel[c], v.dens[o], pr[0], pr[1], v.vel[o], 0.0f);   // vorticity -> vel[c]
+            dispatch(3, v.vel[o], v.dens[c], v.vel[o], v.dens[o], pr[0], pr[1], v.vel[c], 0.0f);   // divergence of vel[c]
+            for (uint32_t k = 0; k < jacobi; ++k)                                                   // pressure: pr[0] <-> pr[1]
+                dispatch(4, v.vel[o], v.dens[c], v.vel[o], v.dens[o], pr[k & 1], pr[(k & 1) ^ 1], v.vel[c],
+                         k == 0 ? 1.0f : 0.0f);
+            static const uint64_t residualFrame = getenv("RANDYVK_SMOKE_RESIDUAL") ? std::strtoull(getenv("RANDYVK_SMOKE_RESIDUAL"), nullptr, 10) : 0;
+            if (residualFrame && m_frameNumber == residualFrame && &v == live.front().second) {
+                const VkDeviceSize bytes = VkDeviceSize(n) * n * n * 4;
+                if (!g_residual.buffer) {
+                    VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+                    bi.size = bytes * 2;
+                    bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+                    VmaAllocationCreateInfo rc{};
+                    rc.usage = VMA_MEMORY_USAGE_AUTO;
+                    rc.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+                    VmaAllocationInfo info{};
+                    if (vmaCreateBuffer(m_allocator, &bi, &rc, &g_residual.buffer, &g_residual.allocation, &info) == VK_SUCCESS)
+                        g_residual.cpu = info.pMappedData;
+                }
+                if (g_residual.cpu) {
+                    memory(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                           VK_ACCESS_2_TRANSFER_READ_BIT);
+                    VkBufferImageCopy r{};
+                    r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    r.imageExtent = {n, n, n};
+                    vkCmdCopyImageToBuffer(cmd, p0.image, VK_IMAGE_LAYOUT_GENERAL, g_residual.buffer, 1, &r);
+                    r.bufferOffset = bytes;
+                    vkCmdCopyImageToBuffer(cmd, m_smokeDiv.image, VK_IMAGE_LAYOUT_GENERAL, g_residual.buffer, 1, &r);
+                    memory(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                    g_residual.frame = m_frameNumber;
+                    g_residual.readAt = m_frameNumber + 6;
+                    g_residual.n = n;
+                    g_residual.h = s.size / float(n);
+                }
             }
-            if (g_residual.cpu) {
-                memory(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                       VK_ACCESS_2_TRANSFER_READ_BIT);
-                VkBufferImageCopy r{};
-                r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                r.imageExtent = {n, n, n};
-                vkCmdCopyImageToBuffer(cmd, p0.image, VK_IMAGE_LAYOUT_GENERAL, g_residual.buffer, 1, &r);
-                r.bufferOffset = bytes;
-                vkCmdCopyImageToBuffer(cmd, m_smokeDiv.image, VK_IMAGE_LAYOUT_GENERAL, g_residual.buffer, 1, &r);
-                memory(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                       VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-                g_residual.frame = m_frameNumber;
-                g_residual.readAt = m_frameNumber + 6;
-                g_residual.n = n;
-                g_residual.h = s.size / float(n);
-            }
+            dispatch(5, v.vel[c], v.dens[c], v.vel[o], v.dens[o], p0, pr[0], v.vel[c], 0.0f);       // projected -> vel[o]
+            dispatch(6, v.vel[o], v.dens[c], v.vel[c], v.dens[o], p0, pr[0], v.vel[c], 0.0f);       // density forward -> curl
+            dispatch(8, v.vel[o], v.dens[c], v.vel[c], v.dens[o], p0, pr[0], v.vel[c], 0.0f);       // ... and back -> div
+            if (parent)
+                forwardView = parent->dens[parent->cur].view;   // (stage 9: the source's smoke, for a drift cloud)
+            dispatch(9, v.vel[o], v.dens[c], v.vel[c], v.dens[o], p0, pr[0], v.vel[c], 0.0f);       // corrected -> dens[o]
         }
-        dispatch(5, v.vel[c], v.dens[c], v.vel[o], v.dens[o], p0, pr[0], v.vel[c], 0.0f);       // projected -> vel[o]
-        dispatch(6, v.vel[o], v.dens[c], v.vel[c], v.dens[o], p0, pr[0], v.vel[c], 0.0f);       // density forward -> curl
-        dispatch(8, v.vel[o], v.dens[c], v.vel[c], v.dens[o], p0, pr[0], v.vel[c], 0.0f);       // ... and back -> div
-        if (parent)
-            forwardView = parent->dens[parent->cur].view;   // (stage 9: the source's smoke, for a drift cloud)
-        dispatch(9, v.vel[o], v.dens[c], v.vel[c], v.dens[o], p0, pr[0], v.vel[c], 0.0f);       // corrected -> dens[o]
         forwardView = m_smokeCurl.view;
         forwardView = v.dens[c].view;            // (the state before this step, for the look's blend from it)
         dispatch(7, v.vel[o], v.dens[o], v.vel[c], v.dens[c], p0, pr[0], v.vel[c], 0.0f);       // sunlight -> look
+        static const uint64_t sandReadFrame = getenv("RANDYVK_SAND_READBACK") ? std::strtoull(getenv("RANDYVK_SAND_READBACK"), nullptr, 10) : 0;
+        if (sand && sandReadFrame && m_frameNumber == sandReadFrame && !g_sandReadback.readAt) {
+            const VkDeviceSize bytes = VkDeviceSize(n) * n * n * 8;
+            VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+            bi.size = bytes;
+            bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            VmaAllocationCreateInfo rc{};
+            rc.usage = VMA_MEMORY_USAGE_AUTO;
+            rc.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+            VmaAllocationInfo info{};
+            if (vmaCreateBuffer(m_allocator, &bi, &rc, &g_sandReadback.buffer, &g_sandReadback.allocation, &info) == VK_SUCCESS) {
+                g_sandReadback.cpu = info.pMappedData;
+                memory(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                       VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+                VkBufferImageCopy r{};
+                r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                r.imageExtent = {n, n, n};
+                vkCmdCopyImageToBuffer(cmd, v.look.image, VK_IMAGE_LAYOUT_GENERAL, g_sandReadback.buffer, 1, &r);
+                memory(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                g_sandReadback.readAt = m_frameNumber + 6;
+                g_sandReadback.n = n;
+            }
+        }
         forwardView = m_smokeCurl.view;
         groups = (n / 2 + 3) / 4;
         dispatch(11, v.vel[o], v.dens[o], v.vel[c], v.dens[c], p0, pr[0], v.vel[c], 0.0f);      // vel[o] -> flow

@@ -1185,6 +1185,7 @@ void AddCube(std::vector<VtxMesh>& v, std::vector<uint16_t>& idx, float cx, floa
 // camera, as placed objects (a pack written here and loaded as the game's: statels.cpp, sand_map.cpp) and drawn as
 // grey boxes; --sand-wind X Z: the storm's wind that way (the game's weather wind, each frame).
 bool g_sandObstacles = false;
+bool g_sandSim = false;              // --sand-sim: the sand simulated (RVK_SandProc 0)
 bool g_sandWindSet = false;
 float g_sandWind[2] = {1.0f, 0.0f};
 struct SandBox { float lo[3], hi[3]; bool seeThrough; };
@@ -3869,6 +3870,7 @@ int main(int argc, char** argv)
         else if (a == "--terrain-pbr") { g_terrainPbr = g_grassBench = g_grassBenchStill = true; hdr = true; }
         else if (a == "--grass-bench-storm") g_grassBenchStorm = true;
         else if (a == "--sand-obstacles") g_sandObstacles = true;
+        else if (a == "--sand-sim") g_sandSim = true;
         else if (a == "--sand-wind" && i + 2 < argc) {
             g_sandWind[0] = float(std::atof(argv[++i]));
             g_sandWind[1] = float(std::atof(argv[++i]));
@@ -4039,6 +4041,7 @@ int main(int argc, char** argv)
         dev.SetWeatherParams(weather);
     }
     dev.SetSandBlow(g_sandBlow);
+    dev.SetSandProcedural(!g_sandSim);
     dev.SetWindStorm(g_windStorm);
     dev.SetSandForce(g_sandForce, g_sandAsh);
     dev.SetTonemap(knee, 1.0f);

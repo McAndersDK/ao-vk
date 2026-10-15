@@ -1005,6 +1005,11 @@ void ThreadedDevice::SetSandForce(float amount, bool ash)
     Enqueue([this, amount, ash](const uint8_t*) { m_device.SetSandForce(amount, ash); });
 }
 
+void ThreadedDevice::SetSandProcedural(bool on)
+{
+    Enqueue([this, on](const uint8_t*) { m_device.SetSandProcedural(on); });
+}
+
 void ThreadedDevice::SetSandBlow(float amount)
 {
     Enqueue([this, amount](const uint8_t*) { m_device.SetSandBlow(amount); });

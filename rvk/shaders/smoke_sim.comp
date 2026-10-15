@@ -162,6 +162,15 @@ float Streaks(vec3 uvw)
     float n = 0.65 * TileNoise(vec3(q.x * 0.25, q.y, t * 0.2), 4096) + 0.35 * TileNoise(vec3(q.x * 0.5, q.y * 2.0, t * 0.35) + 17.0, 4096);
     return smoothstep(0.3, 0.7, n);
 }
+// A point's place along and across the storm's wind (world units), in the streaks' frame (carried by the wind).
+vec2 WindPlace(vec3 uvw)
+{
+    vec2 w = SD.corner.xz + uvw.xz * P.a.w;
+    float speed = length(SD.wind.xy);
+    vec2 along = speed > 1e-3 ? SD.wind.xy / speed : vec2(1.0, 0.0), across = vec2(-along.y, along.x);
+    vec2 r = w - SD.streaks.xy;
+    return vec2(dot(r, along), dot(r, across)) + SD.streaks.zw;
+}
 // Characters in the storm (too thin for the grid to hold them much - a cell is about their width): their wind shadow
 // (0..1; downwind of one, ~4 world units long, widening a little; to the top of them) and the push round them (world /
 // s: sideways out of its way, and up over, just upwind and beside).
@@ -421,6 +430,62 @@ void main()
         vec3 edge = min(uvw, 1.0 - uvw);
         dens *= smoothstep(0.0, 0.06, min(min(edge.x, edge.z), 1.0 - uvw.y));
         imageStore(densOut, id, vec4(max(dens, vec2(0.0)), 0.0, 0.0));
+    } else if (stage == 12) {
+        // The sand, procedural (RVK_SandProc; docs/sand-shelter-plan.md phase 3) - in place of stages 0..9: no state
+        // carried, each step made from where things are. Its density: the storm's sand over the ground (a thick layer
+        // hopping along it, dust thinning above), what the ground gives off where it is sand, in streaks along the
+        // wind broken into billows drifting with it; none where the wind is held off (SandShelter: a hill's, a wall's,
+        // a tree's lee) or a character shelters it, none inside things. A dust devil a whirling column; feet that move
+        // kick up a puff. Its velocity (the drawing's flow, stage 11): the storm's wind, slowed in a lee, the devil's
+        // whirl, pushed round characters.
+        float feed, above = AboveGround(uvw, feed);
+        if (above < 0.0) {
+            imageStore(velOut, id, vec4(0.0));
+            imageStore(densOut, id, vec4(0.0));
+            return;
+        }
+        float t = SD.wind.w;
+        vec3 v = SandWind(uvw);
+        vec3 push;
+        float lee = Lee(uvw, push);
+        v.xz *= 1.0 - 0.75 * lee;
+        v += 0.5 * push;
+        float held = SandShelter(uvw);
+        float streak = Streaks(uvw);
+        vec2 aw = WindPlace(uvw);
+        float b1 = TileNoise(vec3(aw.x * 0.19, above * 0.45 - t * 0.07, aw.y * 0.21 + t * 0.04), 4096);
+        float b2 = TileNoise(vec3(aw.x * 0.47 + 7.3, above * 1.1 + t * 0.11, aw.y * 0.5 + 3.1), 4096);
+        float billow = smoothstep(0.25, 0.8, 0.65 * b1 + 0.35 * b2);
+        // (As thick as the simulation's, which piles up what blows in and what the ground gives off.)
+        // (Never emptying out: a base under the streaks and billows - in a sandstorm the air is never clear.)
+        float layer = (0.5 + 1.3 * streak) * exp(-above / 0.6) + 0.7 * (0.5 + 0.5 * streak) * exp(-above / max(SD.air.y, 0.1));
+        float lifted = 0.3 * SD.air.z * feed * (0.25 + 0.75 * streak) * exp(-above / 0.45);
+        float d = (2.2 * SD.air.x * layer + lifted) * (1.0 - held) * (1.0 - lee) * (0.6 + 0.9 * billow);
+        if (SD.devil.w > 0.0) {
+            vec2 r = (uvw.xz - SD.devil.xz) * size;
+            float dist = length(r), R = SD.devil.w * size, up = (uvw.y - SD.devil.y) * size;
+            float tall = step(-0.5, up) * (1.0 - smoothstep(6.0, 14.0, up));
+            float hold = (dist < R ? 1.0 : R / max(dist, 1e-3)) * (1.0 - smoothstep(3.0 * R, 5.0 * R, dist)) * tall;
+            float swirl = dist < R ? dist / R : R / max(dist, 1e-3);
+            vec2 tg = dist > 1e-3 ? vec2(-r.y, r.x) / dist : vec2(0.0);
+            vec2 inward = dist > 1e-3 ? -r / dist : vec2(0.0);
+            vec2 flat_ = tg * SD.devil2.x * swirl + inward * abs(SD.devil2.x) * 0.3 * swirl * (1.0 - smoothstep(0.0, 2.0, up));
+            float lift = SD.devil2.y * (1.0 - smoothstep(0.6 * R, 1.6 * R, dist));
+            v = mix(v, vec3(SD.devil3.x + flat_.x, lift, SD.devil3.y + flat_.y), hold);
+            // Its column: thick at its foot, a funnel widening and thinning upwards, streaked round its axis.
+            float width = R * (0.8 + 0.06 * max(up, 0.0));
+            float ang = atan(r.y, r.x) - t * SD.devil2.x / max(R, 0.3);
+            float spin = TileNoise(vec3(ang * 1.9 + 50.0, up * 0.7 - t * 2.0, dist * 0.8), 4096);
+            float col = SD.devil2.z * (1.0 - smoothstep(0.4 * width, 1.3 * width, dist)) * tall * exp(-max(up, 0.0) / 7.0);
+            d = max(d, col * (0.4 + 1.2 * smoothstep(0.3, 0.75, spin)));
+        }
+        for (int i = 0; i < int(B.info.x); ++i) {
+            vec3 foot = vec3(B.pos[i].x, B.pos[i].y, B.pos[i].z);
+            float speed = length(B.vel[i].xz), dist = length((uvw - foot) * size);
+            d = max(d, 0.6 * SD.devil2.w * speed * (1.0 - smoothstep(0.15, 0.7, dist)));
+        }
+        imageStore(velOut, id, vec4(v, 0.0));
+        imageStore(densOut, id, vec4(max(d, 0.0), 0.0, 0.0, 0.0));
     } else if (stage == 10) {
         float w = 0.55 * TileNoise(uvw * 8.0, 8) + 0.3 * TileNoise(uvw * 16.0 + 5.0, 16) + 0.15 * TileNoise(uvw * 32.0 + 3.0, 32);
         imageStore(noiseOut, id, vec4(w));
