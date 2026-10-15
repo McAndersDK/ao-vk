@@ -45,6 +45,22 @@ float Detail(vec3 p, vec3 vel)
     return mix(n1, n2, abs(1.0 - 2.0 * ph1));
 }
 
+// Blowing sand's grain (S.info.w = 1): what the grid is too coarse to hold - ribbons long along the storm's wind and
+// narrow across, lifting a little as they go, and finer streaks racing faster through them; both ride on how far the
+// wind has carried the sand (S.detail.y, wrapped at 32: whole periods of both). Sharp-edged (sand, not a gas): the
+// density there x 0..~2.2, the average about kept.
+float SandGrain(vec3 p)
+{
+    vec2 wv = S.look.zw;
+    float speed = length(wv);
+    vec2 a = speed > 1e-3 ? wv / speed : vec2(1.0, 0.0), c = vec2(-a.y, a.x);
+    float along = dot(p.xz, a), across = dot(p.xz, c), carried = S.detail.y;
+    float ribbons = Wisps(vec3(0.25 * (along - carried), 2.0 * p.y - 0.25 * carried, 1.5 * across));
+    float streaks = Wisps(vec3(along - 1.5 * carried, 6.0 * p.y, 5.0 * across) + 3.7);
+    float crisp = smoothstep(0.40, 0.60, 0.6 * ribbons + 0.4 * streaks);
+    return mix(1.0, 2.2 * crisp, clamp(S.detail.x, 0.0, 1.0));
+}
+
 float Fog(float d)
 {
     if (S.fogColour.w < 0.5)
@@ -131,9 +147,16 @@ void main()
                 continue;
         }
         // Wisps: thin smoke frays right through, thick keeps more of its body (the average kept: 2 x the noise's 0.5).
-        float fray = S.detail.x * mix(0.55, 1.0, 1.0 - smoothstep(0.0, 0.6, dens));
-        if (fray > 0.0)
-            dens *= mix(1.0, 2.0 * smoothstep(0.3, 0.7, Detail(p, texture(flow, uvw).xyz * kSmokeFlowMax)), fray);
+        // Sand: its grain instead.
+        if (S.info.w == 1u) {
+            dens *= SandGrain(p);
+            if (dens < 1e-4)
+                continue;
+        } else {
+            float fray = S.detail.x * mix(0.55, 1.0, 1.0 - smoothstep(0.0, 0.6, dens));
+            if (fray > 0.0)
+                dens *= mix(1.0, 2.0 * smoothstep(0.3, 0.7, Detail(p, texture(flow, uvw).xyz * kSmokeFlowMax)), fray);
+        }
         float a = 1.0 - exp(-dens * S.colour.w * ds);
         // The sky's light, too, less inside the smoke (as far in as the sun's is shadowed, about).
         float sunIn = now.y;
@@ -143,8 +166,12 @@ void main()
             float d = distance(li.position.xyz, p);
             if (d >= li.direction.w)
                 continue;
-            float att = 1.0 / max(li.atten.x + li.atten.y * d + li.atten.z * d * d, 1e-3);
-            lit += li.diffuse.rgb * (att * (1.0 - smoothstep(0.75, 1.0, d / li.direction.w)));
+            // As the game lights its surfaces: never over the light's own colour (its fixed-function lighting clamps;
+            // 1 / d attenuation would make a lamp at a character's head a glaring ball in the air round it), from a
+            // soft core of a world unit, fading out over the outer half of its range (no hard edge in the air).
+            float dc = sqrt(d * d + 1.0);
+            float att = min(1.0 / max(li.atten.x + li.atten.y * dc + li.atten.z * dc * dc, 1e-3), 1.0);
+            lit += li.diffuse.rgb * (att * (1.0 - smoothstep(0.5, 1.0, d / li.direction.w)));
         }
         light += transmit * a * lit * S.colour.rgb;
         transmit *= 1.0 - a;

@@ -64,6 +64,8 @@ constexpr float kExtinction = 3.2f;             // per world unit at density 1 (
 constexpr uint64_t kSandKey = 0x4000000053414E44ull;   // the sand volume's key (bit 62: not a game pointer, not a drift
                                                        // cloud's)
 constexpr float kSandBox = 32.0f;               // its box (world units a side)
+constexpr double kSandScrollWrap = 98304.0;     // m_sandScroll's wrap (world): the simulation's streak noise repeats
+                                                // over it (4096 lattice cells of 24 world), the drawn grains over 32
 constexpr float kSandSettle = 0.35f;            // how fast its sand settles (world / s)
 
 // The sand volume's block (smoke_sim.comp Sand, std430), then its columns' ground (2 floats each); a smoke volume's
@@ -763,6 +765,15 @@ void Device::UpdateSandVolume(double now, float dt)
         s.pos[1] = floorY;
     v->lastSeen = now;
 
+    // How far the wind has carried the sand (its streaks, in the simulation and drawn, ride on it: the wind's speed x
+    // its clock would jump with every gust).
+    {
+        float wind[2];
+        SandWind(m_windDir, m_windStrength, m_windTime, wind);
+        m_sandScroll += double(std::hypot(wind[0], wind[1]) * dt);
+        if (m_sandScroll > kSandScrollWrap) m_sandScroll -= kSandScrollWrap;
+    }
+
     // The dust devil: now and then (about every 15 s in a full storm) one comes in from the upwind side of the box,
     // carried through by the wind about as fast, wandering a little; it whirls for 6..14 s or until it leaves the box.
     SandDevil& d = m_sandDevil;
@@ -1123,9 +1134,10 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
             sh.wind[2] = kSandSettle;
             sh.wind[3] = float(m_windTime);
             sh.air[0] = 0.02f * strength;                   // (x kExtinction: ~0.06 a world unit at the ground)
-            sh.air[1] = 3.0f + 5.0f * std::min(m_sand * 2.5f, 1.0f);
+            sh.air[1] = 2.0f + 3.0f * std::min(m_sand * 2.5f, 1.0f);   // (the dust over the low, thick layer)
             sh.air[2] = 0.08f * strength;
             sh.air[3] = 6.0f;
+            sh.devil3[2] = float(m_sandScroll);
             const SandDevil& dv = m_sandDevil;
             if (dv.life > 0.0f) {
                 const float env = std::clamp(dv.age / 2.0f, 0.0f, 1.0f) * std::clamp((dv.life - dv.age) / 2.0f, 0.0f, 1.0f);
@@ -1384,6 +1396,14 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         sf.detail[1] = sand ? 0.8f : 1.2f;
         sf.detail[2] = sand ? 0.9f : 2.5f;              // (sand: coarser grains of wisp, faster)
         sf.detail[3] = float(v.key % 101u) * 0.137f;
+        if (sand) {                                     // (smoke.frag SandGrain: streaks along the wind, riding on it)
+            float wind[2];
+            SandWind(m_windDir, m_windStrength, m_windTime, wind);
+            sf.look[2] = wind[0];
+            sf.look[3] = wind[1];
+            sf.detail[1] = float(std::fmod(m_sandScroll, 32.0));
+            sf.info[3] = 1;
+        }
         // (Fading in while it warms up; out over the last second before its volume is given back.)
         const float ending = float(double(v.source.life) * 1.5 + 1.0 - (now - v.lastSeen));
         sf.colour[3] = kExtinction * (sand ? 1.0f : P.density) * std::clamp(v.age / kWarmUp, 0.0f, 1.0f) *

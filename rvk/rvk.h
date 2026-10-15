@@ -1862,6 +1862,8 @@ private:
         float vel[2] = {0, 0};                   // how it travels (world / s)
     };
     SandDevil m_sandDevil;
+    double m_sandScroll = 0.0;                   // how far the storm's wind has carried the sand (world; its streaks
+                                                 // ride on it; wrapped at kSandScrollWrap)
     std::vector<float> m_sandGround;             // per column: the ground's height (box units), how much sand it gives
     float m_sandGroundCorner[3] = {1e30f, 0, 0}; // ... for the box there
     uint32_t m_sandGroundN = 0;

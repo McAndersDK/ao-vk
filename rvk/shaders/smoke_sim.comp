@@ -70,7 +70,8 @@ layout(set = 0, binding = 15, std430) readonly buffer SandBlock {
     vec4 devil;         // xyz: a dust devil's foot (box units); w: its radius (box units; 0: none)
     vec4 devil2;        // x: its spin (world / s); y: its lift (world / s); z: the density at its foot; w: characters'
                         // feet: the density kicked up per world / s they move
-    vec4 devil3;        // xy: how it travels (world / s, x z)
+    vec4 devil3;        // xy: how it travels (world / s, x z); z: how far the wind has carried the sand (world; the
+                        // streaks ride on it)
     vec2 ground[];      // a column's (z n + x): the ground's height (box units), how much sand it gives (0..1)
 } SD;
 shared uint sLow[3], sHigh[3];
@@ -135,24 +136,26 @@ float Streaks(vec3 uvw)
     float speed = length(SD.wind.xy);
     vec2 along = speed > 1e-3 ? SD.wind.xy / speed : vec2(1.0, 0.0), across = vec2(-along.y, along.x);
     float t = SD.wind.w;
-    vec2 q = vec2(dot(w, along) - speed * t, dot(w, across)) / SD.air.w;
+    vec2 q = vec2(dot(w, along) - SD.devil3.z, dot(w, across)) / SD.air.w;
     float n = 0.65 * TileNoise(vec3(q.x * 0.25, q.y, t * 0.2), 4096) + 0.35 * TileNoise(vec3(q.x * 0.5, q.y * 2.0, t * 0.35) + 17.0, 4096);
     return smoothstep(0.3, 0.7, n);
 }
-// The storm's wind at a point: slower near the ground, none in it.
+// The storm's wind at a point: a little slower near the ground (the sand hopping along it races still), none in it.
 vec3 SandWind(vec3 uvw)
 {
     float feed, above = AboveGround(uvw, feed);
     if (above < 0.0) return vec3(0.0);
-    float k = clamp(0.3 + 0.7 * sqrt(above / 4.0), 0.3, 1.0);
+    float k = clamp(0.65 + 0.35 * sqrt(above / 4.0), 0.65, 1.0);
     return vec3(SD.wind.x * k, 0.0, SD.wind.y * k);
 }
-// The sand blowing in over the walls: thick at the ground, thinning with height, in streaks.
+// The sand blowing in over the walls, in streaks: most of it a thick layer hopping along the ground (the bottom
+// world unit), over it a thinner dust thinning with height.
 float SandInflow(vec3 uvw)
 {
     float feed, above = AboveGround(uvw, feed);
     if (above < 0.0) return 0.0;
-    return SD.air.x * (0.35 + 0.65 * Streaks(uvw)) * exp(-above / max(SD.air.y, 0.1));
+    float streak = Streaks(uvw);
+    return SD.air.x * (1.8 * streak * exp(-above / 0.6) + 0.4 * (0.35 + 0.65 * streak) * exp(-above / max(SD.air.y, 0.1)));
 }
 // The density (and temperature) at a point: the image's, or beyond the walls what the storm brings.
 vec2 DensAt(vec3 at)
@@ -318,7 +321,7 @@ void main()
             dens.r *= exp(-P.c.w * dt);
             float level = 0.0;
             if (above >= 0.0 && above < 0.8)
-                level = SD.air.z * feed * (0.25 + 0.75 * Streaks(uvw)) * (1.0 - above / 0.8);
+                level = SD.air.z * feed * (0.1 + 0.9 * Streaks(uvw)) * (1.0 - above / 0.8);
             if (SD.devil.w > 0.0) {
                 float d = length((uvw.xz - SD.devil.xz) * size), R = SD.devil.w * size;
                 float up = (uvw.y - SD.devil.y) * size;
