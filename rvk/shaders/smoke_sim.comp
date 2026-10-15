@@ -192,6 +192,24 @@ vec2 WindPlace(vec3 uvw)
     vec2 r = w - SD.streaks.xy;
     return vec2(dot(r, along), dot(r, across)) + SD.streaks.zw;
 }
+// The gusts' shove on the sand (-1..1 a side; up and down less): a smooth noise field ~2.5 world units across, carried
+// along with the wind (the streaks' frame) and changing over ~half a second, two of its moments blended - not a fresh
+// random shove per few cells every few frames (it changed every 8 frames, at once: the user saw the sand jerk from
+// side to side).
+vec3 Eddies(vec3 uvw)
+{
+    vec2 place = WindPlace(uvw);
+    vec3 p = vec3(place.x, uvw.y * P.a.w, place.y) / 2.5;
+    float slice = SD.wind.w / 0.5, k = floor(slice), f = smoothstep(0.0, 1.0, slice - k);
+    vec3 e[2];
+    for (int j = 0; j < 2; ++j) {
+        uint m = uint(k) + uint(j);   // (each moment its own place in the noise: offsets kept small, exact)
+        vec3 o = vec3((uvec3(m) * uvec3(17u, 5u, 41u)) % 4096u);
+        e[j] = vec3(TileNoise(p + o, 4096), TileNoise(p + o + vec3(1009.0, 0.0, 0.0), 4096),
+                    TileNoise(p + o + vec3(0.0, 0.0, 2003.0), 4096));
+    }
+    return (2.0 * mix(e[0], e[1], f) - 1.0) * vec3(1.0, 0.6, 1.0);
+}
 // Characters in the storm (too thin for the grid to hold them much - a cell is about their width): their wind shadow
 // (0..1; downwind of one, ~4 world units long, widening a little; to the top of them) and the push round them (world /
 // s: sideways out of its way, and up over, just upwind and beside).
@@ -263,11 +281,8 @@ void main()
         float feed, above = AboveGround(uvw, feed);
         vec3 wind = SandWind(uvw);
         v.xz += (wind.xz - v.xz) * (1.0 - exp(-1.5 * dt));
-        // Gusty: eddies a few cells wide shoving it about, changing every few steps, as hard as the wind blows.
-        float speed = length(SD.wind.xy);
-        uint step_ = uint(P.e.w) / 8u;
-        ivec3 eddy = id / 3;
-        v += speed * 1.5 * dt * vec3(Jitter(eddy, step_), 0.6 * Jitter(eddy, step_ + 31u), Jitter(eddy, step_ + 7919u));
+        // Gusty: eddies a few world units wide shoving it about, as hard as the wind blows.
+        v += length(SD.wind.xy) * dt * Eddies(uvw);
         // A dust devil: whirling round its axis (fastest at its radius), drawn in and lifted at its foot.
         if (SD.devil.w > 0.0) {
             vec2 r = (uvw.xz - SD.devil.xz) * size;
