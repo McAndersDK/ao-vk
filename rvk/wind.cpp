@@ -57,7 +57,24 @@ void Device::UpdateWind()
         auto linear = [](uint32_t v) { const float c = float(v & 0xFF) / 255.0f; return c * c; };   // (about sRGB)
         const float rgb[3] = {linear(tintColour >> 16), linear(tintColour >> 8), linear(tintColour)};
         const float luma = 0.3f * rgb[0] + 0.59f * rgb[1] + 0.11f * rgb[2];
-        for (int i = 0; i < 3; ++i) m_sandColour[i] = 1.3f * (luma + (rgb[i] - luma) * 0.5f);
+        // (Eased, as its strength: in the game's sandstorm its colour flickers frame to frame - our air, its light
+        // and the land's tint with it, the user saw the light flicker.)
+        const float colourEase = dt > 0.0f ? 1.0f - std::exp(-dt / 1.5f) : 1.0f;
+        for (int i = 0; i < 3; ++i)
+            m_sandColour[i] += (1.3f * (luma + (rgb[i] - luma) * 0.5f) - m_sandColour[i]) * (m_sand < 1e-3f ? 1.0f : colourEase);
+        // (How much the game's tint swings: logged.)
+        static uint32_t lo[4] = {255, 255, 255, 255}, hi[4] = {0, 0, 0, 0}, frames = 0;
+        for (int i = 0; i < 4; ++i) {
+            const uint32_t c = (tintColour >> (8 * (3 - i))) & 0xFFu;
+            lo[i] = std::min(lo[i], c);
+            hi[i] = std::max(hi[i], c);
+        }
+        if (++frames == 600) {
+            Log("storm tint (game's, last 600 frames): a %u..%u r %u..%u g %u..%u b %u..%u\n", lo[0], hi[0], lo[1], hi[1],
+                lo[2], hi[2], lo[3], hi[3]);
+            frames = 0;
+            for (int i = 0; i < 4; ++i) { lo[i] = 255; hi[i] = 0; }
+        }
     }
 
     // How hard: the storm is the rain (rain.cpp eases it towards the game's weather) or the sand (the game's ~0.38 a full
