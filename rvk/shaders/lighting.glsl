@@ -75,25 +75,28 @@ void AccumulateLight(Light l, vec3 posW, vec3 normalW, vec3 toEye, float sunScal
     // as on level ground (its light per area: the sun's height), a little less on steep sides, in shadow alike. So a
     // low sun no longer lights the dunes' crests bright over dark lee slopes, and shadows fade in the thick of a
     // storm (the user). Level ground about as before.
-    vec3 spread = vec3(0.0);
+    // (With the sand fog - FL.windFrame.w - k is what the storm's column lets by on the sun's way, as for the sun's
+    // disc behind the fog, and what gets through is reddened as the disc is: the land lit by the same weak red sun
+    // the sky shows - the user: the peaks bright under a dark storm sky.)
+    vec3 spread = vec3(0.0), direct = vec3(1.0);
     if (type == 3u && FL.windFrame.z > 0.0) {
         float k = FL.windFrame.z;
         spread = (0.85 * k * max(L.y, 0.0) * (0.6 + 0.4 * max(normalW.y, 0.0))) * l.diffuse.rgb;
-        att *= 1.0 - k;
+        direct = FL.windFrame.w > 0.5 ? pow(vec3(max(1.0 - k, 1e-4)), vec3(0.8, 1.0, 1.25)) : vec3(1.0 - k);
     }
     if (l.spot.z > 0.0 && nl > 0.0 && att > 0.0)
         att *= PointShadow(l, posW, normalW, nl);   // shadows take the light's diffuse and specular, not its ambient
-    diff += att * nl * l.diffuse.rgb + spread;
+    diff += att * nl * l.diffuse.rgb * direct + spread;
     if (gPbr) {
         // The sun's highlight is shadowed fully (sunScale keeps part of the sunlight in full shadow - baked-looking
         // shade - but a highlight has none to keep) and fades as the sun nears the horizon: a low sun's highlight at
         // grazing angles is the brightest there is, on surfaces its long shadows (beyond the cascades) should cover.
-        float a = type == 3u ? gPbrSunVisibility * smoothstep(0.03, 0.25, L.y) * (1.0 - FL.windFrame.z) : att;
+        float a = type == 3u ? gPbrSunVisibility * smoothstep(0.03, 0.25, L.y) : att;
         if (nl > 0.0 && a > 0.0)
-            spec += a * l.diffuse.rgb * PbrSpecular(normalize(normalW), L, toEye);
+            spec += a * l.diffuse.rgb * direct * PbrSpecular(normalize(normalW), L, toEye);
     } else if ((C.flags.x & F_SPECULAR) != 0u && nl > 0.0) {
         float nh = max(dot(normalW, normalize(L + toEye)), 0.0);
-        spec += att * pow(nh, C.misc.x) * l.specular.rgb;
+        spec += att * pow(nh, C.misc.x) * l.specular.rgb * direct;
     }
 }
 

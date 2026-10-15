@@ -111,9 +111,18 @@ void Device::WindFrame(float out[4]) const
     out[0] = float(m_windOffset[0] - (m_windPivot[0] * ax + m_windPivot[1] * az));
     out[1] = float(m_windOffset[1] - (-m_windPivot[0] * az + m_windPivot[1] * ax));
     // A sandstorm takes this much of the sun's direct light and spreads it (lighting.glsl): the game's full storm
-    // (0.38) ~0.6 at RVK_SandHaze 1; never all of it.
-    out[2] = std::clamp(m_sand * m_sandHaze * 1.6f, 0.0f, 0.75f);
-    out[3] = 0.0f;
+    // (0.38) ~0.6 at RVK_SandHaze 1; never all of it. With the sand fog: what its dust column (sand_fog.frag: 0.7 x
+    // 120 + 0.3 x 1500 units deep, the sun's way through it eased to kSunPath of it) takes on the sun's way down -
+    // the same as from the sun's disc behind the fog (w: 1, reddened alike).
+    if (SandFogOn()) {
+        const float kSunPath = 0.3f, column = 0.7f * 120.0f + 0.3f * 1500.0f;
+        const float up = std::max(-m_frameSunDir[1], 0.05f);
+        out[2] = std::clamp(1.0f - std::exp(-kSunPath * 0.075f * m_sand * m_sandHaze * column / up), 0.0f, 0.97f);
+        out[3] = 1.0f;
+    } else {
+        out[2] = std::clamp(m_sand * m_sandHaze * 1.6f, 0.0f, 0.75f);
+        out[3] = 0.0f;
+    }
 }
 
 void Device::WindAxes(float x, float z, float out[2]) const

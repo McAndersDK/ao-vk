@@ -170,5 +170,12 @@ void main()
         light += transmit * a * (P.albedo.rgb * (base + sunDirect * shadeLast));
         transmit *= 1.0 - a;
     }
+    // The sun's disc and the sky round it behind the fog: seen through it as the land's sunlight comes through it
+    // (rvk wind.cpp: kSunPath of the column's depth) - dim and red, not gone (the user). (The disc is far brighter
+    // than the sky: through the dust it still shows, as the sun through a storm does.)
+    if (d >= 1.0 && sun) {
+        float near_ = smoothstep(0.978, 0.9997, dot(dir, toSun));   // (~12 degrees out to the disc)
+        transmit = pow(max(transmit, 1e-12), mix(1.0, 0.3, near_));
+    }
     outFog = vec4(light, transmit);
 }
