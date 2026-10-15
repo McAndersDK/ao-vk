@@ -1052,8 +1052,9 @@ bool Device::RenderSandFog(VkCommandBuffer cmd)
     SandHaze(haze);
     const bool moonShadow = m_shadowValid && m_shadowIsMoon;
     const float sunUp = std::max(-m_frameSunDir[1], 0.02f);
-    const float through = std::exp(-push.dens[0] * push.dens[1] * 0.5f / sunUp);
+    const float kRedden[3] = {0.85f, 1.0f, 1.25f};               // (sand_fog.frag's: the dust takes blue first)
     for (int i = 0; i < 3; ++i) {
+        const float through = std::exp(-kRedden[i] * push.dens[0] * push.dens[1] * 0.5f / sunUp);
         const float sun = m_shadowValid ? m_shadowSunColor[i] : m_frameSunColor[i];
         const float moon = moonShadow ? 0.0f : m_moonColour[i] * 0.6f;
         const float typical = std::max(push.sky[i] + moon + sun * (through + 0.8f * std::max(-m_frameSunDir[1], 0.0f) * (1.0f - through)), 0.02f);

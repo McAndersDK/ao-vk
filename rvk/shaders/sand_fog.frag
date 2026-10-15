@@ -96,7 +96,7 @@ void main()
     vec3 toSun = -normalize(FL.sunDir.xyz);
     bool sun = dot(FL.sunColor.rgb, FL.sunColor.rgb) > 0.0 && toSun.y > -0.02;
     const float g = 0.5;
-    float phase = min((1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * dot(dir, toSun), 1.5), 4.0);
+    float phase = min((1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * dot(dir, toSun), 1.5), 2.5);
     phase = mix(phase, 1.0, P.gusts.w);          // (ash: dull, no glow towards the sun)
     float sunUp = max(toSun.y, 0.02);
     // (The dust reddens what crosses it: blue taken a little more than red.)
@@ -146,7 +146,7 @@ void main()
             shade *= CloudShadowMap(q);
             src += FL.sunColor.rgb * through * (shade * phase);
             if (i == steps - 1)
-                litTail = FL.sunColor.rgb * (through * phase * (P.terrain.w > 1.5 ? smoothstep(tm.x - 1.0, tm.x + 3.0, q.y) : 1.0) +
+                litTail = FL.sunColor.rgb * (through * mix(1.0, phase, 0.5) * (P.terrain.w > 1.5 ? smoothstep(tm.x - 1.0, tm.x + 3.0, q.y) : 1.0) +
                                              max(toSun.y, 0.0) * 0.8 * (1.0 - through));
         }
         float a = 1.0 - exp(-sigma * dt);
@@ -159,7 +159,16 @@ void main()
     // above the thick layer near the ground - and hides it wholly, as the haze did (else in a thin storm the blue
     // sky showed overhead).
     if (d >= 1.0) {
-        light += transmit * (P.albedo.rgb * (P.sky.rgb + moon + litTail));
+        // (Lit as the dust typically is - the sun through half the thick layer, what it lost spread round - not as
+        // the thin dust high up: there the sun is barely dimmed, and with its full forward glow the sky went a
+        // blazing orange (the user). Deep in the storm the light has scattered many times: its glow towards the sun
+        // softer.)
+        vec3 skySun = vec3(0.0);
+        if (sun) {
+            vec3 mid = exp(-kRedden * (P.dens.x * P.dens.y * 0.5 / sunUp));
+            skySun = FL.sunColor.rgb * (mid + 0.8 * max(toSun.y, 0.0) * (1.0 - mid)) * mix(1.0, phase, 0.3);
+        }
+        light += transmit * (P.albedo.rgb * (P.sky.rgb + moon + skySun));
         transmit = 0.0;
     } else if (dist > reach && transmit > 1e-4) {
         float len = min(dist - reach, 50000.0);
