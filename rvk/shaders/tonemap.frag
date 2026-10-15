@@ -126,6 +126,9 @@ void main()
             through = mix(through, near_, clamp(cover, 0.0, 1.0));
         }
         c = mix(P.dust.rgb, c, clamp(through, 0.0, 1.0));
+        // What the sand hides is no longer sky: the night's and the grading's sky (by far) only as much as shows
+        // through - else a darker, greyer band of "sky" over a storm that covers it.
+        far *= clamp(through, 0.0, 1.0);
     }
     c = max((c + Volumetric() + glow) * P.params.y, vec3(0.0));
     // Night (RVK_NightDark x how much it is night): darker - the darks and middle tones down, the sky more; what is

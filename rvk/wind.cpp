@@ -93,7 +93,9 @@ void Device::SandHaze(float out[8]) const
 {
     for (int i = 0; i < 8; ++i) out[i] = 0.0f;
     if (m_sand <= 0.0f || m_sandHaze <= 0.0f) return;
-    for (int i = 0; i < 3; ++i) out[i] = m_sandColour[i];
+    // (Lit as the land: at night 40% as bright - else a glowing orange sky over dark land.)
+    const float light = 1.0f - 0.6f * NightAmount();
+    for (int i = 0; i < 3; ++i) out[i] = m_sandColour[i] * light;
     out[3] = 0.075f * m_sand * m_sandHaze;
     out[4] = float(m_windTime);
     out[5] = 0.12f + 0.25f * std::min(m_storm + m_sand, 1.0f);
