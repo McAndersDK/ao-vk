@@ -162,7 +162,27 @@ void main()
     }
     // A sand or ash storm (rvk wind.cpp): the air thick with sand to the horizon - the sky wholly, the land through a
     // veil that thickens with distance, surging with the wind.
-    if (P.dust.w > 0.0) {
+    bool smokeNear = mod(P.dust2.w, 2.0) > 0.5;
+    float volumetric = 1.0;                      // (the sun's shafts: behind the fog only as much as shows through)
+    if (P.dust.w > 0.0 && P.dust2.w > 1.5) {
+        // The storm's air a lit volume (RVK_SandFog, sand_fog.frag): what is behind shows by its transmittance, the
+        // light the dust scatters over it. The blowing sand (near: in front of nearly all of it) kept whole - its own
+        // light S and cover a - the fog over what shows through it.
+        vec4 fog = SandFogAt();
+        float T = clamp(fog.a, 0.0, 1.0);
+        if (smokeNear) {
+            vec4 smoke = texture(smokeCover, gl_FragCoord.xy / vec2(textureSize(scene, 0)));
+            float a = clamp(smoke.a, 0.0, 1.0);
+            vec3 S = min(smoke.rgb, c);
+            c = S + (c - S) * T + fog.rgb * (1.0 - a);
+            far *= mix(T, 1.0, a);
+            volumetric = mix(T, 1.0, a);
+        } else {
+            c = c * T + fog.rgb;
+            far *= T;
+            volumetric = T;
+        }
+    } else if (P.dust.w > 0.0) {
         float dist = d < 1.0 ? P.proj.y / min(d - P.proj.x, -1e-9) : 1e5;
         vec2 uv = gl_FragCoord.xy / vec2(textureSize(scene, 0));
         float surge = 1.0 + P.dust2.y * (0.6 * sin(P.dust2.x * 0.9 + uv.x * 5.0) + 0.4 * sin(P.dust2.x * 2.3 - uv.y * 7.0 + uv.x * 3.0));
@@ -178,7 +198,7 @@ void main()
         // c - S - and each veiled by its own distance: the smoke by a few units' air, what is behind by its own. (A
         // single veil by the depth behind gave the sand over the sky the sky's full haze and over near leaves next to
         // none - patchy; and with it set by the cover, thin sand looking up cleared the sky's haze - the user.)
-        if (P.dust2.w > 0.5) {
+        if (smokeNear) {
             vec4 smoke = texture(smokeCover, uv);
             float a = clamp(smoke.a, 0.0, 1.0);
             vec3 S = min(smoke.rgb, c);
@@ -192,7 +212,7 @@ void main()
         // through - else a darker, greyer band of "sky" over a storm that covers it.
         far *= through;
     }
-    c = max((c + Volumetric() + glow) * P.params.y, vec3(0.0));
+    c = max((c + Volumetric() * volumetric + glow) * P.params.y, vec3(0.0));
     // Night (RVK_NightDark x how much it is night): darker - the darks and middle tones down, the sky more; what is
     // bright kept (lamps, windows, the moon, stars, moonlit cloud edges), so it stands out of the dark.
     float nightDark = P.grade2.x * P.grade2.w;

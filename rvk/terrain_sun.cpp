@@ -26,8 +26,8 @@ constexpr float kTsReach = 3200.0f;              // how far towards the sun a hi
 // The terrain's base pass: its vertices into the grid (each cell its highest).
 void Device::NoteTerrainSun(uint32_t fvf, const void* vertices, uint32_t vertexCount)
 {
-    if (!vertices || vertexCount == 0 || (!m_hillShade && !SandActive()))
-        return;                                  // (the sand's shelter uses the grid too: sand_map.cpp)
+    if (!vertices || vertexCount == 0 || (!m_hillShade && !SandActive() && !SandFogOn()))
+        return;                                  // (the sand's shelter uses the grid too: sand_map.cpp; the sand fog its ground)
     // Each terrain chunk once while the grid stays where it is: its heights don't change, and reading every terrain
     // vertex of every frame cost the render thread a millisecond and more over a city (user, 2026-10-14). (A chunk:
     // its vertices' address, count and first position - a new chunk at a freed one's address differs in those.)
@@ -94,7 +94,10 @@ void Device::UpdateTerrainSun(VkCommandBuffer cmd)
     if (m_frameNumber % 600 == 40)
         Log("terrain sun: grid %s, pipeline %s, made %s", m_tsHeights.empty() ? "empty" : "kept",
             m_terrainSunPipeline ? "yes" : "no", m_tsMadeFrame == ~0ull ? "never" : "yes");
-    if (m_tsHeights.empty() || !m_terrainSunPipeline || !m_hillShade)
+    // (A storm's sand fog reads the map too - its G the ground, R the sun's shade in the dust - so it is made while
+    // one blows, whatever the sun.)
+    const bool fog = SandFogOn();
+    if (m_tsHeights.empty() || !m_terrainSunPipeline || (!m_hillShade && !fog))
         return;
     RecentreTerrainSun();
     float to[3] = {-m_trueSunDir[0], -m_trueSunDir[1], -m_trueSunDir[2]};
@@ -107,8 +110,8 @@ void Device::UpdateTerrainSun(VkCommandBuffer cmd)
     // (user, 2026-10-14); a high sun is seldom behind a hill. None once it's down: no sunlight to take - by night
     // the ground's lightmap would only darken.)
     const float t = std::clamp((to[1] - 0.6f) / (0.85f - 0.6f), 0.0f, 1.0f);
-    m_tsWeight = (1.0f - t * t * (3.0f - 2.0f * t)) * std::clamp((to[1] + 0.03f) / 0.03f, 0.0f, 1.0f);
-    if (m_tsWeight <= 0.0f)
+    m_tsWeight = m_hillShade ? (1.0f - t * t * (3.0f - 2.0f * t)) * std::clamp((to[1] + 0.03f) / 0.03f, 0.0f, 1.0f) : 0.0f;
+    if (m_tsWeight <= 0.0f && !fog)
         return;
     const float flat = std::sqrt(to[0] * to[0] + to[2] * to[2]);
     const float ux = flat > 1e-4f ? to[0] / flat : 1.0f, uz = flat > 1e-4f ? to[2] / flat : 0.0f;

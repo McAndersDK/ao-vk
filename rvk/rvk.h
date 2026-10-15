@@ -346,6 +346,8 @@ public:
     void SandHaze(float out[8]) const;                             // the tone mapping's sand: dust, dust2
     void SandGusts(float out[16]) const;                           // ... its distant gusts: gust0..3
     void SetSandGusts(float s) { m_sandGusts = s; }                // RVK_SandGusts
+    void SetSandFog(float s) { m_sandFog = s; }                    // RVK_SandFog (sand_fog.frag; 0: the flat haze)
+    bool SandFogOn() const { return m_sandFog > 0.0f && m_sand > 0.01f && m_sandHaze > 0.0f; }
     bool SmokeCoverValid() const { return m_smokeHalf && m_smokeHalfFrame == m_frameNumber; }
     // Grass and plants bending out of the way of characters walking through them (0 = off; scales reach and bend).
     void SetGrassPush(float strength) { m_grassPush = strength; m_frameLightsDirty = true; }
@@ -1952,6 +1954,7 @@ private:
     uint32_t m_sandShelterGen = 0, m_sandGroundShelterGen = ~0u;
     float m_sandEyeShelter = 0.0f;               // the camera's (eased): the near haze held off
     float m_sandGusts = 1.0f;                    // RVK_SandGusts: the distant gusts in the haze (0 none)
+    float m_sandFog = 0.0f;                      // RVK_SandFog: the storm's air a lit volume (docs/sand-fog-plan.md)
     double m_sandFarCarried = 0.0;               // how far the wind has carried them (world; wrapped at 1e6)
     void UpdateSandMap();
     void RasterSandItem(SandMap& m, uint32_t item);
@@ -2361,6 +2364,10 @@ private:
     VkPipelineLayout m_volumeLayout = VK_NULL_HANDLE;
     VkPipeline m_volumePipeline = VK_NULL_HANDLE, m_volumeBlurPipeline = VK_NULL_HANDLE;
     bool RenderVolume(VkCommandBuffer cmd);
+    Texture* m_sandFogTex[2] = {};               // half resolution: the sand fog's light + transmittance (ping-pong)
+    VkPipeline m_sandFogPipeline = VK_NULL_HANDLE, m_sandFogBlurPipeline = VK_NULL_HANDLE;
+    bool m_sandFogValid = false;                 // this frame's fog drawn (the tone mapping lays it on)
+    bool RenderSandFog(VkCommandBuffer cmd);
     // Screen-space reflections (hdr.cpp, ssr.frag): strength (0 = off) and reflectivity of water, glossy surfaces
     // and the wet look of surfaces facing up.
     float m_ssr = 1.0f, m_ssrWater = 1.0f, m_ssrGloss = 0.3f, m_ssrWet = 0.0f;
@@ -2424,7 +2431,7 @@ private:
                m_dofPrefilterPipeline = VK_NULL_HANDLE, m_dofTilesPipeline = VK_NULL_HANDLE,
                m_dofGatherPipeline = VK_NULL_HANDLE, m_dofFinalPipeline = VK_NULL_HANDLE;
     bool RenderDof(VkCommandBuffer cmd, bool bloom, bool ao, bool gi, bool volume, const float tonemapParams[16]);
-    static constexpr uint32_t kTonemapInputs = 14;   // occlusion.glsl's bindings
+    static constexpr uint32_t kTonemapInputs = 15;   // occlusion.glsl's bindings
     void TonemapInputsPass(VkCommandBuffer cmd, Texture* dst, VkPipeline pipeline, Texture* scene, bool bloom, bool ao,
                            bool gi, bool volume, const float params[16]);
     void MakeDepthReadable(VkCommandBuffer cmd);

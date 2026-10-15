@@ -13,7 +13,9 @@ layout(set = 0, binding = 10) uniform sampler3D lutDay;  // colour grading looku
 layout(set = 0, binding = 11) uniform sampler3D lutNight;
 layout(set = 0, binding = 12) uniform sampler2D glowRaw; // full resolution: what additive effects added (the scene's glow)
 layout(set = 0, binding = 13) uniform sampler2D smokeCover;   // half resolution: the smoke drawn this frame (A: its
-                                                              // cover; P.dust2.w > 0.5 only)
+                                                              // cover; P.dust2.w bit 1 only)
+layout(set = 0, binding = 14) uniform sampler2D sandFog;      // half resolution: a storm's air (sand_fog.frag) - the
+                                                              // light it scatters, its transmittance (dust2.w bit 2)
 layout(push_constant) uniform Push {
     vec4 params;        // knee, exposure, bloom strength, bloom left on objects nearer than its light (-1: no depth)
     vec4 proj;          // D3D projection m[2][2], m[3][2] (view depth from the depth buffer), indirect light strength,
@@ -33,7 +35,8 @@ layout(push_constant) uniform Push {
     // A sand or ash storm (rvk wind.cpp SandHaze): the air thick with it, from the game's own storm tint.
     vec4 dust;          // rgb: its colour (as the scene's light); w: its density (per world unit; 0: none)
     vec4 dust2;         // x: the wind's clock; y: how much it surges with the gusts; z: the veil at every distance;
-                        // w: 1 = smokeCover holds this frame's smoke (blowing sand: near, not behind the sky's veil)
+                        // w: + 1 = smokeCover holds this frame's smoke (blowing sand: near, not behind the sky's
+                        // veil), + 2 = sandFog holds the storm's air (RVK_SandFog: in place of the flat haze)
     // The storm's distant gusts (rvk wind.cpp SandGusts; tonemap.frag): beyond the simulated sand round the camera,
     // billows of thicker and thinner dust drifting with the wind through the haze.
     vec4 gust0;         // xyz: the eye (world); w: the ground's height under it
@@ -62,6 +65,29 @@ vec4 Upsample(sampler2D t, int depthChannel, float scale)
         float bilinear = (o.x == 1 ? f.x : 1.0 - f.x) * (o.y == 1 ? f.y : 1.0 - f.y) + 1e-3;
         float w = bilinear / (1e-3 + abs(s[depthChannel] - z) / z * 40.0);
         sum += s * w;
+        weight += w;
+    }
+    return sum / weight;
+}
+
+// The sand fog at this pixel (its texel i marched from full-resolution pixel 2 i): of the 4 nearest texels, those
+// at this pixel's depth (their depth read back from the depth buffer where they were marched).
+vec4 SandFogAt()
+{
+    ivec2 pix = ivec2(gl_FragCoord.xy), size = textureSize(sandFog, 0);
+    float z = P.proj.y / (min(texelFetch(depthTex, pix, 0).r, 0.999999) - P.proj.x);
+    vec2 h = (gl_FragCoord.xy - 0.5) / 2.0;
+    ivec2 base = ivec2(floor(h));
+    vec2 f = h - vec2(base);
+    vec4 sum = vec4(0.0);
+    float weight = 0.0;
+    for (int j = 0; j < 4; ++j) {
+        ivec2 o = ivec2(j & 1, j >> 1);
+        ivec2 q = clamp(base + o, ivec2(0), size - 1);
+        float zq = P.proj.y / (min(texelFetch(depthTex, q * 2, 0).r, 0.999999) - P.proj.x);
+        float bilinear = (o.x == 1 ? f.x : 1.0 - f.x) * (o.y == 1 ? f.y : 1.0 - f.y) + 1e-3;
+        float w = bilinear / (1e-3 + abs(zq - z) / z * 40.0);
+        sum += texelFetch(sandFog, q, 0) * w;
         weight += w;
     }
     return sum / weight;

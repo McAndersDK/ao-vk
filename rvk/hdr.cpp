@@ -53,6 +53,12 @@ const uint32_t kVolumeSpirv[] = {
 const uint32_t kVolumeBlurSpirv[] = {
 #include "volume_blur.frag.inc"
 };
+const uint32_t kSandFogSpirv[] = {
+#include "sand_fog.frag.inc"
+};
+const uint32_t kSandFogBlurSpirv[] = {
+#include "sand_fog_blur.frag.inc"
+};
 const uint32_t kSsrSpirv[] = {
 #include "ssr.frag.inc"
 };
@@ -261,6 +267,8 @@ bool Device::CreateHdrResources(std::string* error)
               fullscreen(kEnvFilterSpirv, sizeof(kEnvFilterSpirv), hdrFormat, false, m_bloomLayout, &m_envFilterPipeline) &&
               fullscreen(kVolumeSpirv, sizeof(kVolumeSpirv), hdrFormat, false, m_volumeLayout, &m_volumePipeline) &&
               fullscreen(kVolumeBlurSpirv, sizeof(kVolumeBlurSpirv), hdrFormat, false, m_bloomLayout, &m_volumeBlurPipeline) &&
+              fullscreen(kSandFogSpirv, sizeof(kSandFogSpirv), hdrFormat, false, m_volumeLayout, &m_sandFogPipeline) &&
+              fullscreen(kSandFogBlurSpirv, sizeof(kSandFogBlurSpirv), hdrFormat, false, m_bloomLayout, &m_sandFogBlurPipeline) &&
               fullscreen(kSsrSpirv, sizeof(kSsrSpirv), hdrFormat, false, m_bloomLayout, &m_ssrPipeline) &&
               fullscreen(kContactSpirv, sizeof(kContactSpirv), GetFormatInfo(Format::RG16F).vk, false, m_bloomLayout,
                          &m_contactPipeline) &&
@@ -303,6 +311,8 @@ void Device::DestroyHdrResources()
     m_envReady = m_envEyeValid = false;
     for (Texture*& t : m_volumeTex)
         if (t) { DestroyTextureNow(t); t = nullptr; }
+    for (Texture*& t : m_sandFogTex)
+        if (t) { DestroyTextureNow(t); t = nullptr; }
     if (m_ssrTex) { DestroyTextureNow(m_ssrTex); m_ssrTex = nullptr; }
     for (Texture*& t : m_lut)
         if (t) { DestroyTextureNow(t); t = nullptr; }
@@ -320,7 +330,7 @@ void Device::DestroyHdrResources()
         if (*t) { DestroyTextureNow(*t); *t = nullptr; }
     for (VkPipeline* p : {&m_bloomDown, &m_bloomUp, &m_aoPipeline, &m_aoBlurPipeline, &m_giPipeline, &m_giBlurPipeline,
                           &m_envAccumPipeline, &m_envFilterPipeline,
-                          &m_volumePipeline, &m_volumeBlurPipeline, &m_ssrPipeline,
+                          &m_volumePipeline, &m_volumeBlurPipeline, &m_sandFogPipeline, &m_sandFogBlurPipeline, &m_ssrPipeline,
                           &m_contactPipeline, &m_taaPipeline, &m_sharpenPipeline, &m_fxaaPipeline, &m_uiCompositePipeline,
                           &m_motionPipeline,
                           &m_tileMaxPipeline, &m_neighbourMaxPipeline, &m_objectBlurPipeline, &m_dofCompositePipeline,
@@ -421,6 +431,8 @@ void Device::EndScene()
     ProfileMark("environment probe");
     bool volume = RenderVolume(cmd);
     ProfileMark("volumetric");
+    m_sandFogValid = RenderSandFog(cmd);
+    ProfileMark("sand fog");
     Transition(cmd, m_localFraction, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     bool ssr = RenderSsr(cmd);
     ProfileMark("reflections");
@@ -564,6 +576,8 @@ void Device::TonemapInputsPass(VkCommandBuffer cmd, Texture* dst, VkPipeline pip
                                        {m_linearSampler, m_lut[1]->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                        {m_pointSampler, m_glow->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                        {m_linearSampler, SmokeCoverValid() ? m_smokeHalf->m_view : m_scene->m_view,
+                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                       {m_pointSampler, m_sandFogValid ? m_sandFogTex[1]->m_view : m_scene->m_view,
                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
     static_assert(sizeof(images) / sizeof(images[0]) == kTonemapInputs, "occlusion.glsl bindings");
     VkWriteDescriptorSet w[kTonemapInputs] = {};
@@ -975,6 +989,145 @@ bool Device::RenderVolume(VkCommandBuffer cmd)
     }
     std::swap(m_volumeTex[0], m_volumeTex[1]);    // the second pass wrote [0]
     Transition(cmd, m_volumeTex[1], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    return true;
+}
+
+// A sand or ash storm's air as a lit volume (sand_fog.frag, RVK_SandFog; docs/sand-fog-plan.md): marched at half
+// resolution, blurred both ways (sand_fog_blur.frag, depth-aware); m_sandFogTex[1] holds its light and transmittance
+// for the tone mapping (occlusion.glsl binding 14), in place of the flat haze.
+bool Device::RenderSandFog(VkCommandBuffer cmd)
+{
+    bool perspective = m_aoProjValid && m_aoProj.m[2][3] == 1.0f && m_aoProj.m[3][3] == 0.0f;
+    d3d::Matrix inverse;
+    if (!SandFogOn() || !perspective || !m_depth || !InvertMatrix(MulMatrix(m_aoView, m_aoProj), &inverse))
+        return false;
+    uint32_t w = std::max(1u, m_scene->m_width / 2), h = std::max(1u, m_scene->m_height / 2);
+    if (!m_sandFogTex[0] || m_sandFogTex[0]->m_width != w || m_sandFogTex[0]->m_height != h) {
+        for (Texture*& t : m_sandFogTex) {
+            if (t) DestroyTexture(t);
+            t = CreateImage(w, h, Format::RGBA16F, 1, true);
+        }
+        if (!m_sandFogTex[0] || !m_sandFogTex[1])
+            return false;
+    }
+    MakeDepthReadable(cmd);
+    Frame& frame = m_frames[m_frameIndex];
+    FillFrameLights(static_cast<FrameLights*>(frame.postData), false);
+
+    float gusts[16];
+    SandGusts(gusts);                            // (the eye's ground, the wind's frame and time; zeros without gusts)
+    struct {
+        d3d::Matrix invViewProj;
+        float eye[4], proj[4], dens[4], albedo[4], sky[4], terrain[4], wind[4], gusts[4];
+    } push{};
+    static_assert(sizeof(push) <= 256, "push constant range");
+    push.invViewProj = inverse;
+    const auto& v = m_aoView.m;
+    for (int i = 0; i < 3; ++i) push.eye[i] = -(v[3][0] * v[i][0] + v[3][1] * v[i][1] + v[3][2] * v[i][2]);
+    push.eye[3] = 400.0f;                                         // the march's reach
+    push.proj[0] = m_aoProj.m[2][2];
+    push.proj[1] = m_aoProj.m[3][2];
+    push.proj[2] = float(m_scene->m_width);
+    push.proj[3] = float(m_scene->m_height);
+    // (Its density at the ground: the haze's - tonemap.frag's dust.w - so the distance is as buried.)
+    push.dens[0] = 0.075f * m_sand * m_sandHaze;
+    push.dens[1] = 120.0f;                                        // scale height: a storm wall, the sky buried overhead too
+    float ground;
+    push.dens[2] = gusts[3] != 0.0f ? gusts[3] : (GroundAt(push.eye[0], push.eye[2], &ground, nullptr, nullptr) ? ground : push.eye[1] - 2.0f);
+    push.dens[3] = std::max(m_sandClear, 0.0f);
+    if (m_terrainAmbient[3] > 0.5f) {
+        for (int i = 0; i < 3; ++i) push.sky[i] = m_terrainAmbient[i];
+    } else {
+        const uint32_t a = m_rs[d3d::RS_AMBIENT];
+        push.sky[0] = float((a >> 16) & 0xFF) / 255.0f;
+        push.sky[1] = float((a >> 8) & 0xFF) / 255.0f;
+        push.sky[2] = float(a & 0xFF) / 255.0f;
+    }
+    // The dust's colour: such that, as typically lit (sand_fog.frag: the sky's light, the moon's, the sun's through
+    // the dust above halfway up the thick layer and what it lost spread round), it is the haze's - the storm's
+    // colour, by night the haze's dimmer one. Its light and shade - the glow towards the sun, the dust shaded by
+    // dunes, a dusk - stay as variation about it. (Else, as the sim sand before storms40: a darker, greyer dust,
+    // and by night dark grey where the land is sandy - the user.)
+    float haze[8];
+    SandHaze(haze);
+    const bool moonShadow = m_shadowValid && m_shadowIsMoon;
+    const float sunUp = std::max(-m_frameSunDir[1], 0.02f);
+    const float through = std::exp(-push.dens[0] * push.dens[1] * 0.5f / sunUp);
+    for (int i = 0; i < 3; ++i) {
+        const float sun = m_shadowValid ? m_shadowSunColor[i] : m_frameSunColor[i];
+        const float moon = moonShadow ? 0.0f : m_moonColour[i] * 0.6f;
+        const float typical = std::max(push.sky[i] + moon + sun * (through + 0.8f * std::max(-m_frameSunDir[1], 0.0f) * (1.0f - through)), 0.02f);
+        push.albedo[i] = std::min(haze[i] / typical, 4.0f);
+    }
+    push.albedo[3] = float(m_frameNumber % 64) * 0.618034f;      // the march's offsets move on every frame
+    push.sky[3] = 24.0f;                                          // steps (the blur and TAA average the jitter)
+    const bool terrainMap = m_terrainSunMap && m_terrainSunMap->m_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
+                            m_tsMadeFrame != ~0ull;
+    if (terrainMap) {
+        push.terrain[0] = m_tsMapOrigin[0];
+        push.terrain[1] = m_tsMapOrigin[1];
+        push.terrain[2] = 1.0f / (16.0f * float(m_terrainSunMap->m_width));   // (terrain_sun.cpp: 16 units a cell)
+        const float sunNow[3] = {-m_trueSunDir[0], -m_trueSunDir[1], -m_trueSunDir[2]};
+        const float l = std::sqrt(sunNow[0] * sunNow[0] + sunNow[1] * sunNow[1] + sunNow[2] * sunNow[2]);
+        const float dot = l > 1e-6f ? (sunNow[0] * m_tsSunUsed[0] + sunNow[1] * m_tsSunUsed[1] + sunNow[2] * m_tsSunUsed[2]) / l : 0.0f;
+        push.terrain[3] = dot > 0.999f ? 2.0f : 1.0f;             // (its sun shade only as made for this sun)
+    }
+    for (int i = 0; i < 4; ++i) push.wind[i] = gusts[12 + i];
+    if (m_frameNumber % 600 == 0)
+        Log("sand fog: density %.4f, scale height %.0f, ground %.1f (eye y %.1f), sky light %.2f %.2f %.2f, dust colour %.2f %.2f "
+            "%.2f (x the light), terrain map %.0f", double(push.dens[0]), double(push.dens[1]), double(push.dens[2]), double(push.eye[1]),
+            double(push.sky[0]), double(push.sky[1]), double(push.sky[2]), double(push.albedo[0]), double(push.albedo[1]),
+            double(push.albedo[2]), double(push.terrain[3]));
+    push.gusts[0] = gusts[10];
+    push.gusts[1] = gusts[11];
+    push.gusts[2] = m_sandEyeShelter;
+    push.gusts[3] = m_sandAsh ? 1.0f : 0.0f;
+
+    Texture* dst = m_sandFogTex[0];
+    Transition(cmd, dst, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    color.imageView = dst->m_view;
+    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    ri.renderArea = {{0, 0}, {w, h}};
+    ri.layerCount = 1;
+    ri.colorAttachmentCount = 1;
+    ri.pColorAttachments = &color;
+    vkCmdBeginRendering(cmd, &ri);
+    VkViewport viewport{0.0f, 0.0f, float(w), float(h), 0.0f, 1.0f};
+    VkRect2D scissor{{0, 0}, {w, h}};
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_sandFogPipeline);
+    VkDescriptorImageInfo depth{m_pointSampler, m_depthView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo shadow{m_shadowSampler, m_shadowView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorBufferInfo lights{frame.post, 0, sizeof(FrameLights)};
+    VkDescriptorImageInfo clouds{m_linearSampler, CloudShadowView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo terrain{m_linearSampler, terrainMap ? m_terrainSunMap->m_view : m_blackTexture->m_view,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet wr[5] = {};
+    for (auto& x : wr) { x.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; x.descriptorCount = 1; }
+    wr[0].dstBinding = 0; wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[0].pImageInfo = &depth;
+    wr[1].dstBinding = 1; wr[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[1].pImageInfo = &shadow;
+    wr[2].dstBinding = 4; wr[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; wr[2].pBufferInfo = &lights;
+    wr[3].dstBinding = 2; wr[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[3].pImageInfo = &clouds;
+    wr[4].dstBinding = 3; wr[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[4].pImageInfo = &terrain;
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_volumeLayout, 0, 5, wr);
+    vkCmdPushConstants(cmd, m_volumeLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRendering(cmd);
+
+    for (int pass = 0; pass < 2; ++pass) {
+        Texture* src = m_sandFogTex[pass];
+        Texture* out = m_sandFogTex[pass ^ 1];
+        Transition(cmd, src, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        float p[8] = {pass == 0 ? 1.0f : 0.0f, pass == 0 ? 0.0f : 1.0f, 2.0f, 0.0f, m_aoProj.m[2][2], m_aoProj.m[3][2], 0.0f, 0.0f};
+        FullscreenPass(cmd, out, m_sandFogBlurPipeline, src->m_view, m_depthView, m_pointSampler, p, sizeof(p), false);
+    }
+    std::swap(m_sandFogTex[0], m_sandFogTex[1]);    // the second pass wrote [0]
+    Transition(cmd, m_sandFogTex[1], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     return true;
 }
 
