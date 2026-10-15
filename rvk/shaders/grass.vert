@@ -218,7 +218,7 @@ void main()
 {
     const uint bi = uint(gl_VertexIndex) >> 3u, vi = uint(gl_VertexIndex) & 7u;
     Blade bl = blades[bi];
-    BladeAt b = ShapeBlade(bl, vi, GF.camera.xyz, GF.viewport.z, GF.wind, GF.viewport.w, GF.look.w);
+    BladeAt b = ShapeBlade(bl, vi, GF.camera.xyz, GF.viewport.z, GF.wind, GF.viewport.w, GF.look.w, FL.windFrame.xy);
     vec3 root = b.root, up = b.up, upV = b.upV, rr = b.rr, pos = b.pos, bendNow = b.bendNow, bendBefore = b.bendBefore;
     float height = b.height, halfW = b.halfW, droop = b.droop, t = b.t, profile = b.profile, side = b.side;
     float fade = b.fade, widen = b.widen, gust = b.gust;

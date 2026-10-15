@@ -2191,6 +2191,16 @@ private:
     int m_lightMaskVerify = -1;                  // RANDYVK_LIGHTMASK_VERIFY: check the grid against every light
     uint32_t m_lightMaskDiff = 0;
     void Wind(float out[4]) const;               // direction x, z, time, strength
+    // The frame every pattern laid out along the wind (grass waves, gust fronts, water waves) is placed in: a point's
+    // (along, across) = its offset from the pivot turned into the wind's frame, plus the offset; WindFrame folds the
+    // two into what is added to (dot(xz, wd), dot(xz, wd turned left)) (wind.glsl WindAxes).
+    // The pivot stays near the camera (moved once it is 64 units off, the offset making up for it): turned about the
+    // world's origin, thousands of units away, the wind's direction swinging a little slid them by hundreds.
+    void WindFrame(float out[4]) const;
+    // (along, across) of a world x, z in it (as WindAxes).
+    void WindAxes(float x, float z, float out[2]) const;
+    double m_windPivot[2] = {0.0, 0.0}, m_windOffset[2] = {0.0, 0.0};
+    bool m_windPivotSet = false;
     double m_windTime = 0.0, m_windTimePrev = 0.0;   // this frame's and last frame's (set at the frame's start)
     double m_frameClock = 0.0;                   // SwayClock at the frame's start (per-caster bookkeeping)
     bool m_taa = true;

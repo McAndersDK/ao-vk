@@ -48,7 +48,7 @@ struct GrassShadowPass {
     float camera[4];     // xyz: the camera; w: the field radius
     float wind[4];       // as GrassFrame.wind
     float sun[4];        // xyz: the direction sunlight travels; w: the gusts
-    float cascade[4];    // x: the least half width; y, z: the edge fade (NDC)
+    float cascade[4];    // x: the least half width; y, z: the wind's patterns' frame (Device::WindFrame); w: point
 };
 static_assert(sizeof(GrassShadowPass) == 128, "grass shadow push constants (the guaranteed minimum)");
 
@@ -1988,8 +1988,12 @@ void Device::DrawGrassShadow(VkCommandBuffer cmd, const d3d::Matrix& lightViewPr
     p.sun[2] = m_shadowLightDir[2];
     p.sun[3] = Gusts();
     p.cascade[0] = 0.5f * texel;
-    p.cascade[1] = 0.75f;
-    p.cascade[2] = 0.95f;
+    {
+        float frame[4];
+        WindFrame(frame);                        // (the edge fade, 0.75 .. 0.95 NDC: in the shader now)
+        p.cascade[1] = frame[0];
+        p.cascade[2] = frame[1];
+    }
     vkCmdPushConstants(cmd, m_grassShadowLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(p), &p);
     const float tall = m_grassHeight * 1.7f + 1.0f;
     const float reach = m_grassDistance + kGrassTileSize * 0.7072f;
@@ -2065,8 +2069,10 @@ bool Device::DrawGrassPointShadow(VkCommandBuffer cmd, const d3d::Matrix& faceVi
             p.sun[2] = light[2];
             p.sun[3] = Gusts();
             p.cascade[0] = 0.01f;                   // (a cube texel a few units out: about a centimetre)
-            p.cascade[1] = 1e9f;
-            p.cascade[2] = 2e9f;
+            float frame[4];
+            WindFrame(frame);                    // (the wind's patterns' frame; a cube face has no edge fade)
+            p.cascade[1] = frame[0];
+            p.cascade[2] = frame[1];
             p.cascade[3] = 1.0f;
             vkCmdPushConstants(cmd, m_grassShadowLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(p), &p);
         }

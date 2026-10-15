@@ -1440,6 +1440,7 @@ void Device::DrawShadowItem(VkCommandBuffer cmd, ShadowBind& bind, ShadowItem& i
                 r.leafWind[1] = wind[1];
                 r.leafWind[2] = m_leaf.wind * wind[3];
                 r.leafWind[3] = Gusts();
+                WindAxes(r.origin[0], r.origin[1], &r.alpha[1]);   // (its gusts: wind.glsl WindAxes)
             }
         }
         item.record = AppendShadowRecord(r);

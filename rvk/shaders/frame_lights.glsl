@@ -41,5 +41,6 @@ layout(set = 0, binding = 4, std140) uniform FrameLights {
     vec4 terrainSun;            // the terrain's shade from a low sun (rvk terrain_sun.cpp): map corner x, z, 1 / size,
                                 // bindless image + 1 | sampler << 20 (the float's bits; 0 = none)
     vec4 terrainSun2;           // ... x: the eye's own (0 shaded .. 1), y: its weight (0 high sun .. 1 low)
+    vec4 windFrame;             // xy: the wind's patterns' frame (wind.glsl WindAxes, rvk Device::WindFrame)
     Light lights[64];
 } FL;

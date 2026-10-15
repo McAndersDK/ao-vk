@@ -114,7 +114,8 @@ vec3 PushOffset(vec3 posW, vec3 modelPos, vec4 sway, float plantHeight, vec2 ori
 // a slow swing with the wind and a little bob; world units, at the wind's `time`, gusts at the object's position.
 vec3 BranchSway(vec3 modelPos, float time, vec2 originXZ)
 {
-    return BranchSwayAt(modelPos, D.leaf, originXZ, FL.wind.xy, time, FL.leaves.x * FL.wind.w, FL.leaves.z);
+    return BranchSwayAt(modelPos, D.leaf, originXZ, WindAxes(originXZ, FL.wind.xy, FL.windFrame.xy), FL.wind.xy, time,
+                        FL.leaves.x * FL.wind.w, FL.leaves.z);
 }
 
 // A canopy with leaves: how much of it the leaves stand for at this distance - all of it up to half the leaves'
@@ -174,7 +175,7 @@ bool FallingLeaf(uint slot, vec2 corner, float time, out vec3 pos, out vec3 norm
     float cycle = floor(t / kCycle), age = t - cycle * kCycle;
     uint cs = LeafHash(seed ^ (uint(cycle) * 0x85EBCA6Bu));
     vec2 wd = FL.wind.xy;
-    float gust = Gust(D.world[3].xz, wd, time - age) * FL.leaves.z;
+    float gust = Gust(WindAxes(D.world[3].xz, wd, FL.windFrame.xy), time - age) * FL.leaves.z;
     if (LeafHashU(cs) >= clamp(FL.leafView.z * (0.3 + 1.2 * gust), 0.0, 1.0)) return false;
     uint src = D.leafSet.x + LeafHash(cs ^ 0x51ED27u) % D.leafSet.z;
     uvec4 a = LV.words[2u * src], b = LV.words[2u * src + 1u];
@@ -245,8 +246,9 @@ void LeafVertex(vec2 originXZ)
     if (dot(n, out_) < 0.0) n = -n;              // facing out of the crown
     vec3 pos = centre + corner.x * halfU + corner.y * halfV;
     float size = length(halfV);
-    float gust = Gust(originXZ, FL.wind.xy, FL.wind.z) * FL.leaves.z;
-    float gustPrev = Gust(originXZ, FL.wind.xy, FL.taa.w) * FL.leaves.z;
+    vec2 aa = WindAxes(originXZ, FL.wind.xy, FL.windFrame.xy);
+    float gust = Gust(aa, FL.wind.z) * FL.leaves.z;
+    float gustPrev = Gust(aa, FL.taa.w) * FL.leaves.z;
     float f = FL.leaves.y * size;
     // (Flapping most at the far edge: the old sprigs' top; our own canopy's sprigs' tip, their twig's base at +v.)
     float tip = (D.leafSet.y & 0x80000000u) != 0u ? 0.5 - 0.5 * corner.y : 0.5 + 0.5 * corner.y;

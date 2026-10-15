@@ -71,6 +71,21 @@ void Device::UpdateWind()
     m_windStrength = 1.0f + cloud + 1.8f * storm;
     m_windGusts = 1.0f + 2.5f * storm;
 
+    // The patterns' frame (WindFrame): its pivot kept near the camera.
+    if (m_frameEyeValid) {
+        const double ex = m_frameEye[0], ez = m_frameEye[2];
+        if (!m_windPivotSet || std::hypot(ex - m_windPivot[0], ez - m_windPivot[1]) > 64.0) {
+            if (m_windPivotSet) {               // (the same (along, across) everywhere from the new pivot)
+                const double dx = ex - m_windPivot[0], dz = ez - m_windPivot[1];
+                m_windOffset[0] += dx * m_windDir[0] + dz * m_windDir[1];
+                m_windOffset[1] += -dx * m_windDir[1] + dz * m_windDir[0];
+            }
+            m_windPivot[0] = ex;
+            m_windPivot[1] = ez;
+            m_windPivotSet = true;
+        }
+    }
+
     // Its clock: faster in a storm.
     m_windTimePrev = m_windTime;
     m_windTime = std::fmod(m_windTime + double(dt) * (1.0 + 0.9 * double(storm)), 3600.0);
@@ -85,6 +100,22 @@ void Device::UpdateWind()
             forced ? (m_sandAsh ? " (forced: ash)" : " (forced: sand)") : "");
         m_stormTintSkipped = 0;
     }
+}
+
+void Device::WindFrame(float out[4]) const
+{
+    // (along, across) = (dot(xz, wd), dot(xz, wd turned left)) + these: the pivot and the offset folded together.
+    const double ax = m_windDir[0], az = m_windDir[1];
+    out[0] = float(m_windOffset[0] - (m_windPivot[0] * ax + m_windPivot[1] * az));
+    out[1] = float(m_windOffset[1] - (-m_windPivot[0] * az + m_windPivot[1] * ax));
+    out[2] = out[3] = 0.0f;
+}
+
+void Device::WindAxes(float x, float z, float out[2]) const
+{
+    const double dx = x - m_windPivot[0], dz = z - m_windPivot[1];
+    out[0] = float(dx * m_windDir[0] + dz * m_windDir[1] + m_windOffset[0]);
+    out[1] = float(-dx * m_windDir[1] + dz * m_windDir[0] + m_windOffset[1]);
 }
 
 // The tone mapping's sand (occlusion.glsl dust, dust2): the storm's colour; its density - the game's tint at its

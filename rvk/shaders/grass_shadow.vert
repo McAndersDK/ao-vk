@@ -14,17 +14,18 @@ layout(push_constant) uniform GrassShadowPass {
     vec4 camera;            // xyz: the camera the visible pass shapes the blades for; w: the field radius
     vec4 wind;              // as GrassFrame.wind: x time, yz direction, w strength
     vec4 sun;               // xyz: the direction sunlight travels; w: the gusts' strength
-    vec4 cascade;           // x: the least half width (world units, about half a texel); y, z: the edge fade (NDC);
+    vec4 cascade;           // x: the least half width (world units, about half a texel); y, z: the wind's patterns'
+                            // frame (wind.glsl WindAxes, rvk Device::WindFrame);
                             // w: 1 for a point light's cube face (sun.xyz its position)
 } P;
 
 void main()
 {
     const uint bi = uint(gl_VertexIndex) >> 3u, vi = uint(gl_VertexIndex) & 7u;
-    BladeAt b = ShapeBlade(blades[bi], vi, P.camera.xyz, P.camera.w, P.wind, P.wind.x, P.sun.w);
+    BladeAt b = ShapeBlade(blades[bi], vi, P.camera.xyz, P.camera.w, P.wind, P.wind.x, P.sun.w, P.cascade.yz);
     vec4 rc = P.lightViewProj * vec4(b.root, 1.0);
     const bool point = P.cascade.w > 0.5;
-    float keep = point ? 1.0 : 1.0 - smoothstep(P.cascade.y, P.cascade.z, max(abs(rc.x), abs(rc.y)) / max(rc.w, 1e-6));
+    float keep = point ? 1.0 : 1.0 - smoothstep(0.75, 0.95, max(abs(rc.x), abs(rc.y)) / max(rc.w, 1e-6));
     vec3 axis = b.root + (b.pos + b.bendNow - b.root) * keep;
     vec3 T = normalize(b.upV + b.rr * b.droop);
     vec3 toward = point ? b.root - P.sun.xyz : P.sun.xyz;  // the way the light travels

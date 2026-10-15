@@ -1,9 +1,18 @@
 // The wind's gusts, shared by the ground grass (grass_common.glsl) and the leaves (ffp.vert BranchSway), so a gust
 // crossing a field reaches the trees beside it too.
-// A gust of wind: bands of stronger wind sweeping across the field along the wind, their fronts wavering. 0 .. 1.
-float Gust(vec2 xz, vec2 wd, float time)
+// A world x, z placed along and across the wind, in the frame its patterns are laid out in (rvk Device::WindFrame:
+// turned about a pivot near the camera - what to add to the plain projections). (Laid out in the world's own x, z, a
+// swing of the wind's direction turned them about the world's origin - thousands of units off: they raced about.)
+vec2 WindAxes(vec2 xz, vec2 wd, vec2 frame)
 {
-    float along = dot(xz, wd), across = dot(xz, vec2(-wd.y, wd.x));
+    return vec2(dot(xz, wd), dot(xz, vec2(-wd.y, wd.x))) + frame;
+}
+
+// A gust of wind: bands of stronger wind sweeping across the field along the wind, their fronts wavering. 0 .. 1.
+// aa: the place's (along, across) (WindAxes).
+float Gust(vec2 aa, float time)
+{
+    float along = aa.x, across = aa.y;
     // ~16 units between fronts, moving ~6 units a second; the fronts bend and break up across the wind.
     float s = along * 0.39 - time * 2.3 + 1.6 * sin(across * 0.07 + time * 0.11) + 0.9 * sin(across * 0.21 - along * 0.05);
     float g = 0.5 + 0.5 * sin(s);
@@ -22,7 +31,7 @@ float GrassGusts(float gusts) { return gusts <= 1.0 ? gusts : 1.0 + 1.0 - exp(-(
 // with the wind, a little bob, and the gusts at the object's position. crown: centre (model space), radius - negative
 // for a palm, whose fronds flex further and bounce more at their tips; wd: the wind's direction (world x, z); amount:
 // RVK_LeafWind x the wind's strength. World units.
-vec3 BranchSwayAt(vec3 modelPos, vec4 crown, vec2 originXZ, vec2 wd, float time, float amount, float gusts)
+vec3 BranchSwayAt(vec3 modelPos, vec4 crown, vec2 originXZ, vec2 aa, vec2 wd, float time, float amount, float gusts)
 {
     if (crown.w == 0.0 || amount <= 0.0) return vec3(0.0);
     float palm = crown.w < 0.0 ? 1.0 : 0.0, radius = abs(crown.w);
@@ -30,7 +39,7 @@ vec3 BranchSwayAt(vec3 modelPos, vec4 crown, vec2 originXZ, vec2 wd, float time,
     float r = min(length(d), 1.3);
     vec3 n = d / max(r, 1e-3);
     float phase = dot(n, vec3(2.3, 1.7, 3.1)) + dot(originXZ, vec2(0.31, 0.23));
-    float gust = Gust(originXZ, wd, time) * gusts;
+    float gust = Gust(aa, time) * gusts;          // (aa: the object's place in the wind's frame, WindAxes)
     float swing = 0.55 * sin(time * 1.3 + phase) + 0.3 * sin(time * 2.9 + phase * 1.9) + 0.6 * gust;
     float bob = (0.4 + 0.5 * palm) * sin(time * (2.1 + 0.8 * palm) + phase * 2.7) - 0.3 * palm * gust;
     float amp = (0.035 + 0.035 * palm) * radius * amount * r * r;

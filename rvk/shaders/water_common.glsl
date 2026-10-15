@@ -116,6 +116,9 @@ vec3 Waves(vec2 xz, float t, float spacing, float scale, out vec3 n, out float f
     vec3 sum = vec3(0.0);                       // -dX, dY (for the normal's y), -dZ
     float steep = 0.0;
     vec2 wd = W.wind.xy;
+    // The place in the wind's frame (wind.glsl WindAxes; turned about a pivot near the camera, not the world's origin -
+    // a swing of the wind's direction raced the waves about): dot(d, xz) = cos(angle) along + sin(angle) across.
+    vec2 aa = vec2(dot(xz, wd), dot(xz, vec2(-wd.y, wd.x))) + FL.windFrame.xy;
     for (int i = 0; i < kWaves; ++i) {
         float L = lambda[i] * W.wind.w;
         float fade = 1.0 - smoothstep(L * 0.18, L * 0.4, spacing);
@@ -127,7 +130,7 @@ vec3 Waves(vec2 xz, float t, float spacing, float scale, out vec3 n, out float f
         vec2 d = vec2(wd.x * ca - wd.y * sa, wd.x * sa + wd.y * ca);
         float A = 0.012 * L * height[i] * scale * fade;   // steepness ~0.075 x scale at the longest wave
         float Q = 0.55;                                  // how sharp the crests are (0 = sine waves)
-        float th = k * dot(d, xz) - omega * t + phase[i];
+        float th = k * (ca * aa.x + sa * aa.y) - omega * t + phase[i];
         float c = cos(th), s = sin(th);
         offset += vec3(Q * A * d.x * c, A * s, Q * A * d.y * c);
         sum += vec3(d.x * k * A * c, Q * k * A * s, d.y * k * A * c);
