@@ -215,7 +215,10 @@ void main()
     // How opaque (premultiplied, its shape and shading kept): up to 1 see-through as a whole; above, the smoke's cover
     // as if it were that many times as thick (1 - transmit^k) - its dense parts hide what is behind.
     float cover = S.look.x <= 1.0 ? alpha * S.look.x : 1.0 - pow(transmit, S.look.x);
-    if (S.info.w == 1u) cover = min(cover, 0.7);   // (sand: what is behind always shows through)
+    // (Sand: what is behind always shows through - at most 0.8 hidden. By its thickness along the ray, not a clamp of
+    // the cover: a clamp at 0.7 made one thick layer as dense as several behind it - the user: layers over layers
+    // should look denser. Thin sand as before; 1.2 deep (one 0.7 layer) 0.62, two 0.76, three 0.79.)
+    if (S.info.w == 1u) cover = 0.8 * (1.0 - pow(max(transmit, 1e-6), 1.25));
     light *= cover / max(alpha, 1e-5);
     alpha = cover;
     outScene = vec4(light, alpha);
