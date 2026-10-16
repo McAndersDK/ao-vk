@@ -835,7 +835,7 @@ void main()
             // Puddles: on level ground, where it lies in a hollow (the map's) and the noise says, spreading as they fill.
             float site = clamp(cov.y * 1.2 + WetNoise(vPosW.xz / 4.5) * 0.7 + WetNoise(vPosW.xz / 1.6 + 7.3) * 0.3 - 0.25, 0.0, 1.0);
             float fill = FL.wet.y;
-            gPuddle = open * smoothstep(0.8, 0.95, n.y) * smoothstep(1.0 - 0.6 * fill, 1.06 - 0.6 * fill, site) * min(fill * 3.0, 1.0);
+            gPuddle = open * smoothstep(0.8, 0.95, n.y) * smoothstep(1.0 - 0.6 * fill, 1.12 - 0.6 * fill, site) * min(fill * 3.0, 1.0);
             current.rgb *= (1.0 - 0.35 * gWetLook) * (1.0 - 0.4 * gPuddle);   // (soaked: darker; under water: darker still)
             // Rain on the puddles: rings spreading, glinting with the sky's light.
             if (gPuddle > 0.0 && FL.rainNear.y + FL.wet.x > 0.0)

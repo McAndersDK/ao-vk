@@ -137,8 +137,10 @@ void main()
     vec3 wp = p + right * (c.x * size) + vec3(0.0, c.y * size * 1.4, 0.0);
     float dist = distance(p, R.camera.xyz);
     float fog = RainFog(dist);
-    vLight = mix(R.fogColour.rgb, R.colour.rgb * RainLight(p), fog);
-    vAlpha = 0.6 * min(R.time.z * 1.5, 1.0) * mix(0.3, 1.0, fog) * (1.0 - RainSheltered(p + vec3(0.0, 0.4, 0.0)));   // (none under a roof)
+    // (Dimmer than the drops: their light is the sky's they bend - a splash's spray is lit as the ground it rises from.
+    // The user: too bright.)
+    vLight = mix(R.fogColour.rgb, R.colour.rgb * RainLight(p) * 0.45, fog);
+    vAlpha = 0.4 * min(R.time.z * 1.5, 1.0) * mix(0.3, 1.0, fog) * (1.0 - RainSheltered(p + vec3(0.0, 0.4, 0.0)));   // (none under a roof)
     vCorner = c;
     vAge = age;
     vSeed = vec2(RainRand(s), RainRand(s));

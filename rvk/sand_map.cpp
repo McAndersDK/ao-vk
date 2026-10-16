@@ -182,6 +182,7 @@ void Device::UpdateSandMap()
             m.floor.assign(cells, kUnknown);
             m.crownHi.assign(cells, kUnknown);
             m.cover.assign(cells, kUnknown);
+            m.fine.assign(cells, 0);
             m.feed.assign(cells, 1.0f);
             m.statelGen = m_statelGeneration;
             const float x0 = float(ex) * kMapCell, z0 = float(ez) * kMapCell, size = kMapN * kMapCell;
@@ -201,6 +202,7 @@ void Device::UpdateSandMap()
                 const size_t c = size_t(z) * kMapN + x;
                 if (GroundAt(wx, wz, &y, &colour, nullptr)) {
                     m.ground[c] = y;
+                    m.fine[c] = 1;
                     const float r = float((colour >> 16) & 0xFF), g = float((colour >> 8) & 0xFF), b = float(colour & 0xFF);
                     if (g > r * 1.05f && g > b) m.feed[c] = 0.65f;   // (green: grass gives a little less sand)
                 } else {
@@ -318,7 +320,14 @@ void Device::FinishSandCells(SandMap& m)
     std::vector<float> sum(m.ground.size(), 0.0f), count(m.ground.size(), 0.0f), sum2(m.ground.size()), count2(m.ground.size());
     for (int z = 0; z < kMapN; ++z) {
         float s = 0.0f, n = 0.0f;
-        auto at = [&](int x, float& v) { const float g = m.ground[size_t(z) * kMapN + x]; if (g > kUnknown * 0.5f) { v = g; return true; } return false; };
+        // (Only the ground captured close up: mixed with the coarse grid's, the seam between them - a ring round the
+        // eye - read as hollows, and its puddles travelled with a running character, the user.)
+        auto at = [&](int x, float& v) {
+            const size_t i = size_t(z) * kMapN + x;
+            const float g = m.ground[i];
+            if (g > kUnknown * 0.5f && i < m.fine.size() && m.fine[i]) { v = g; return true; }
+            return false;
+        };
         for (int x = -r; x < kMapN; ++x) {
             float v;
             if (x + r < kMapN && at(x + r, v)) { s += v; n += 1.0f; }
@@ -335,9 +344,12 @@ void Device::FinishSandCells(SandMap& m)
         }
     }
     m.hollow.assign(m.ground.size(), 0.0f);
+    const float full = float((2 * r + 1) * (2 * r + 1));
     for (size_t c = 0; c < m.ground.size(); ++c)
-        if (m.ground[c] > kUnknown * 0.5f && count2[c] > 0.5f)
-            m.hollow[c] = std::max(sum2[c] / count2[c] - m.ground[c], 0.0f);
+        if (m.fine[c] && count2[c] > 0.6f * full) {   // (most of the cells round it close up too - fading in: no edge)
+            const float k = std::clamp((count2[c] / full - 0.6f) / 0.35f, 0.0f, 1.0f);
+            m.hollow[c] = std::max(sum2[c] / count2[c] - m.ground[c], 0.0f) * k * k * (3.0f - 2.0f * k);
+        }
 }
 
 // The flow round solid obstacles: each cell's nearest one (a distance transform: the nearest solid cell carried along

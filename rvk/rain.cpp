@@ -83,7 +83,8 @@ struct RainFrame {
                                                  // only (their look: the rain layer, drawn after)
 };
 
-constexpr uint32_t kRainMaxDrops = 24000;       // at full rain, RVK_RainAmount 1
+constexpr uint32_t kRainMaxDrops = 48000;       // at full rain, RVK_RainAmount 1 (the user: more rain; the near box's
+                                                 // drops now thinning out gradually from the eye)
 constexpr float kRainBox = 16.0f;               // half size of the box round the camera (units)
 constexpr float kGameRainMax = 0.45f;           // the game's rain weather: process(intensity^3 x this)
 constexpr float kGameRainFrom = 0.25f;          // ... intensity where its rain shows (rain from 0 here)

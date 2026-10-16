@@ -50,7 +50,9 @@ void main()
 
     // Faded out towards the box's walls (where the drops wrap) and right at the camera.
     vec3 rel = (head - R.camera.xyz) / (size * 0.5);
-    float edge = 1.0 - smoothstep(0.65, 1.0, max(abs(rel.x), max(abs(rel.y), abs(rel.z))));
+    // (The near box's drops thinning out gradually from the eye - with a narrow band at its walls, the denser rain
+    // round the eye stood out as a zone travelling with a running character, the user.)
+    float edge = 1.0 - smoothstep(nearBox ? 0.2 : 0.65, 1.0, max(abs(rel.x), max(abs(rel.y), abs(rel.z))));
     float dist = distance(head, R.camera.xyz);
     float alpha = (1.0 - RainSheltered(head)) * R.colour.w * edge * smoothstep(0.3, 1.2, dist) * mix(1.0, 0.9 + 0.65 * gust, 0.6 * R.curtains.x) * look;   // (curtains: subtle - stronger, the gust fronts swept
                                                                                    // by as bright bands at an even beat)

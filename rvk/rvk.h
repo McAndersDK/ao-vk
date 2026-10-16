@@ -1956,6 +1956,7 @@ private:
         // not (a roof, an overhang, an arch - the sand's solid keeps only what does); how far its ground lies below
         // the ground round it (a hollow: puddles gather there).
         std::vector<float> cover, hollow;
+        std::vector<uint8_t> fine;               // (the ground captured close up - not the coarse terrain grid's)
         // The flow round solid obstacles (SandFlow): the wind's direction there (x z, a unit wind's), how far the air
         // arriving there was pushed aside on its way (x z, world), the nearest obstacle's top (world y).
         std::vector<float> flowX, flowZ, offsetX, offsetZ, nearTop;
