@@ -5,6 +5,7 @@
 #include "occlusion.glsl"
 #define FL_BINDING 15
 #include "frame_lights.glsl"                    // (the lightning's flash: FL.flash)
+#include "dither.glsl"                         // (8-bit output: no bands in smooth skies)
 layout(set = 0, binding = 16) uniform sampler2D rainNear;   // the rain (rvk rain.cpp m_rainNear: premultiplied; FL.rainNear.x)
 layout(location = 0) out vec4 outColor;
 
@@ -282,5 +283,5 @@ void main()
         vec3 effect = texelFetch(glowRaw, ivec2(gl_FragCoord.xy), 0).rgb * P.params.y;
         alpha = smoothstep(0.01, 0.25, dot(effect, vec3(0.3, 0.59, 0.11)));
     }
-    outColor = vec4(Grade(min(c, vec3(1.0)), far), alpha);
+    outColor = vec4(Dither8(Grade(min(c, vec3(1.0)), far), gl_FragCoord.xy, FL.taa.z), alpha);   // (moving: the TAA averages it)
 }

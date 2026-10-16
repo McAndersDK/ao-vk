@@ -1,4 +1,5 @@
 #version 450
+#include "dither.glsl"
 // FXAA (hdr.cpp, RVK_Fxaa: the anti-aliasing when TAA is off): on the tone mapped image, a pixel on an edge -
 // a brightness step among its diagonal neighbours - is replaced by samples taken along the edge, so stair steps
 // soften without the image going soft where there are none. One pass, no history: nothing smears.
@@ -22,7 +23,7 @@ void main()
     float lSW = Luma(texture(src, uv + vec2(-0.5, 0.5) * rcp).rgb), lSE = Luma(texture(src, uv + vec2(0.5, 0.5) * rcp).rgb);
     float lM = Luma(m);
     float lMin = min(lM, min(min(lNW, lNE), min(lSW, lSE))), lMax = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
-    if (lMax - lMin < max(0.0312, lMax * 0.125)) { outColor = vec4(m, 1.0); return; }   // no edge here
+    if (lMax - lMin < max(0.0312, lMax * 0.125)) { outColor = vec4(Dither8(m, gl_FragCoord.xy, 0.0), 1.0); return; }   // no edge here
     // The edge's direction: across the brightness gradient.
     vec2 dir = vec2(-((lNW + lNE) - (lSW + lSE)), (lNW + lSW) - (lNE + lSE));
     float reduce = max((lNW + lNE + lSW + lSE) * 0.25 * kReduceMul, kReduceMin);
@@ -33,5 +34,5 @@ void main()
     vec3 a = 0.5 * (texture(src, uv + dir * (1.0 / 3.0 - 0.5)).rgb + texture(src, uv + dir * (2.0 / 3.0 - 0.5)).rgb);
     vec3 b = a * 0.5 + 0.25 * (texture(src, uv - dir * 0.5).rgb + texture(src, uv + dir * 0.5).rgb);
     float lB = Luma(b);
-    outColor = vec4((lB < lMin || lB > lMax) ? a : b, 1.0);
+    outColor = vec4(Dither8((lB < lMin || lB > lMax) ? a : b, gl_FragCoord.xy, 0.0), 1.0);
 }
