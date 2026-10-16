@@ -10,7 +10,6 @@ layout(set = 0, binding = 0, std140) uniform ResolveFrame {
     mat4 prevViewProj;  // direction -> clip, last frame's rotation
     vec4 size;          // xy: the half-size target's, zw: the quarter-size's
     vec4 sub;           // xy: this frame's pixel in each 2x2, z: 1 = last frame's clouds usable, w: a fresh pixel's weight
-                        // (1: a lightning flash - every pixel the fresh ones round it, filtered)
 } R;
 layout(set = 0, binding = 1) uniform sampler2D quarter;      // this frame's marched pixels
 layout(set = 0, binding = 2) uniform sampler2D history;      // last frame's half-size clouds
@@ -25,21 +24,14 @@ void main()
     ivec2 last = ivec2(R.size.zw) - 1;
     bool fresh = all(equal(hp & 1, sub));
     // The fresh pixels round it: their range, and their filtered value here.
-    vec4 lo = vec4(1e9), hi = vec4(-1e9), tent = vec4(0.0);
+    vec4 lo = vec4(1e9), hi = vec4(-1e9);
     for (int y = -1; y <= 1; ++y)
         for (int x = -1; x <= 1; ++x) {
             vec4 c = texelFetch(quarter, clamp(q + ivec2(x, y), ivec2(0), last), 0);
             lo = min(lo, c);
             hi = max(hi, c);
-            tent += c * float((2 - abs(x)) * (2 - abs(y)));
         }
-    // A lightning flash: the clouds' light changes from frame to frame - no history to average the march's noise in, and
-    // three of each four pixels would keep last frame's, unlit (user: noise in the clouds at each strike). Every pixel
-    // the fresh ones round it, tent-filtered: softer for those few frames, no noise.
-    if (R.sub.w > 0.99) {
-        outClouds = tent / 16.0;
-        return;
-    }
+
     vec4 now = fresh ? texelFetch(quarter, clamp(q, ivec2(0), last), 0)
                      : texture(quarter, (vec2(hp - sub) * 0.5 + 0.5) / R.size.zw);
     vec4 result = now;

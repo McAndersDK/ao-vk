@@ -2234,6 +2234,10 @@ private:
     bool m_cloudHistoryValid = false;
     uint64_t m_cloudHistoryFrame = 0;            // the frame that made the newest
     float m_cloudHistoryEye[3] = {};
+    // The cloud layer's last march, for its lightning added when filtered up (clouds.cpp DrawClouds, cloud_up.frag).
+    d3d::Matrix m_cloudUpInvViewProj{};
+    float m_cloudUpEye[4] = {}, m_cloudUpTint[4] = {}, m_cloudUpReach = 0.0f;
+    uint64_t m_cloudUpFrameNumber = ~0ull;       // (the frame it was marched in)
     float m_cloudMorphPhase = 0.0f;              // the clouds' churn: how far through its field (tiles, wrapped at 1)
     float m_cloudBoil = 0.0f;                    // ... their detail's extra rise (world, wrapped)
     double m_cloudWeatherTime = 0.0;             // the weather map's own clock (faster in a storm: its masses change)

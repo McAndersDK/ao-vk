@@ -261,7 +261,6 @@ vec4 Deck(vec3 eye, vec3 dir, float jitter)
                   mix(1.0, 0.7, MoonShare()) + sun) * L.tint.rgb * L.tint.w;
         const vec3 luma = vec3(0.3, 0.59, 0.11);   // (contrast, as the layer: RVK_CloudShade)
         S *= clamp(pow(max(dot(S, luma) / max(dot(L.tint.rgb, luma) * L.tint.w, 1e-3), 1e-3), L.horizon.y - 1.0), 0.15, 3.0);
-        S += FlashInCloud(p) * L.tint.rgb;
         float st = exp(-d * sigma * dt);
         light += transmit * (1.0 - st) * S;
         transmit *= st;
@@ -622,7 +621,6 @@ void main()
         const vec3 luma = vec3(0.3, 0.59, 0.11);
         float middle = max(dot(L.tint.rgb, luma) * L.tint.w, 1e-3);
         S *= clamp(pow(max(dot(S, luma) / middle, 1e-3), (L.horizon.y - 1.0) / nightSky), 0.15, 3.0);
-        S += FlashInCloud(p) * L.tint.rgb;       // (lightning in the cloud)
         float stepT = exp(-d * sigma * dt);
         light += transmit * (1.0 - stepT) * S;
         depthSum += transmit * (1.0 - stepT) * tHere;

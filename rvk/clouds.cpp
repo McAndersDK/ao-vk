@@ -104,6 +104,11 @@ struct WeatherFrame {
     float area[4], info[4], drift[4], storm[4];
 };
 
+struct UpFrame {                                 // cloud_up.frag's block: the cloud layer's lightning
+    d3d::Matrix invViewProj;
+    float eye[4], tint[4], flash[4], flashWorld[4];
+};
+
 struct LayerFrame {
     d3d::Matrix invViewProj;
     float eye[4], layer[4], weather[4], shape[4], wind[4], tint[4], ambient[4], haze[4], view[4], sub[4], horizon[4],
@@ -258,13 +263,15 @@ bool Device::CreateCloudResources(std::string* error)
         if (!Check(vkCreatePipelineLayout(m_device, &spl, nullptr, &m_cloudShadowLayout), "cloud shadow layout", error))
             return false;
     }
-    // The half size's upsampling: 0 the clouds (linear); push: the scene's size.
+    // The half size's upsampling: 0 the clouds (linear), 1 its block (UpFrame: a lightning flash); push: the scene's size.
     {
-        VkDescriptorSetLayoutBinding u{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        const VkDescriptorSetLayoutBinding u[2] = {
+            {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};   // (the flash: UpFrame)
         VkDescriptorSetLayoutCreateInfo ul{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         ul.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-        ul.bindingCount = 1;
-        ul.pBindings = &u;
+        ul.bindingCount = 2;
+        ul.pBindings = u;
         if (!Check(vkCreateDescriptorSetLayout(m_device, &ul, nullptr, &m_cloudUpSetLayout), "cloud up set", error))
             return false;
         VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16};
@@ -1017,12 +1024,35 @@ void Device::DrawClouds(VkCommandBuffer cmd)
             vkCmdSetScissor(cmd, 0, 1, &area);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, own ? m_cloudUpScenePipeline : m_cloudUpPipeline);
             VkDescriptorImageInfo image{m_cloudClampSampler, clouds->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-            VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-            w.dstBinding = 0;
-            w.descriptorCount = 1;
-            w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            w.pImageInfo = &image;
-            vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudUpLayout, 0, 1, &w);
+            // (The cloud layer's lightning: added here, not marched - cloud_up.frag.)
+            UpFrame uf{};
+            {
+                float flash[4], view[4], proj[4], world[4];
+                Lightning(flash, view, proj, world);
+                if (layer && m_cloudUpFrameNumber == m_frameNumber && flash[3] > 0.0f) {
+                    uf.invViewProj = m_cloudUpInvViewProj;
+                    std::memcpy(uf.eye, m_cloudUpEye, sizeof(uf.eye));
+                    std::memcpy(uf.tint, m_cloudUpTint, sizeof(uf.tint));
+                    uf.flash[3] = m_cloudUpReach;
+                    const float rgb[3] = {0.8f, 0.85f, 1.0f};   // (bluish white: as the march's FlashInCloud was)
+                    for (int i = 0; i < 3; ++i) uf.flash[i] = rgb[i] * flash[3] * 1.2f;
+                    for (int i = 0; i < 3; ++i) uf.flashWorld[i] = world[i];
+                }
+            }
+            void* ucpu = nullptr;
+            const VkDeviceSize uoff = Allocate(sizeof(UpFrame), 256, &ucpu);
+            std::memcpy(ucpu, &uf, sizeof(uf));
+            VkDescriptorBufferInfo ubuf{m_frames[m_frameIndex].ring, uoff, sizeof(UpFrame)};
+            VkWriteDescriptorSet w[2] = {{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}, {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}};
+            w[0].dstBinding = 0;
+            w[0].descriptorCount = 1;
+            w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[0].pImageInfo = &image;
+            w[1].dstBinding = 1;
+            w[1].descriptorCount = 1;
+            w[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            w[1].pBufferInfo = &ubuf;
+            vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudUpLayout, 0, 2, w);
             const float size[4] = {float(fw), float(fh), 0.0f, 0.0f};
             vkCmdPushConstants(cmd, m_cloudUpLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(size), size);
             vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -1675,6 +1705,15 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
         lf.morph[3] = m_weatherParams.enable ? StormSky() * (0.3f + 0.7f * rainy) * std::clamp(m_rainVeils, 0.0f, 3.0f) : 0.0f;
     }
     void* cpu = nullptr;
+    if (!shadowArea && !sunRay) {                // (the view's march: what its lightning needs - DrawClouds)
+        m_cloudUpInvViewProj = lf.invViewProj;
+        for (int i = 0; i < 3; ++i) m_cloudUpEye[i] = lf.eye[i];
+        m_cloudUpEye[3] = lf.layer[0];
+        for (int i = 0; i < 3; ++i) m_cloudUpTint[i] = lf.tint[i];
+        m_cloudUpTint[3] = lf.haze[3];
+        m_cloudUpReach = lf.layer[3];
+        m_cloudUpFrameNumber = m_frameNumber;
+    }
     const VkDeviceSize offset = Allocate(sizeof(LayerFrame), 256, &cpu);
     std::memcpy(cpu, &lf, sizeof(lf));
     VkViewport viewport{0.0f, 0.0f, float(tw), float(th), 0.0f, 1.0f};
@@ -1775,11 +1814,6 @@ Texture* Device::ReusedCloudLayer(VkCommandBuffer cmd, bool skipCovered, const f
         for (int i = 0; i < 3; ++i)
             for (int j = 0; j < 3; ++j) turn += std::fabs(rotation.m[i][j] - m_cloudPrevRotation.m[i][j]);
         rf.sub[3] = turn < 0.003f ? 0.2f : 0.4f;
-    }
-    {   // (During a lightning flash the fresh pixels as they are: its strokes last a few frames, not smeared over more.)
-        float flash[4], view[4], proj[4], world[4];
-        Lightning(flash, view, proj, world);
-        if (flash[3] > 0.05f) rf.sub[3] = 1.0f;
     }
     const uint32_t cur = m_cloudHistoryIndex ^ 1u, prev = m_cloudHistoryIndex;
     void* cpu = nullptr;
