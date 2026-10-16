@@ -1086,7 +1086,13 @@ bool Device::RenderSandFog(VkCommandBuffer cmd)
     push.gusts[0] = gusts[10];
     push.gusts[1] = gusts[11];
     push.gusts[2] = m_sandEyeShelter;
-    push.gusts[3] = m_sandAsh ? 1.0f : 0.0f;
+    // An ash storm (no glow towards the sun): forced so (RVK_SandAsh), or the game's storm grey rather than sand's
+    // orange (its colour's saturation: sand ~0.45, ash ~0.05).
+    const float hi = std::max({m_sandColour[0], m_sandColour[1], m_sandColour[2]});
+    const float lo = std::min({m_sandColour[0], m_sandColour[1], m_sandColour[2]});
+    const float saturation = hi > 1e-4f ? (hi - lo) / hi : 0.0f;
+    const float grey = 1.0f - std::clamp((saturation - 0.12f) / 0.18f, 0.0f, 1.0f);
+    push.gusts[3] = m_sandForce > 0.0f ? (m_sandAsh ? 1.0f : 0.0f) : grey * grey * (3.0f - 2.0f * grey);
     // RVK_SandSun: the sky round the sun seen through the dust's depth ^ this (1: as the rest of the sky - hidden).
     push.sun[0] = 1.0f - 0.95f * std::clamp(m_sandSun, 0.0f, 1.0f);
     // The lee of walls and hills near the eye (the sand map's shelter): the dust there held off.

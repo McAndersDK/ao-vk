@@ -347,7 +347,7 @@ public:
     void SandHaze(float out[8]) const;                             // the tone mapping's sand: dust, dust2
     void SandGusts(float out[16]) const;                           // ... its distant gusts: gust0..3
     void SetSandGusts(float s) { m_sandGusts = s; }                // RVK_SandGusts
-    void SetSandFog(float s) { m_sandFog = s; }                    // RVK_SandFog (sand_fog.frag; 0: the flat haze)
+    void SetSandFog(float s) { m_sandFog = s; }                    // RVK_SandFog (sand_fog.frag, the default; 0: the flat haze)
     void SetSandSun(float s) { m_sandSun = s; }                    // RVK_SandSun (sand_fog.frag)
     void SetSandTint(float s) { m_sandTint = s; }                  // RVK_SandTint (tonemap.frag)
     float SandFogThrough(const float eye[3], const float p[3]) const;   // (smoke.cpp)
@@ -1955,7 +1955,7 @@ private:
     uint32_t m_sandShelterGen = 0, m_sandGroundShelterGen = ~0u;
     float m_sandEyeShelter = 0.0f;               // the camera's (eased): the near haze held off
     float m_sandGusts = 1.0f;                    // RVK_SandGusts: the distant gusts in the haze (0 none)
-    float m_sandFog = 0.0f;                      // RVK_SandFog: the storm's air a lit volume (docs/sand-fog-plan.md)
+    float m_sandFog = 1.0f;                      // RVK_SandFog: the storm's air a lit volume (docs/sand-fog-plan.md)
     float m_sandSun = 0.9f;                      // RVK_SandSun: how clearly the sun shows through the fog (0 .. 1)
     float m_sandTint = 0.6f;                     // RVK_SandTint: the light under the fog the dust's colour (0 .. 1)
     double m_sandFarCarried = 0.0;               // how far the wind has carried them (world; wrapped at 1e6)

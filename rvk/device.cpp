@@ -1645,27 +1645,6 @@ void Device::BeginFrame()
     UpdateWind();                                // (m_windTime, m_windTimePrev: wind.cpp)
     m_lightsPrev.swap(m_lightsCur);              // last frame's complete light set lights this frame
     m_lightsCur.clear();
-    {
-        // (Diagnostic: the game's sun, ambient and fog colour over 600 frames - how far they swing, how often they
-        // jump; the game's storms flicker the light - the user.)
-        struct Range { float lo = 1e9f, hi = -1e9f, last = -1.0f; uint32_t jumps = 0;
-            void Add(float v) { lo = std::min(lo, v); hi = std::max(hi, v);
-                if (last >= 0.0f && std::fabs(v - last) > 0.08f * std::max(last, 0.05f)) ++jumps; last = v; } };
-        static Range sun, sunY, amb, fog;
-        static uint32_t frames = 0;
-        auto luma = [](uint32_t c) { return (0.3f * float((c >> 16) & 0xFF) + 0.59f * float((c >> 8) & 0xFF) + 0.11f * float(c & 0xFF)) / 255.0f; };
-        sun.Add(m_sunLuminance);
-        sunY.Add(-m_sunDir[1] + 1.0f);
-        amb.Add(luma(m_rs[d3d::RS_AMBIENT]));
-        fog.Add(luma(m_rs[d3d::RS_FOGCOLOR]));
-        if (++frames == 600) {
-            Log("game light (last 600 frames, min..max, jumps): sun %.3f..%.3f %u, sun height %.3f..%.3f %u, ambient %.3f..%.3f %u, "
-                "fog colour %.3f..%.3f %u\n", double(sun.lo), double(sun.hi), sun.jumps, double(sunY.lo - 1.0f), double(sunY.hi - 1.0f),
-                sunY.jumps, double(amb.lo), double(amb.hi), amb.jumps, double(fog.lo), double(fog.hi), fog.jumps);
-            sun = sunY = amb = fog = Range{};
-            frames = 0;
-        }
-    }
     m_sunLuminance = 0.0f;
     m_casters.clear();
     m_blobShadowsReplaced.store(m_shadows && m_shadowValid, std::memory_order_relaxed);

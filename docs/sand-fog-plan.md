@@ -1,7 +1,7 @@
 # Sand fog: the storm's air as a lit volume, in place of the flat haze
 
-Status (2026-10-15): phase 1 done (prototype, RVK_SandFog, off by default), branch `storms`. The user: instead of a haze, a volumetric fog. Phase 1 behind
-RVK_SandFog (0 = today's haze) until it wins in game.
+Status (2026-10-15): all four phases done, branch `storms`. The user: instead of a haze, a volumetric fog. The fog is
+the default now (RVK_SandFog=1; 0 = the flat haze, kept as the cheaper fallback).
 
 ## Why
 
@@ -81,3 +81,12 @@ Each phase: the demo (identical without a storm), the harness, validation, cost 
   the haze: RVK_SandHaze's default 0.1 is a thin storm); the dust's colour calibrated so that as typically lit it is
   the haze's (night identical to the haze; day: the horizon as the haze, overhead darker - lit from behind and above).
 - Cost: 24 steps, one noise scale: 0.48 ms at 2560x1440 in the demo (40 steps and two scales: 1.06).
+- Phase 2: tuned in game with the user (storms45-53: calibration, per-colour transmittance, one dust column, the sun
+  dim and red behind it - RVK_SandSun, the land lit orange under it - RVK_SandTint, the storm's colour eased).
+- Phase 3: the sand map's solid shelter (sand_map.cpp SandFogShelter: RG16F, 256 x 256 cells of 0.5 round the eye -
+  the shelter over each cell's top, the top) at binding 5; each step of the march below it cleared as the sim sand is
+  (sand_fog.frag Lee, x0.75, fading out at the map's edge). See-through obstacles left out (a canopy holds off blown
+  sand, not the dust in the air). The eye's own shelter only without a map.
+- Phase 4: RVK_SandFog on by default (demo: the fog by default, --sand-haze for the flat haze); RVK_SandHaze and
+  RVK_SandGusts describe the fog. Ash storms: no glow towards the sun when forced (RVK_SandAsh) or when the game's
+  storm colour is grey (saturation under ~0.12; sand's is ~0.45).

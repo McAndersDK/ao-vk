@@ -38,7 +38,8 @@ In a storm the rain slants one way while the grass waves gently another.
   in the world, as a source's box). Sand fed in off dune crests and windward slopes (the terrain heights grass.cpp
   captures), along the box's upwind side, and at characters' feet (running, landing). Sand colour, heavier (settles),
   no heat. Quality setting as RVK_SmokeQual.
-- Dust devils: now and then a column with a rotating force added to the solver (it has vorticity confinement).
+- Dust devils: now and then a column with a rotating force added to the solver (done, then removed in storms61 - the
+  user).
 - Far: sand-coloured haze in the air pass (tonemap.frag Air / RVK_Atmos), thickening with the wind, moving with the gust
   fronts - a wall of dust at a distance, a few dozen metres' visibility in a bad storm.
 - Along the ground: sand streaks skimming low, GPU particles (particles.cpp), everywhere on sand.
@@ -70,10 +71,10 @@ Each phase playable on its own; demo scenes for each (the grass bench with a sto
   its floor under the lowest ground in it. The storm's wind (wind.cpp: a sandstorm now raises the storm's strength
   too) blows through it and in over its walls with sand in streaks; the ground under each column (the ground grass
   captures - flat under the camera's character with grass off) is solid and gives sand off where it is bare, skimming
-  along it; characters' feet kick it up; now and then a dust devil comes in from upwind, carried through by the wind,
-  whirling sand up into a column. The tone mapping's sand haze leaves what smoke covers at a near veil (it read the
+  along it; characters' feet kick it up. (Dust devils - now and then one carried through by the wind - were removed in
+  storms61: the user.) The tone mapping's sand haze leaves what smoke covers at a near veil (it read the
   sky's full veil before: a devil against the sky was painted over) - the half-size smoke image's cover, binding 13.
   Demo: --sand-storm (the grass bench on sand, the game's tint, the new weather without rain), --sand-blow X;
-  RANDYVK_SAND_DEVIL=1 sends one past 10 units ahead at once. ~0.6 ms in the demo (960 x 960).
+  ~0.6 ms in the demo (960 x 960).
 - Next: an in-game look at 2a + 2b in a real sandstorm (the game's tint colour and alpha, the wind's speed, how
   thick); ground streaks finer than the grid (GPU particles) if the volume's skimming sand is too coarse; then phase 3.
