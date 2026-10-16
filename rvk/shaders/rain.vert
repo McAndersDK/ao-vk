@@ -72,7 +72,7 @@ void main()
     vec4 cUp = R.viewProj * vec4(head + upW * kWidth, 1.0);
     float px = length((cUp.xy / cUp.w - cHead.xy / cHead.w) * halfPx);
     alpha *= min(px / 1.2, 1.0);
-    float halfWidth = max(px, 1.2) * 0.5;
+    float halfWidth = max(px, 1.6) * 0.5;       // (a little wider than the drop: room for its soft edges)
     const vec2 corners[6] = vec2[](vec2(0.0, -1.0), vec2(0.0, 1.0), vec2(1.0, 1.0), vec2(0.0, -1.0), vec2(1.0, 1.0),
                                    vec2(1.0, -1.0));
     vec2 c = corners[corner];

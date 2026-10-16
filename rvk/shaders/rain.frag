@@ -18,7 +18,10 @@ layout(location = 4) out vec4 outAlbedo;
 void main()
 {
     float across = abs(vCorner.y);
-    float a = vAlpha * (1.0 - smoothstep(0.35, 1.0, across)) * smoothstep(0.0, 0.6, vCorner.x);
+    // (Soft: fading in from its tail and out again before its head, and gently across - its ends never cut off, the
+    // user: the starts and ends of the drops showed.)
+    float along = vCorner.x;
+    float a = vAlpha * exp(-across * across * 3.5) * smoothstep(0.0, 0.55, along) * (1.0 - smoothstep(0.7, 1.0, along));
     if (a <= 1e-3)
         discard;
     // Water: the light it reflects strongest along its edges (grazing: Fresnel), little through its middle - with the
