@@ -32,6 +32,8 @@ layout(set = 0, binding = 0, std140) uniform LayerFrame {
                         // base, z its top (world y); w: the game's sheets' faint shadow (RVK_CloudSheet)
     vec4 scud;          // a thunderstorm's scud: xy the low deck's own drift (racing ahead of the layer), z how much
                         // (0..1: torn into ragged fragments)
+    vec4 morph;         // the churn (rvk clouds.cpp UpdateCloudDrift): x its field's phase (tiles, wrapping), y how far
+                        // it pushes the cells (body tiles), z the detail's extra rise (world)
 } L;
 layout(set = 0, binding = 1) uniform sampler2D weatherMap;
 layout(set = 0, binding = 2) uniform sampler3D shapeNoise;
@@ -94,6 +96,8 @@ float Profile(float h, float type)
 // shadow map's: all with the wind, none rising - its shadows slide over the land as one, no edge creeping against
 // the rest (user: shadows going opposite ways).
 vec3 gWind = vec3(0.0), gDetailWind = vec3(0.0);
+vec3 gPush = vec3(0.0);                          // the churn's push at the last sample (Density)
+bool gPushKept = false;                          // ... kept for the next ones (the sun's march)
 
 float Density(vec3 p, bool detail)
 {
@@ -112,21 +116,22 @@ float Density(vec3 p, bool detail)
         return 0.0;
     vec3 q = (p + gWind) * L.shape.x;
     q.y *= 1.6;                                  // (cells a little flatter than wide)
-    // A storm (its sealed deck: type ~0.95, by the storm sky): no single lump size - the body's cells pushed about by a
-    // slow field and blended with cells 2.3 times smaller where another slow field says, drawn out a little along the
-    // wind (rolls) - its lumps had all one size on one plane: a wave pattern (user).
+    // The churn: the cells pushed about by a slow field that itself moves on (its phase through the noise) - shapes
+    // keep changing as they drift, never stretched out (the push stays bounded); the tops more than the bases. (User:
+    // the clouds were static.) In the sun's march too, or the light would stand still while the shapes move.
+    // (The sun's march takes its sample's push - gPushKept: the field is ~7 km across, its steps within ~1 km.)
+    if (!gPushKept)
+        gPush = textureLod(shapeNoise, (p + gWind * 0.85) * vec3(1.0, 1.6, 1.0) / 7000.0 + vec3(0.0, L.morph.x, 0.0), 0.0).gba - 0.5;
+    q += gPush * (L.morph.y * (0.6 + 0.8 * h));
+    // A storm (its sealed deck: type ~0.95, by the storm sky): its cells drawn out a little along the wind (rolls), pushed
+    // further by the churn - its lumps had all one size on one plane: a wave pattern (user).
     float storm = L.ambient.w * smoothstep(0.85, 0.93, w.g);
     vec4 n;
-    if (storm > 0.0) {
+    if (storm > 0.0) {                           // (its push: the churn's, larger in a storm - L.morph.y)
         vec2 along = normalize(L.wind.xz + vec2(1e-3, 0.0));
         float a = dot(q.xz, along), c = dot(q.xz, vec2(-along.y, along.x));
         vec2 st = along * (a * mix(1.0, 0.67, storm)) + vec2(-along.y, along.x) * c;
-        vec3 qs = vec3(st.x, q.y, st.y);
-        if (detail) {                            // (the sun's march without: ~6 of them a sample)
-            vec4 f = textureLod(shapeNoise, (p + gWind * 0.7) / 14000.0, 0.0);
-            qs += (f.gba - 0.5) * 0.7 * storm;
-        }
-        n = textureLod(shapeNoise, qs, 0.0);
+        n = textureLod(shapeNoise, vec3(st.x, q.y, st.y), 0.0);
     } else {
         n = textureLod(shapeNoise, q, 0.0);
     }
@@ -266,7 +271,7 @@ vec4 Deck(vec3 eye, vec3 dir, float jitter)
 void main()
 {
     gWind = L.wind.xyz;
-    gDetailWind = L.wind.xyz * 1.7;
+    gDetailWind = L.wind.xyz * 1.7 + vec3(0.0, L.morph.z, 0.0);   // (a storm's detail boiling up)
     vec3 eye = L.eye.xyz;
     float R = L.layer.z;
     gCentre = vec3(eye.x, eye.y - R, eye.z);
@@ -376,7 +381,7 @@ void main()
 void main()
 {
     gWind = L.wind.xyz;
-    gDetailWind = L.wind.xyz * 1.7;
+    gDetailWind = L.wind.xyz * 1.7 + vec3(0.0, L.morph.z, 0.0);   // (a storm's detail boiling up)
     // The half-size pixel marched (one of each 2x2 when reused over frames).
     vec2 hp = L.sub.z > 1.5 ? floor(gl_FragCoord.xy) * 2.0 + L.sub.xy + 0.5 : gl_FragCoord.xy;
     // The four scene pixels under this one: none of them sky - an opaque surface is drawn there later.
@@ -515,11 +520,13 @@ void main()
         int lightSteps = far ? 2 : int(L.view.w) - (L.ambient.w > 0.5 ? 1 : 0);   // (a storm hides the sun: one less)
         float ls = baseThick * (far ? 0.1 : 0.045), grow = far ? 2.2 : (lightSteps < int(L.view.w) ? 1.75 : 1.5);
         vec3 lp = p + sunL * (ls * (lightJitter - 0.5));
+        gPushKept = true;
         for (int k = 0; k < lightSteps && !reuse; ++k) {
             lp += sunL * ls;
             od += Density(lp, false) * ls;
             ls *= grow;
         }
+        gPushKept = false;
         if (!reuse) od *= sigma;
         odLast = od;
         // Several scattering orders (each dimmer, reaching deeper, less forward): light inside thick cloud; a strong

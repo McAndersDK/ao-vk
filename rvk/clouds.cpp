@@ -107,7 +107,7 @@ struct WeatherFrame {
 struct LayerFrame {
     d3d::Matrix invViewProj;
     float eye[4], layer[4], weather[4], shape[4], wind[4], tint[4], ambient[4], haze[4], view[4], sub[4], horizon[4],
-        shadowArea[4], deck[4], scud[4];
+        shadowArea[4], deck[4], scud[4], morph[4];
 };
 
 struct ResolveFrame {
@@ -1341,6 +1341,13 @@ void Device::UpdateCloudDrift()
     m_cloudDrift[0] -= m_cloudWindDir[0] / dl * m_cloudWindSpeed * dt;
     m_cloudDrift[1] -= m_cloudWindDir[1] / dl * m_cloudWindSpeed * dt;
     m_cloudDrift[2] += 1.5f * dt;
+    // The clouds' churn (cloud_layer.frag Density): a slow field through which they are pushed about, itself moving on -
+    // changed wholly in ~90 s on a fair day, ~20 s in a storm (user: realistic, a storm's faster); its detail rising
+    // faster in a storm (boiling); the weather map's masses growing and breaking up four times as fast.
+    const float morph = std::clamp(m_cloudParams.morph, 0.0f, 3.0f), storm = StormSky();
+    m_cloudMorphPhase = std::fmod(m_cloudMorphPhase + morph * (0.25f / (90.0f + (20.0f - 90.0f) * storm)) * dt, 1.0f);
+    m_cloudBoil = std::fmod(m_cloudBoil + morph * 8.0f * storm * dt, 100000.0f);
+    m_cloudWeatherTime = std::fmod(m_cloudWeatherTime + double((1.0f + 3.0f * storm * std::min(morph, 1.0f)) * dt), 36000.0);
     // Scud: in a thunderstorm the low deck races along under the layer, three times as fast and more (the storm's
     // gusts) - added up, so a change of pace never jumps it.
     const float scudSpeed = m_cloudWindSpeed * 2.5f * StormSky();
@@ -1364,7 +1371,6 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
     wf.area[1] = std::floor((eye[2] - area * 0.5f) / texel) * texel;
     wf.area[2] = area;
     wf.area[3] = float(kWeatherSize);
-    const double clock = std::fmod(m_frameClock, 3600.0);
     const float rain = StormSky();
     float cover = 0.0f, flat = 0.0f, weight = 0.0f, wispy = 0.0f;
     uint32_t known = 0;                          // (puffs whose texture is known)
@@ -1394,7 +1400,7 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
         }
     }
     const float flatShare = weight > 0.0f ? flat / weight : 0.0f;
-    wf.info[0] = float(clock);
+    wf.info[0] = float(m_cloudWeatherTime);        // (its own clock: faster in a storm)
     // How cloudy: the game draws the same ~30 flat sheets with the same fibrous textures in every sky - fair days and
     // its storms alike (their size, count, opacity and fog share don't tell them apart: dumps of both) - and those
     // read as scattered cloud with much open sky. So: scattered cloud whenever the game draws its puffs (fading with
@@ -1655,6 +1661,15 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     lf.scud[0] = m_scudDrift[0];
     lf.scud[1] = m_scudDrift[1];
     lf.scud[2] = scud;                           // (cloud_layer.frag DeckDensity: torn into ragged fragments)
+    // The churn (UpdateCloudDrift): its field's phase, how far it pushes (body tiles: ~540 units fair, ~1350 a storm's -
+    // its own mixed lumps), the detail's extra rise.
+    {
+        const float morph = std::clamp(m_cloudParams.morph, 0.0f, 3.0f);
+        lf.morph[0] = m_cloudMorphPhase;
+        lf.morph[1] = std::min(morph, 1.0f) * (0.12f + 0.18f * StormSky());
+        lf.morph[2] = m_cloudBoil;
+        lf.morph[3] = 0.0f;
+    }
     void* cpu = nullptr;
     const VkDeviceSize offset = Allocate(sizeof(LayerFrame), 256, &cpu);
     std::memcpy(cpu, &lf, sizeof(lf));

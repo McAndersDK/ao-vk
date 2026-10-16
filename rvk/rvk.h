@@ -686,6 +686,7 @@ public:
         float shade = 1.6f;                      // RVK_CloudShade: contrast (light and shade; 1 = as lit)
         float low = 0.0f;                        // RVK_CloudLow: the low deck (stratus), x (0: none - user)
         float sheet = 1.0f;                      // RVK_CloudSheet: the game's flat sheets behind the layer, x (0: none)
+        float morph = 1.0f;                      // RVK_CloudMorph: how fast the clouds churn and change, x (0: still)
     };
     void SetCloudParams(const CloudParams& params);
     void SmokeSourceFrame(uint64_t key, const SmokeSource& source);
@@ -2231,6 +2232,9 @@ private:
     bool m_cloudHistoryValid = false;
     uint64_t m_cloudHistoryFrame = 0;            // the frame that made the newest
     float m_cloudHistoryEye[3] = {};
+    float m_cloudMorphPhase = 0.0f;              // the clouds' churn: how far through its field (tiles, wrapped at 1)
+    float m_cloudBoil = 0.0f;                    // ... their detail's extra rise (world, wrapped)
+    double m_cloudWeatherTime = 0.0;             // the weather map's own clock (faster in a storm: its masses change)
     d3d::Matrix m_cloudPrevRotation{};           // last frame's view-projection, the camera's rotation only
     VkDescriptorSetLayout m_cloudResolveSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_cloudResolveLayout = VK_NULL_HANDLE;
