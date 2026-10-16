@@ -49,7 +49,8 @@ struct RainFrame {
     float drift[4];                              // xyz: how far the rain has moved (world, wrapped); w: the gust fronts'
                                                  // extra lean (units / s at a front's peak)
     float curtains[4];                           // x: the rain gathered into curtains along the gust fronts (0 .. 1);
-                                                 // y: seconds of the fall a streak shows
+                                                 // y: seconds of the fall a streak shows; z: 1 = the drops' motion
+                                                 // only (their look: the rain layer, drawn after)
 };
 
 constexpr uint32_t kRainMaxDrops = 24000;       // at full rain, RVK_RainAmount 1
@@ -107,7 +108,9 @@ bool Device::CreateRainResources(std::string* error)
     };
     // depth: tested against the scene's depth (the streaks); without, the pass has no depth attachment at all (the
     // splashes read the depth instead).
-    auto make = [&](const uint32_t* vs, size_t vsSize, const uint32_t* fs, size_t fsSize, bool depth, VkPipeline* out) {
+    // targets: the scene's five (as the scene pass), or 1 - the rain layer alone (its outputs past the first dropped).
+    auto make = [&](const uint32_t* vs, size_t vsSize, const uint32_t* fs, size_t fsSize, bool depth, VkPipeline* out,
+                    uint32_t targets = 5) {
     VkShaderModule vert = VK_NULL_HANDLE, frag = VK_NULL_HANDLE;
     bool ok = module(vs, vsSize, &vert) && module(fs, fsSize, &frag);
     if (ok) {
@@ -143,13 +146,13 @@ bool Device::CreateRainResources(std::string* error)
             a.colorBlendOp = a.alphaBlendOp = VK_BLEND_OP_ADD;
         }
         VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-        cb.attachmentCount = 5;
+        cb.attachmentCount = targets;
         cb.pAttachments = att;
         VkFormat colorFormats[5] = {GetFormatInfo(Format::RGBA16F).vk, GetFormatInfo(Format::RGBA16F).vk,
                                     GetFormatInfo(Format::RGBA8).vk, GetFormatInfo(Format::RGBA16F).vk,
                                     GetFormatInfo(Format::A8R8G8B8).vk};
         VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-        rendering.colorAttachmentCount = 5;
+        rendering.colorAttachmentCount = targets;
         rendering.pColorAttachmentFormats = colorFormats;
         rendering.depthAttachmentFormat = depth ? kDepthFormat : VK_FORMAT_UNDEFINED;
         VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
@@ -175,6 +178,7 @@ bool Device::CreateRainResources(std::string* error)
     return ok;
     };
     return make(kRainVertSpirv, sizeof(kRainVertSpirv), kRainFragSpirv, sizeof(kRainFragSpirv), true, &m_rainPipeline) &&
+           make(kRainVertSpirv, sizeof(kRainVertSpirv), kRainFragSpirv, sizeof(kRainFragSpirv), true, &m_rainNearPipeline, 1) &&
            make(kSplashVertSpirv, sizeof(kSplashVertSpirv), kSplashFragSpirv, sizeof(kSplashFragSpirv), false,
                 &m_splashPipeline);
 }
@@ -183,6 +187,7 @@ void Device::DestroyRainResources()
 {
     if (m_rainPipeline) { vkDestroyPipeline(m_device, m_rainPipeline, nullptr); m_rainPipeline = VK_NULL_HANDLE; }
     if (m_splashPipeline) { vkDestroyPipeline(m_device, m_splashPipeline, nullptr); m_splashPipeline = VK_NULL_HANDLE; }
+    if (m_rainNearPipeline) { vkDestroyPipeline(m_device, m_rainNearPipeline, nullptr); m_rainNearPipeline = VK_NULL_HANDLE; }
     if (m_rainLayout) { vkDestroyPipelineLayout(m_device, m_rainLayout, nullptr); m_rainLayout = VK_NULL_HANDLE; }
     if (m_rainSetLayout) { vkDestroyDescriptorSetLayout(m_device, m_rainSetLayout, nullptr); m_rainSetLayout = VK_NULL_HANDLE; }
 }
@@ -276,6 +281,12 @@ void Device::RenderRain(VkCommandBuffer cmd)
     rf.colour[0] = float((c >> 16) & 0xFF) / 255.0f;
     rf.colour[1] = float((c >> 8) & 0xFF) / 255.0f;
     rf.colour[2] = float(c & 0xFF) / 255.0f;
+    {   // (Water: the game's colour only a light tint, at about its brightness or more - its storms hand over a pure
+        // green, 006600, that made the drops solid green lines.)
+        const float l = 0.3f * rf.colour[0] + 0.59f * rf.colour[1] + 0.11f * rf.colour[2];
+        const float scale = l > 1e-3f ? std::max(0.85f / l, 1.0f) : 1.0f;
+        for (int i = 0; i < 3; ++i) rf.colour[i] = std::min((l + (rf.colour[i] - l) * 0.2f) * scale, 1.2f);
+    }
     const float bright = std::clamp(P.brightness, 0.0f, 4.0f);
     for (int i = 0; i < 3; ++i)
         rf.colour[i] *= bright;
@@ -312,6 +323,23 @@ void Device::RenderRain(VkCommandBuffer cmd)
     }
     Frame& f = m_frames[m_frameIndex];
 
+    // The rain layer (HDR): the drops' look drawn there alone - the tone mapping lays them over the picture as water
+    // (the scene's pass then takes only their motion, for the temporal filter).
+    if (m_rainNearPipeline && m_hdr &&
+        (!m_rainNear || m_rainNear->m_width != m_scene->m_width || m_rainNear->m_height != m_scene->m_height)) {
+        if (m_rainNear) DestroyTexture(m_rainNear);
+        m_rainNear = CreateImage(m_scene->m_width, m_scene->m_height, Format::RGBA16F, 1, true);
+    }
+    const bool nearLayer = m_rainNearPipeline && m_hdr && m_rainNear;
+    VkDeviceSize motionOffset = offset;
+    if (nearLayer) {
+        RainFrame mf = rf;
+        mf.curtains[2] = 1.0f;
+        void* mcpu = nullptr;
+        motionOffset = Allocate(sizeof(RainFrame), 256, &mcpu);
+        std::memcpy(mcpu, &mf, sizeof(mf));
+    }
+
     BeginRenderingOn(m_scene);
     const float sw = float(m_scene->m_width), sh = float(m_scene->m_height);
     VkViewport viewport{0.5f, sh + 0.5f, sw, -sh, 0.0f, 1.0f};   // the scene draws into a flipped viewport
@@ -319,7 +347,7 @@ void Device::RenderRain(VkCommandBuffer cmd)
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rainPipeline);
-    VkDescriptorBufferInfo blockInfo{f.ring, offset, sizeof(RainFrame)};
+    VkDescriptorBufferInfo blockInfo{f.ring, motionOffset, sizeof(RainFrame)};
     VkDescriptorBufferInfo lightsInfo{f.ring, m_frameLightsOffset, sizeof(FrameLights)};
     VkWriteDescriptorSet writes[2] = {};
     for (int i = 0; i < 2; ++i) {
@@ -334,6 +362,47 @@ void Device::RenderRain(VkCommandBuffer cmd)
     vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rainLayout, 0, 2, writes);
     vkCmdDraw(cmd, drops * 6, 1, 0, 0);
     EndRendering();
+
+    // The streaks again into the rain layer alone (cleared; the scene's depth tested): the tone mapping takes them
+    // apart from what is behind them, so the storm's fog and the haze veil what is behind by its own distance and
+    // the drops - a few units off - not at all. (Else a drop over the far land or the sky was fogged as far away as
+    // they are: streaks vanishing where they crossed the horizon - the user.)
+    if (nearLayer) {
+        blockInfo.offset = offset;               // (the drops' look)
+        {
+            Transition(cmd, m_rainNear, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            ImageBarrier(cmd, m_depth, VK_IMAGE_ASPECT_DEPTH_BIT, m_depthLayout, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                         VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                         VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                         VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                         VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
+            m_depthLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+            color.imageView = m_rainNear->m_view;
+            color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+            depth.imageView = m_depthView;
+            depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            VkRenderingInfo nri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+            nri.renderArea = {{0, 0}, {m_scene->m_width, m_scene->m_height}};
+            nri.layerCount = 1;
+            nri.colorAttachmentCount = 1;
+            nri.pColorAttachments = &color;
+            nri.pDepthAttachment = &depth;
+            vkCmdBeginRendering(cmd, &nri);
+            vkCmdSetViewport(cmd, 0, 1, &viewport);
+            vkCmdSetScissor(cmd, 0, 1, &scissor);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rainNearPipeline);
+            vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rainLayout, 0, 2, writes);
+            vkCmdDraw(cmd, drops * 6, 1, 0, 0);
+            vkCmdEndRendering(cmd);
+            m_rainNearFrame = m_frameNumber;
+        }
+    }
     ProfileMark("rain");
 
     // The splashes: the scene's depth readable (vertex and fragment shaders), the targets without it.

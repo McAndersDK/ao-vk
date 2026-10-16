@@ -5,6 +5,7 @@
 #include "occlusion.glsl"
 #define FL_BINDING 15
 #include "frame_lights.glsl"                    // (the lightning's flash: FL.flash)
+layout(set = 0, binding = 16) uniform sampler2D rainNear;   // the rain (rvk rain.cpp m_rainNear: premultiplied; FL.rainNear.x)
 layout(location = 0) out vec4 outColor;
 
 // Colour grading of the tone mapped colour (0..1): white balance, a cooler, paler night, contrast (in a perceptual
@@ -141,6 +142,11 @@ void main()
     // How far the pixel is: its view depth over the far clip's (the sky: wholly).
     float d = texelFetch(depthTex, ivec2(gl_FragCoord.xy), 0).r;
     float far = 1.0;
+    // The rain (rvk rain.cpp's rain layer: not in the scene - its reflected light, premultiplied, and cover): laid
+    // over the finished picture below, after the haze, the storm's fog and the dust - a few units off, it is veiled by
+    // none of them. (Veiled as far as what was behind it, the streaks vanished where they crossed the horizon - the
+    // user.)
+    vec4 rain = FL.rainNear.x > 0.5 ? texelFetch(rainNear, ivec2(gl_FragCoord.xy), 0) : vec4(0.0);
     // Lightning (rvk rain.cpp Lightning): the strike's light on everything by its own colour, falling off away from
     // it - by night the land lit as by day for an instant - and in the sky the clouds round the strike glowing.
     if (FL.flash.w > 0.0) {
@@ -247,6 +253,10 @@ void main()
         // through - else a darker, greyer band of "sky" over a storm that covers it.
         far *= through;
     }
+    // Water: a drop hides a little of what is behind it, gives some back focused (a lens: brighter), and adds the light
+    // it reflects - clear, lighter streaks, not painted ones (the user: as our water).
+    float rainA = clamp(rain.a, 0.0, 1.0);
+    c = c * (1.0 - 0.25 * rainA) + c * (0.3 * rainA) + rain.rgb;
     c = max((c + Volumetric() * volumetric + glow) * P.params.y, vec3(0.0));
     // Night (RVK_NightDark x how much it is night): darker - the darks and middle tones down, the sky more; what is
     // bright kept (lamps, windows, the moon, stars, moonlit cloud edges), so it stands out of the dark.

@@ -17,7 +17,8 @@ layout(set = 0, binding = 0) uniform RainFrame {
     vec4 drift;         // xyz: how far the rain has moved (world; its velocity added up); w: the gust fronts' extra
                         // lean (units / s at a front's peak)
     vec4 curtains;      // x: the rain gathered into curtains along the gust fronts (0 .. 1); y: seconds of the fall a
-                        // streak shows (RVK_RainLength / RVK_RainSpeed)
+                        // streak shows (RVK_RainLength / RVK_RainSpeed); z: 1 = its motion only (the look: the rain
+                        // layer, rvk rain.cpp m_rainNear)
 } R;
 
 // The linear view depth of a depth buffer value.
@@ -29,7 +30,12 @@ vec3 RainLight(vec3 p)
 {
     vec3 V = normalize(R.camera.xyz - p);
     vec3 L = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
-    vec3 light = R.ambient.rgb * 0.55 + FL.sunColor.rgb * (0.15 + 1.2 * pow(max(dot(-V, L), 0.0), 8.0));
+    // (Water: what a drop shows is mostly the sky's light it reflects and bends - brighter than the ground's ambient -
+    // and glints towards the sun, the lamps and a lightning flash.)
+    vec3 sky = max(R.fogColour.rgb * R.fogColour.w, R.ambient.rgb) * 1.1 + R.ambient.rgb * 0.35;
+    vec3 light = sky + FL.sunColor.rgb * (0.2 + 1.6 * pow(max(dot(-V, L), 0.0), 8.0));
+    if (FL.flash.w > 0.0)
+        light += FL.flash.rgb * 1.5;
     uint count = min(FL.info.x, 64u);
     for (uint i = 0u; i < count; ++i) {
         Light li = FL.lights[i];

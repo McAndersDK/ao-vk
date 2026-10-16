@@ -365,6 +365,7 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
     Wind(fl->wind);
     WindFrame(fl->windFrame);
     Lightning(fl->flash, fl->flashView, fl->flashProj, fl->flashWorld);
+    fl->rainNear[0] = m_rainNearFrame == m_frameNumber && m_rainNear ? 1.0f : 0.0f;
     FillPushers(fl, eye);
     fl->leaves[0] = m_leaf.on ? m_leaf.wind : 0.0f;
     fl->leaves[1] = m_leaf.on ? m_leaf.flutter : 0.0f;

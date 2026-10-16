@@ -17,10 +17,15 @@ layout(location = 4) out vec4 outAlbedo;
 
 void main()
 {
-    float a = vAlpha * (1.0 - smoothstep(0.35, 1.0, abs(vCorner.y))) * smoothstep(0.0, 0.6, vCorner.x);
+    float across = abs(vCorner.y);
+    float a = vAlpha * (1.0 - smoothstep(0.35, 1.0, across)) * smoothstep(0.0, 0.6, vCorner.x);
     if (a <= 1e-3)
         discard;
-    outScene = vec4(vLight * a, a);
+    // Water: the light it reflects strongest along its edges (grazing: Fresnel), little through its middle - with the
+    // rain layer (curtains.z 0 there) the tone mapping lays it over the picture, the drop bending what is behind it;
+    // the scene's pass then keeps only its motion. (Without the layer: over the scene as it is, faint.)
+    float fresnel = mix(0.35, 1.0, smoothstep(0.1, 0.65, across));
+    outScene = R.curtains.z > 0.5 ? vec4(0.0) : vec4(vLight * fresnel * a, a);
     vec2 now = vClip.xy / vClip.w, before = vPrevClip.xy / max(vPrevClip.w, 1e-6);
     vec2 motion = vPrevClip.w > 1e-6 ? (now - before) * 0.5 * R.viewport.xy * vec2(1.0, -1.0) : vec2(0.0);
     outMotion = vec4(motion * a, 0.0, a);

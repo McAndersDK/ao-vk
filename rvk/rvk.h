@@ -2019,6 +2019,10 @@ private:
     VkPipelineLayout m_rainLayout = VK_NULL_HANDLE;
     VkPipeline m_rainPipeline = VK_NULL_HANDLE;
     VkPipeline m_splashPipeline = VK_NULL_HANDLE;
+    VkPipeline m_rainNearPipeline = VK_NULL_HANDLE;   // the streaks again, into m_rainNear alone
+    Texture* m_rainNear = nullptr;               // RGBA16F, full size: the rain drawn this frame (premultiplied) - the
+                                                 // tone mapping keeps it in front of the storm's fog and the haze
+    uint64_t m_rainNearFrame = ~0ull;            // (the frame it was drawn in)
     bool CreateRainResources(std::string* error);
     void DestroyRainResources();
     void RenderRain(VkCommandBuffer cmd);

@@ -52,5 +52,6 @@ layout(set = 0, binding = FL_BINDING, std140) uniform FrameLights {
     vec4 flashView;
     vec4 flashProj;
     vec4 flashWorld;            // ... the strike (world xyz: the storm's fog lit round it)
+    vec4 rainNear;              // x: 1 = the tone mapping's rain layer (binding 16) holds this frame's rain
     Light lights[64];
 } FL;

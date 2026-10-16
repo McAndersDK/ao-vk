@@ -161,13 +161,15 @@ bool Device::CreateHdrResources(std::string* error)
             m_props.limits.maxPushConstantsSize);
     // (The tone mapping: its images and, at kTonemapInputs, the frame lights - the lightning's flash.)
     auto tonemapSetLayout = [&](VkDescriptorSetLayout* out) {
-        VkDescriptorSetLayoutBinding b[kTonemapInputs + 1];
+        VkDescriptorSetLayoutBinding b[kTonemapInputs + 2];
         for (uint32_t i = 0; i < kTonemapInputs; ++i)
             b[i] = {i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         b[kTonemapInputs] = {kTonemapInputs, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        // (16: the rain layer - rain.cpp m_rainNear.)
+        b[kTonemapInputs + 1] = {kTonemapInputs + 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         VkDescriptorSetLayoutCreateInfo sl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         sl.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-        sl.bindingCount = kTonemapInputs + 1;
+        sl.bindingCount = kTonemapInputs + 2;
         sl.pBindings = b;
         return Check(vkCreateDescriptorSetLayout(m_device, &sl, nullptr, out), "tone mapping set layout", error);
     };
@@ -328,6 +330,7 @@ void Device::DestroyHdrResources()
     for (Texture*& t : m_sandFogTex)
         if (t) { DestroyTextureNow(t); t = nullptr; }
     if (m_sandFogShelter) { DestroyTextureNow(m_sandFogShelter); m_sandFogShelter = nullptr; }
+    if (m_rainNear) { DestroyTextureNow(m_rainNear); m_rainNear = nullptr; }
     m_sandFogShelterGen = ~0u;
     if (m_ssrTex) { DestroyTextureNow(m_ssrTex); m_ssrTex = nullptr; }
     for (Texture*& t : m_lut)
@@ -554,6 +557,8 @@ void Device::TonemapInputsPass(VkCommandBuffer cmd, Texture* dst, VkPipeline pip
 {
     Transition(cmd, dst, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     Transition(cmd, m_glow, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);   // (binding 12: the effects' share, for TAA)
+    if (m_rainNear && m_rainNearFrame == m_frameNumber)
+        Transition(cmd, m_rainNear, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);   // (binding 16: the rain layer)
     VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     color.imageView = dst->m_view;
     color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -596,7 +601,7 @@ void Device::TonemapInputsPass(VkCommandBuffer cmd, Texture* dst, VkPipeline pip
                                        {m_pointSampler, m_sandFogValid ? m_sandFogTex[1]->m_view : m_scene->m_view,
                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
     static_assert(sizeof(images) / sizeof(images[0]) == kTonemapInputs, "occlusion.glsl bindings");
-    VkWriteDescriptorSet w[kTonemapInputs + 1] = {};
+    VkWriteDescriptorSet w[kTonemapInputs + 2] = {};
     for (uint32_t i = 0; i < kTonemapInputs; ++i) {
         w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[i].dstBinding = i;
@@ -613,7 +618,15 @@ void Device::TonemapInputsPass(VkCommandBuffer cmd, Texture* dst, VkPipeline pip
     w[kTonemapInputs].descriptorCount = 1;
     w[kTonemapInputs].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     w[kTonemapInputs].pBufferInfo = &lights;
-    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_tonemapLayout, 0, kTonemapInputs + 1, w);
+    const bool rainNear = m_rainNear && m_rainNearFrame == m_frameNumber;   // (made readable before the rendering)
+    VkDescriptorImageInfo rainInfo{m_pointSampler, rainNear ? m_rainNear->m_view : m_scene->m_view,   // (unread without)
+                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    w[kTonemapInputs + 1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w[kTonemapInputs + 1].dstBinding = kTonemapInputs + 1;
+    w[kTonemapInputs + 1].descriptorCount = 1;
+    w[kTonemapInputs + 1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w[kTonemapInputs + 1].pImageInfo = &rainInfo;
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_tonemapLayout, 0, kTonemapInputs + 2, w);
     float push[64] = {};
     std::memcpy(push, params, 16 * sizeof(float));
     if (depthView == m_depthView && m_aoProjValid) {
