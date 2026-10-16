@@ -22,7 +22,8 @@ layout(push_constant) uniform Push {
     vec4 terrain;       // the terrain map: its corner x, z, 1 / its size; w: 1 = there, 2 = and its sun shade usable
     vec4 wind;          // the wind's direction x, z; its frame's offsets along, across (the gusts carried with it)
     vec4 gusts;         // x: RVK_SandGusts, y: the wind's time (s), z: the eye's shelter (0 .. 1), w: ash (1: no glow)
-    vec4 sunv;          // x: the sky round the sun seen through T ^ this (RVK_SandSun; 1: hidden as the rest)
+    vec4 sunv;          // x: the sky round the sun seen through T ^ this (RVK_SandSun; 1: hidden as the rest); y: the
+                        // tall column's share, z: its scale height; w: the rain mist's share (rain shafts, no reddening)
     vec4 shelter;       // the shelter map: its corner x, z, 1 / its size (0: none), the height its tops are taken from
 } P;
 layout(location = 0) out vec4 outFog;
@@ -76,8 +77,10 @@ float Billow(vec3 q, float h)
         return 1.0;
     vec2 side = vec2(-P.wind.y, P.wind.x);
     float along = dot(q.xz, P.wind.xy) + P.wind.z, across = dot(q.xz, side) + P.wind.w;
-    // (One scale - the haze's larger: the finer one cost a quarter of the fog and is lost in its blur.)
-    float n = GustNoise(vec3(along / 70.0, h / 22.0 + P.gusts.y * 0.015, across / 40.0));
+    // (One scale - the haze's larger: the finer one cost a quarter of the fog and is lost in its blur. The rain mist:
+    // shafts - columns hanging down from the cloud, narrow across the wind - rather than billows.)
+    float n = GustNoise(vec3(along / mix(70.0, 90.0, P.sunv.w), h / mix(22.0, 400.0, P.sunv.w) + P.gusts.y * 0.015,
+                             across / mix(40.0, 28.0, P.sunv.w)));
     float b = (0.45 + 2.0 * smoothstep(0.34, 0.68, n)) / 1.45;
     return mix(1.0, b, clamp(P.gusts.x, 0.0, 1.0));
 }
@@ -119,7 +122,7 @@ void main()
     phase = mix(phase, 1.0, P.gusts.w);          // (ash: dull, no glow towards the sun)
     float sunUp = max(toSun.y, 0.02);
     // (The dust reddens what crosses it: blue taken a little more than red.)
-    const vec3 kRedden = vec3(0.85, 1.0, 1.25);
+    vec3 kRedden = mix(vec3(0.85, 1.0, 1.25), vec3(1.0), P.sunv.w);   // (the rain mist: grey, not reddening)
     float casterFade = smoothstep(0.05, 0.17, toSun.y);   // (things' shadows fade as the sun nears the horizon)
     if (sun)
         for (int c = 0; c < int(FL.shadowParams.z); ++c) {
@@ -132,7 +135,7 @@ void main()
     // The storm's dust: a thick layer near the ground (scale height P.dens.y) and a tall thin column above it (the
     // storm's upper dust, kUpper of it at the ground, scale height kUpperHeight) - the same for the land, things high
     // up (the ships in the sky) and the sky itself, so none stands clear of what hides the others.
-    const float kUpper = 0.3, kUpperHeight = 1500.0;
+    float kUpper = P.sunv.y, kUpperHeight = P.sunv.z;
     // Its light in this direction: the sky's and the moon's; the sun through half the thick layer above (reddened),
     // its glow towards the eye softened (the light in a storm has scattered many times), and what the dust took from
     // it spread round (else a thick storm went near black). One light for the whole ray - shaded only where the sun
@@ -143,6 +146,10 @@ void main()
         vec3 mid = exp(-kRedden * (P.dens.x * (1.0 - kUpper) * P.dens.y * 0.5 / sunUp));
         sunDirect = FL.sunColor.rgb * mid * mix(1.0, phase, 0.35);   // (gentle: away from the sun as dark as the sim sand)
         base += FL.sunColor.rgb * (0.8 * max(toSun.y, 0.0)) * (1.0 - mid);
+        // (A thunderstorm's mist: under the storm's sealed cloud - little of the sun reaches it, whatever the clouds'
+        // shadow map says where the layer isn't drawn.)
+        sunDirect *= 1.0 - 0.8 * P.sunv.w;
+        base -= FL.sunColor.rgb * (0.8 * max(toSun.y, 0.0)) * (1.0 - mid) * 0.8 * P.sunv.w;
     }
     float transmit = 1.0;
     vec3 light = vec3(0.0);
@@ -172,7 +179,13 @@ void main()
         }
         shadeLast = P.terrain.w > 1.5 ? smoothstep(tm.x - 1.0, tm.x + 3.0, q.y) : 1.0;
         float a = 1.0 - exp(-sigma * dt);
-        light += transmit * a * (P.albedo.rgb * (base + sunDirect * shade));
+        vec3 lit = base + sunDirect * shade;
+        // (Lightning: the air round the strike lit by it - rvk rain.cpp Lightning.)
+        if (FL.flash.w > 0.0) {
+            vec3 off = q - FL.flashWorld.xyz;
+            lit += FL.flash.rgb * (1.5 / (1.0 + dot(off, off) / (220.0 * 220.0)));
+        }
+        light += transmit * a * (P.albedo.rgb * lit);
         transmit *= 1.0 - a;
     }
 

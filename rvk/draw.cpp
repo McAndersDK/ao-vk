@@ -364,7 +364,7 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
     fl->effects[3] = m_grassPush;
     Wind(fl->wind);
     WindFrame(fl->windFrame);
-    Lightning(fl->flash, fl->flashView, fl->flashProj);
+    Lightning(fl->flash, fl->flashView, fl->flashProj, fl->flashWorld);
     FillPushers(fl, eye);
     fl->leaves[0] = m_leaf.on ? m_leaf.wind : 0.0f;
     fl->leaves[1] = m_leaf.on ? m_leaf.flutter : 0.0f;

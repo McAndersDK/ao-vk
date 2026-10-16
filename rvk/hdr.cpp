@@ -1054,9 +1054,12 @@ bool Device::RenderSandFog(VkCommandBuffer cmd)
     push.proj[1] = m_aoProj.m[3][2];
     push.proj[2] = float(m_scene->m_width);
     push.proj[3] = float(m_scene->m_height);
-    // (Its density at the ground: the haze's - tonemap.frag's dust.w - so the distance is as buried.)
-    push.dens[0] = 0.075f * m_sand * m_sandHaze;
-    push.dens[1] = 120.0f;                                        // scale height: a storm wall, the sky buried overhead too
+    // (Its density at the ground: the haze's - tonemap.frag's dust.w - so the distance is as buried. The dust: a storm
+    // wall 120 units high, the sky buried overhead too; a thunderstorm's rain mist deeper and with little high up.)
+    const StormAir air = StormAirNow();
+    const float rainShare = 1.0f - air.sandShare;
+    push.dens[0] = air.sigma;
+    push.dens[1] = air.height;
     float ground;
     push.dens[2] = gusts[3] != 0.0f ? gusts[3] : (GroundAt(push.eye[0], push.eye[2], &ground, nullptr, nullptr) ? ground : push.eye[1] - 2.0f);
     push.dens[3] = std::max(m_sandClear, 0.0f);
@@ -1079,11 +1082,21 @@ bool Device::RenderSandFog(VkCommandBuffer cmd)
     const float sunUp = std::max(-m_frameSunDir[1], 0.02f);
     const float kRedden[3] = {0.85f, 1.0f, 1.25f};               // (sand_fog.frag's: the dust takes blue first)
     for (int i = 0; i < 3; ++i) {
-        const float through = std::exp(-kRedden[i] * push.dens[0] * 0.7f * push.dens[1] * 0.5f / sunUp);   // (the thick layer: 0.7)
+        const float through = std::exp(-kRedden[i] * push.dens[0] * (1.0f - air.upper) * push.dens[1] * 0.5f / sunUp);   // (the thick layer)
         const float sun = m_shadowValid ? m_shadowSunColor[i] : m_frameSunColor[i];
         const float moon = moonShadow ? 0.0f : m_moonColour[i] * 0.6f;
         const float typical = std::max(push.sky[i] + moon + sun * (through + 0.8f * std::max(-m_frameSunDir[1], 0.0f) * (1.0f - through)), 0.02f);
         push.albedo[i] = std::min(haze[i] / typical, 4.0f);
+    }
+    // (The rain mist: a light grey-blue as lit - its own light, not calibrated to a tint; the dust's share as above.)
+    const float kMist[3] = {0.5f, 0.53f, 0.6f};   // (a storm's distance dark grey, not a bright veil)
+    if (rainShare > 0.0f) {
+        float green[3], dust[3];
+        StormGreen(green);                       // (the mist cast green with the storm: RVK_StormGreen)
+        float mist[3];
+        for (int i = 0; i < 3; ++i) mist[i] = kMist[i] * green[i];
+        for (int i = 0; i < 3; ++i) dust[i] = air.sandShare > 0.0f ? push.albedo[i] : mist[i];
+        for (int i = 0; i < 3; ++i) push.albedo[i] = mist[i] + (dust[i] - mist[i]) * air.sandShare;
     }
     push.albedo[3] = float(m_frameNumber % 64) * 0.618034f;      // the march's offsets move on every frame
     push.sky[3] = 24.0f;                                          // steps (the blur and TAA average the jitter)
@@ -1114,8 +1127,12 @@ bool Device::RenderSandFog(VkCommandBuffer cmd)
     const float saturation = hi > 1e-4f ? (hi - lo) / hi : 0.0f;
     const float grey = 1.0f - std::clamp((saturation - 0.12f) / 0.18f, 0.0f, 1.0f);
     push.gusts[3] = m_sandForce > 0.0f ? (m_sandAsh ? 1.0f : 0.0f) : grey * grey * (3.0f - 2.0f * grey);
+    push.gusts[3] = std::max(push.gusts[3] * air.sandShare, rainShare);   // (the rain mist: dull too, under cloud)
     // RVK_SandSun: the sky round the sun seen through the dust's depth ^ this (1: as the rest of the sky - hidden).
     push.sun[0] = 1.0f - 0.95f * std::clamp(m_sandSun, 0.0f, 1.0f);
+    push.sun[1] = air.upper;                                      // the tall column's share, its scale height
+    push.sun[2] = air.upperHeight;
+    push.sun[3] = rainShare;                                      // (sand_fog.frag: rain shafts, not billows; no reddening)
     // The lee of walls and hills near the eye (the sand map's shelter): the dust there held off.
     const bool shelterMap = SandFogShelter(push.shelter);
 

@@ -37,7 +37,8 @@ layout(push_constant) uniform Push {
     vec4 dust2;         // x: the wind's clock; y: how much it surges with the gusts; z: the veil at every distance
                         // (with the fog - w bit 2 -: how much the land's light takes the dust's colour);
                         // w: + 1 = smokeCover holds this frame's smoke (blowing sand: near, not behind the sky's
-                        // veil), + 2 = sandFog holds the storm's air (RVK_SandFog: in place of the flat haze)
+                        // veil), + 2 = sandFog holds the storm's air (RVK_SandFog: in place of the flat haze), + 4 x the
+                        // rain mist's share of it in 15ths (a thunderstorm's: grey, not reddening)
     // The storm's distant gusts (rvk wind.cpp SandGusts; tonemap.frag): beyond the simulated sand round the camera,
     // billows of thicker and thinner dust drifting with the wind through the haze.
     vec4 gust0;         // xyz: the eye (world); w: the ground's height under it

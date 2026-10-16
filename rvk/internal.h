@@ -131,6 +131,7 @@ struct FrameLights {               // binding 4: per-frame data (constants.glsl 
     float flash[4];                // lightning (rain.cpp Lightning): its light on the land (rgb), w: the clouds' glow
     float flashView[4];            // ... towards the strike (view space), w: how far
     float flashProj[4];            // ... the projection's m[0][0], m[1][1], m[2][2], m[3][2]
+    float flashWorld[4];           // ... the strike (world; the storm's fog lit round it)
     GpuLight lights[kFrameLights];
 };
 

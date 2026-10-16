@@ -134,7 +134,8 @@ void Device::WindFrame(float out[4]) const
     if (SandFogOn()) {
         const float kSunPath = 0.3f, column = 0.7f * 120.0f + 0.3f * 1500.0f;
         const float up = std::max(-m_frameSunDir[1], 0.05f);
-        out[2] = std::clamp(1.0f - std::exp(-kSunPath * 0.075f * m_sand * m_sandHaze * column / up), 0.0f, 0.97f);
+        const float sand = m_sand > 0.0f && m_sandHaze > 0.0f ? 0.075f * m_sand * m_sandHaze : 0.0f;   // (the dust's alone)
+        out[2] = std::clamp(1.0f - std::exp(-kSunPath * sand * column / up), 0.0f, 0.97f);
         out[3] = 1.0f;
     } else {
         out[2] = std::clamp(m_sand * m_sandHaze * 1.6f, 0.0f, 0.75f);
@@ -154,7 +155,7 @@ void Device::WindAxes(float x, float z, float out[2]) const
 void Device::SandGusts(float out[16]) const
 {
     for (int i = 0; i < 16; ++i) out[i] = 0.0f;
-    if (m_sand <= 0.0f || m_sandHaze <= 0.0f || m_sandGusts <= 0.0f || !m_aoProjValid)
+    if (StormAirNow().sigma <= 0.0f || m_sandGusts <= 0.0f || !m_aoProjValid)   // (a dust storm's, or the rain mist's)
         return;
     const auto& v = m_aoView.m;
     for (int i = 0; i < 3; ++i) out[i] = -(v[3][0] * v[i][0] + v[3][1] * v[i][1] + v[3][2] * v[i][2]);
@@ -176,19 +177,39 @@ void Device::SandGusts(float out[16]) const
 
 // The tone mapping's sand (occlusion.glsl dust, dust2): the storm's colour; its density - the game's tint at its
 // strength (alpha ~0.38 in its sandstorm) a 50% veil at ~25 units, x RVK_SandHaze; surging with the wind.
+Device::StormAir Device::StormAirNow() const
+{
+    StormAir air;
+    const float sand = m_sand > 0.0f && m_sandHaze > 0.0f ? 0.075f * m_sand * m_sandHaze : 0.0f;
+    // (A thunderstorm's rain mist: only as the fog - ~750 units to see through at the ground in full rain.)
+    const float rain = m_sandFog > 0.0f ? 0.004f * std::clamp(m_rain, 0.0f, 1.0f) * std::max(m_rainFog, 0.0f) : 0.0f;
+    air.sigma = sand + rain;
+    air.sandShare = air.sigma > 0.0f ? sand / air.sigma : 1.0f;
+    // (The mist deeper and hardly any of it high up: the clouds stand over it, not buried as in a dust storm.)
+    air.height = 250.0f + (120.0f - 250.0f) * air.sandShare;
+    air.upper = 0.08f + (0.3f - 0.08f) * air.sandShare;
+    return air;
+}
+
 void Device::SandHaze(float out[8]) const
 {
     for (int i = 0; i < 8; ++i) out[i] = 0.0f;
-    if (m_sand <= 0.0f || m_sandHaze <= 0.0f) return;
-    // (Lit as the land: at night 40% as bright - else a glowing orange sky over dark land.)
+    const StormAir air = StormAirNow();
+    if (air.sigma <= 0.0f) return;
+    // (Lit as the land: at night 40% as bright - else a glowing orange sky over dark land. The rain mist grey-blue.)
     const float light = 1.0f - 0.6f * NightAmount();
-    for (int i = 0; i < 3; ++i) out[i] = m_sandColour[i] * light;
-    out[3] = 0.075f * m_sand * m_sandHaze;
+    float mist[3] = {0.55f, 0.58f, 0.64f}, green[3];
+    StormGreen(green);
+    for (int i = 0; i < 3; ++i) mist[i] *= green[i];
+    for (int i = 0; i < 3; ++i) out[i] = (mist[i] + (m_sandColour[i] - mist[i]) * air.sandShare) * light;
+    out[3] = air.sigma;
     out[4] = float(m_windTime);
     out[5] = 0.12f + 0.25f * std::min(m_storm + m_sand, 1.0f);
     out[6] = std::min(0.45f * m_sand * m_sandHaze, 0.6f);   // (the game's 0.38: a ~17% veil close by)
     out[6] *= 1.0f - 0.75f * m_sandEyeShelter;               // (in a hill's or a wall's lee: the air near clears)
-    out[7] = (SmokeCoverValid() ? 1.0f : 0.0f) + (m_sandFogValid ? 2.0f : 0.0f);   // (the fog: RenderSandFog)
+    // (The fog: RenderSandFog; + 4 x the rain mist's share in 15ths - tonemap.frag: what shows through not reddened.)
+    out[7] = (SmokeCoverValid() ? 1.0f : 0.0f) + (m_sandFogValid ? 2.0f : 0.0f) +
+             (m_sandFogValid ? 4.0f * std::round((1.0f - air.sandShare) * 15.0f) : 0.0f);
     // (With the fog, z: how much the light on the land takes the dust's colour - the sun's light the storm takes on
     // its way down comes to the land scattered by the dust, its colour - x RVK_SandTint.)
     if (m_sandFogValid) {

@@ -450,9 +450,9 @@ void Device::UpdateLightning()
     }
 }
 
-void Device::Lightning(float flash[4], float view[4], float proj[4]) const
+void Device::Lightning(float flash[4], float view[4], float proj[4], float world[4]) const
 {
-    for (int i = 0; i < 4; ++i) flash[i] = view[i] = proj[i] = 0.0f;
+    for (int i = 0; i < 4; ++i) flash[i] = view[i] = proj[i] = world[i] = 0.0f;
     const float f = m_lightning > 0.0f ? FlashEnvelope(m_frameClock - m_flashStart, m_flashSeed) * m_lightning : 0.0f;
     if (f <= 1e-3f || !m_aoProjValid)
         return;
@@ -470,6 +470,16 @@ void Device::Lightning(float flash[4], float view[4], float proj[4]) const
     proj[1] = m_aoProj.m[1][1];
     proj[2] = m_aoProj.m[2][2];
     proj[3] = m_aoProj.m[3][2];
+    for (int i = 0; i < 3; ++i) world[i] = m_flashPos[i];
+}
+
+// A thunderstorm's green cast (the game's storms: much of the air green - the user): its clouds and its rain mist
+// tinted towards a green-grey as it rains, its brightness kept (unit luma).
+void Device::StormGreen(float out[3]) const
+{
+    const float k = std::clamp(m_stormGreen, 0.0f, 1.0f) * std::clamp(m_rain, 0.0f, 1.0f);
+    const float green[3] = {0.89f, 1.085f, 0.846f};   // (0.82, 1, 0.78 at unit luma)
+    for (int i = 0; i < 3; ++i) out[i] = 1.0f + (green[i] - 1.0f) * k;
 }
 
 }  // namespace rvk

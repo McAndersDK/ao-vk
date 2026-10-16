@@ -85,3 +85,11 @@ Each phase playable on its own; demo scenes for each (the grass bench with a sto
   own (rain.cpp: a stroke, one or two return strokes, an afterglow over ~1.5 s): its light on everything by the
   surface's colour (the albedo target), falling off over ~450 units from the strike, and the clouds round it glowing
   (tonemap.frag; the frame lights at binding 15). Demo: --lightning-at N (the grass bench). Not yet: scud.
+- Storm sky + storm fog (storms65): a thunderstorm (the rain: the game's or RVK_StormForce) seals the sky - the
+  cloud cover at least full overcast whatever the game's puffs say, the weather map's cover 0.9..1 (cloud_weather.frag
+  W.storm), the low deck on (ragged low cloud), heavier (density x1.6) and darker. The sand fog generalised to the
+  storm's air (wind.cpp StormAirNow): a sand storm's dust, a thunderstorm's rain mist (RVK_RainFog: 0.004 a unit in
+  full rain, scale height 250, little high up), or both; the mist grey, not reddening (tonemap: dust2.w + 4 x its
+  share in 15ths), its billows rain shafts, the sun held back under the storm; lightning lights the fog round the
+  strike (FL.flashWorld). RVK_StormGreen (0.6): the storm's clouds and mist cast green-grey (the user: the game's storm
+  air is green). Cumulonimbus towers on the horizon: next, its own plan.

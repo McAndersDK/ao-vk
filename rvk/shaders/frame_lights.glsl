@@ -51,5 +51,6 @@ layout(set = 0, binding = FL_BINDING, std140) uniform FrameLights {
     vec4 flash;
     vec4 flashView;
     vec4 flashProj;
+    vec4 flashWorld;            // ... the strike (world xyz: the storm's fog lit round it)
     Light lights[64];
 } FL;

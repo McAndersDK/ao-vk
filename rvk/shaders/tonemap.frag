@@ -181,8 +181,9 @@ void main()
     // A sand or ash storm (rvk wind.cpp): the air thick with sand to the horizon - the sky wholly, the land through a
     // veil that thickens with distance, surging with the wind.
     bool smokeNear = mod(P.dust2.w, 2.0) > 0.5;
+    float fogBits = mod(P.dust2.w, 4.0), rainShare = floor(P.dust2.w / 4.0 + 0.01) / 15.0;   // (+ 4 x the rain mist's share in 15ths)
     float volumetric = 1.0;                      // (the sun's shafts: behind the fog only as much as shows through)
-    if (P.dust.w > 0.0 && P.dust2.w > 1.5) {
+    if (P.dust.w > 0.0 && fogBits > 1.5) {
         // The storm's air a lit volume (RVK_SandFog, sand_fog.frag): what is behind shows by its transmittance, the
         // light the dust scatters over it. The blowing sand (near: in front of nearly all of it) kept whole - its own
         // light S and cover a - the fog over what shows through it.
@@ -190,7 +191,7 @@ void main()
         float T = clamp(fog.a, 0.0, 1.0);
         // What shows through reddened: the dust takes blue first (exp(-k tau) = T^k per colour) - distant hills go
         // red-brown in the storm, not just paler (the user; at 0.6 / 1.6 the nearer hills went strangely red).
-        vec3 Tc = pow(vec3(max(T, 1e-6)), vec3(0.8, 1.0, 1.25));
+        vec3 Tc = pow(vec3(max(T, 1e-6)), mix(vec3(0.8, 1.0, 1.25), vec3(1.0), rainShare));   // (the rain mist: grey)
         // The light on the land under the storm the dust's colour (as bright): the sun's light the dust took on its
         // way down reaches the land scattered by it - orange under an orange sky, not the sun's own white (the user).
         // The sky's pixels not: the fog holds them.

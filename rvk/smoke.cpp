@@ -889,13 +889,14 @@ float Device::SandFogThrough(const float eye[3], const float p[3]) const
     const float len = std::sqrt(dx * dx + dy * dy + dz * dz);
     const float through = std::max(len - std::max(m_sandClear, 0.0f), 0.0f);
     if (through <= 0.0f) return 1.0f;
-    const float sigma = 0.075f * m_sand * m_sandHaze, h0 = std::max(eye[1] - ground, 0.0f);
+    const StormAir air = StormAirNow();
+    const float sigma = air.sigma, h0 = std::max(eye[1] - ground, 0.0f);
     auto layer = [&](float H) {                  // (an exponential layer's depth along the line, per unit density)
         const float k = dy / len / H;
         const float mean = std::fabs(k * len) < 1e-3f ? 1.0f : (1.0f - std::exp(-k * len)) / (k * len);
         return std::exp(-h0 / H) * mean * through;
     };
-    return std::exp(-sigma * (0.7f * layer(120.0f) + 0.3f * layer(1500.0f)));
+    return std::exp(-sigma * ((1.0f - air.upper) * layer(air.height) + air.upper * layer(air.upperHeight)));
 }
 
 void Device::RenderSmoke(VkCommandBuffer cmd)

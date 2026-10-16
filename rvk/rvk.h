@@ -353,7 +353,16 @@ public:
     void SetSandSun(float s) { m_sandSun = s; }                    // RVK_SandSun (sand_fog.frag)
     void SetSandTint(float s) { m_sandTint = s; }                  // RVK_SandTint (tonemap.frag)
     float SandFogThrough(const float eye[3], const float p[3]) const;   // (smoke.cpp)
-    bool SandFogOn() const { return m_sandFog > 0.0f && m_sand > 0.01f && m_sandHaze > 0.0f; }
+    // The storm's air in the fog (sand_fog.frag): a sand or ash storm's dust, a thunderstorm's rain mist (RVK_RainFog),
+    // or both - how thick at the ground (per unit), the dust's share, the thick layer's scale height, the share of the
+    // tall column above (scale height upperHeight). (wind.cpp)
+    struct StormAir { float sigma = 0.0f, sandShare = 1.0f, height = 120.0f, upper = 0.3f, upperHeight = 1500.0f; };
+    StormAir StormAirNow() const;
+    void SetRainFog(float s) { m_rainFog = s; }                    // RVK_RainFog (x; 0: none)
+    void SetStormGreen(float s) { m_stormGreen = s; }              // RVK_StormGreen (0..1)
+    // A thunderstorm's green cast (RVK_StormGreen x how hard it rains): per channel, about unit brightness (rain.cpp).
+    void StormGreen(float out[3]) const;
+    bool SandFogOn() const { return m_sandFog > 0.0f && ((m_sand > 0.01f && m_sandHaze > 0.0f) || m_rain * m_rainFog > 0.01f); }
     bool SmokeCoverValid() const { return m_smokeHalf && m_smokeHalfFrame == m_frameNumber; }
     // Grass and plants bending out of the way of characters walking through them (0 = off; scales reach and bend).
     void SetGrassPush(float strength) { m_grassPush = strength; m_frameLightsDirty = true; }
@@ -1111,7 +1120,7 @@ private:
     void SkyWind(float out[2]) const;
     void UpdateWind();                           // the frame's shared wind (wind.cpp): direction, strength, gusts, clock
     void UpdateLightning();                      // a strike from the game's glow last frame (rain.cpp)
-    void Lightning(float flash[4], float view[4], float proj[4]) const;   // this frame's flash (FrameLights)
+    void Lightning(float flash[4], float view[4], float proj[4], float world[4]) const;   // this frame's flash (FrameLights)
     float Gusts() const { return std::max(m_grassGusts, 0.0f) * m_windGusts; }   // RVK_GrassGusts x the storm's
     float m_cloudWindSpeed = 8.0f;               // the clouds' drift (world units a second), eased (UpdateCloudDrift)
     static const char* SkyName(float cloudiness);
@@ -1969,6 +1978,8 @@ private:
     uint32_t m_sandShelterGen = 0, m_sandGroundShelterGen = ~0u;
     float m_sandEyeShelter = 0.0f;               // the camera's (eased): the near haze held off
     float m_sandGusts = 1.0f;                    // RVK_SandGusts: the distant gusts in the haze (0 none)
+    float m_rainFog = 1.0f;                      // RVK_RainFog: a thunderstorm's rain mist in the fog, x
+    float m_stormGreen = 0.6f;                   // RVK_StormGreen: its clouds and mist cast green (0: grey)
     float m_sandFog = 1.0f;                      // RVK_SandFog: the storm's air a lit volume (docs/sand-fog-plan.md)
     float m_sandSun = 0.9f;                      // RVK_SandSun: how clearly the sun shows through the fog (0 .. 1)
     float m_sandTint = 0.6f;                     // RVK_SandTint: the light under the fog the dust's colour (0 .. 1)

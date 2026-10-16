@@ -95,7 +95,7 @@ constexpr float kLayerRadius = 400000.0f;       // the sphere it bends round (th
                                                 // far clouds below the eye's level, onto the hills)
 constexpr float kLayerReach = 16000.0f;         // the march's farthest (world)
 struct WeatherFrame {
-    float area[4], info[4], drift[4];
+    float area[4], info[4], drift[4], storm[4];
 };
 
 struct LayerFrame {
@@ -1038,8 +1038,10 @@ void Device::MarchCloudPuffs(VkCommandBuffer cmd, const std::vector<std::pair<fl
         // Rain (rvk rain.cpp: how hard, eased): the clouds heavier - darker, greyer, denser.
         const float storm = std::clamp(m_rain, 0.0f, 1.0f);
         const float grey = (p.colour[0] + p.colour[1] + p.colour[2]) / 3.0f;
+        float green[3];
+        StormGreen(green);                       // (a thunderstorm's green cast: RVK_StormGreen)
         for (int k = 0; k < 3; ++k)
-            cf.colour[k] = (p.colour[k] + (grey - p.colour[k]) * 0.6f * storm) * (1.0f - 0.25f * storm) * m_cloudParams.brightness;
+            cf.colour[k] = (p.colour[k] + (grey - p.colour[k]) * 0.6f * storm) * (1.0f - 0.25f * storm) * m_cloudParams.brightness * green[k];
         cf.colour[3] = std::clamp(p.colour[3], 0.0f, 1.0f);
         // The sun into mesh space (a direction: the inverse's 3x3; normalised in the shader).
         for (int j = 0; j < 3; ++j)
@@ -1320,7 +1322,9 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
     const float sheets = CloudSheetsOn() ? std::min(m_cloudParams.sheet, 1.0f) * m_skySheets : 0.0f;
     const float fixedSky = 0.42f + 0.05f * flatShare - 0.09f * sheets;   // (as the game's puffs say: always scattered)
     const float ownSky = 0.95f * sky - 0.06f * sheets;   // (overcast: hardly a gap)
-    const float cloudy = std::clamp(present * (fixedSky + (ownSky - fixedSky) * vary) + rainy * 0.55f, 0.0f, 1.0f);
+    // A thunderstorm (the rain: the game's, or RVK_StormForce): the sky closed over whatever else says - no open sky.
+    const float sealed = smoothstep01(0.05f, 0.5f, rain);
+    const float cloudy = std::max(std::clamp(present * (fixedSky + (ownSky - fixedSky) * vary) + rainy * 0.55f, 0.0f, 1.0f), sealed);
     // (Flat sheets: lumpy layered cloud - stratocumulus - not a thin stratus band, which seen from below at a low
     // angle smears into waves and streaks.)
     const float type = std::clamp(0.5f + 0.5f * rain - 0.12f * flatShare * (1.0f - rain) +
@@ -1333,11 +1337,14 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
         m_cloudWispy += ((weight > 0.0f ? wispy / weight : 0.0f) - m_cloudWispy) * k;   // (the game's wispy puffs' share)
         // The low deck (stratus): with rain, under the game's flat sheets. (Not by how heavily the game fogs its clouds:
         // its storms 73-77%, but a fair day in a teal-fogged zone 79%.)
-        const float deck = std::clamp(smoothstep01(0.4f, 1.0f, flatShare) * smoothstep01(0.03f, 0.2f, rain), 0.0f, 1.0f);
+        // (In a thunderstorm whatever the game draws: ragged low cloud under the storm's base.)
+        const float deck = std::max(std::clamp(smoothstep01(0.4f, 1.0f, flatShare) * smoothstep01(0.03f, 0.2f, rain), 0.0f, 1.0f),
+                                    0.85f * smoothstep01(0.1f, 0.6f, rain));
         m_cloudDeck += (deck - m_cloudDeck) * k;
         m_cloudWeatherClock = m_frameClock;
     }
     wf.info[1] = m_cloudCloudy;
+    wf.storm[0] = smoothstep01(0.1f, 0.7f, rain);   // (cloud_weather.frag: the storm's cover sealed)
     wf.info[2] = m_cloudType;
     static const float typeOverride = getenv("RANDYVK_CLOUD_TYPE") ? float(atof(getenv("RANDYVK_CLOUD_TYPE"))) : -1.0f;
     if (typeOverride >= 0.0f)
@@ -1438,7 +1445,7 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     const float stormNow = std::clamp(m_rain, 0.0f, 1.0f);
     const float weatherDetail = (1.0f - 0.3f * stormNow) * (1.0f + 0.2f * (1.0f - std::clamp(m_cloudCloudy, 0.0f, 1.0f)));
     lf.shape[2] = 0.65f * m_cloudParams.detail * weatherDetail;
-    lf.shape[3] = 0.02f * m_cloudParams.density * (1.0f + 0.2f * stormNow);
+    lf.shape[3] = 0.02f * m_cloudParams.density * (1.0f + 0.6f * stormNow);   // (a storm's: heavy, dark underneath)
     // The wind carries the shapes (and they evolve: up through the noise) - UpdateCloudDrift.
     lf.wind[0] = m_cloudDrift[0];
     lf.wind[1] = m_cloudDrift[2];
@@ -1508,12 +1515,17 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
                                            m_trueSunDir[2] * m_trueSunDir[2]), 1e-6f);
         const float t = std::clamp((-m_trueSunDir[1] / l + 0.2f) / 0.23f, 0.0f, 1.0f);
         const float night = 1.0f - t * t * (3.0f - 2.0f * t);
-        lf.tint[3] = m_cloudParams.brightness * (1.0f + (m_cloudParams.night - 1.0f) * night) * (1.0f - 0.4f * storm);
+        lf.tint[3] = m_cloudParams.brightness * (1.0f + (m_cloudParams.night - 1.0f) * night) * (1.0f - 0.5f * storm);
     }
     // The sky's light: its hue (the haze's, a quarter: whiter clouds), about unit brightness - the tint carries how light.
     const float luma = std::max(0.3f * m_cloudHaze[0] + 0.59f * m_cloudHaze[1] + 0.11f * m_cloudHaze[2], 1e-3f);
     for (int k = 0; k < 3; ++k) lf.ambient[k] = 0.75f + 0.25f * m_cloudHaze[k] / luma;
     lf.ambient[3] = storm;
+    {   // (A thunderstorm's green cast - RVK_StormGreen: the layer's colour and the sky's light on it.)
+        float green[3];
+        StormGreen(green);
+        for (int k = 0; k < 3; ++k) { lf.tint[k] *= green[k]; lf.ambient[k] *= green[k]; }
+    }
     for (int k = 0; k < 3; ++k) lf.haze[k] = m_cloudHaze[k];
     if (m_frameNumber % 600 == 2)
         Log("clouds: colour %.2f %.2f %.2f (the puffs as the game shows them: %.0f%% fog), haze %.2f %.2f %.2f",
