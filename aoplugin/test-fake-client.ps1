@@ -53,7 +53,7 @@ function Run([string]$name, [bool]$withRenderer, [string]$sets) {
 
 function Has([string]$text, [string]$literal) { return $text.Contains($literal) }
 
-$r = Run "renderer" $true "AOVK_FpsCap=double:200;RVK_Preset=double:3;RVK_Prepass=bool:0;RVK_PixelLight=bool:0;AOVK_ObjDist=double:250;DisplayGroundFullQualityRadius=double:30"
+$r = Run "renderer" $true "AOVK_FpsCap=double:200;RVK_Preset=double:3;RVK_PixelLight=bool:0;AOVK_ObjDist=double:250;DisplayGroundFullQualityRadius=double:30"
 if ($r) {
     Check "ao-vk runs" ($r.Log -match "ao-vk [0-9.]+: running")
     Check "the renderer's settings are found" ($r.Log -match "\[ao-vk\] renderer settings: [1-9][0-9]* \(presets: yes\)")
@@ -62,8 +62,8 @@ if ($r) {
     Check "... changes from the window" ((Has $r.Log "[ao-vk] maximum frame rate 200") -and (Has $r.Stdout "max frame rate = 200"))
     Check "... and is kept in AOPlugins.ini" ($r.Ini -match "(?s)\[ao-vk\][^\[]*AOVK_FpsCap=200")
     Check "a preset reaches the renderer" (Has $r.Log "[ao-vk] preset Ultra")
-    Check "a change by hand reaches the renderer" (Has $r.Log "[ao-vk] RVK_Prepass = 0")
-    Check "... which saves it (randy-vk.ini)" ($r.Randy -match "RVK_Prepass\s*=\s*0")
+    Check "a change by hand reaches the renderer" (Has $r.Log "[ao-vk] RVK_PixelLight = 0")
+    Check "... which saves it (randy-vk.ini)" ($r.Randy -match "RVK_PixelLight\s*=\s*0")
     Check "a change of a preset setting: the preset buttons show Custom" ($r.Values -match "RVK_Preset=int:99")
     Check "renderer settings aren't kept in AOPlugins.ini" (-not ($r.Ini -match "RVK_"))
     Check "one Renderer tab, the skin's copy replaced" ((([regex]::Matches($r.Xml, 'label="Renderer"')).Count -eq 1) -and -not (Has $r.Xml "STALE"))
@@ -71,8 +71,10 @@ if ($r) {
     Check "... the game's slider is remembered" ($r.Ini -match "AOVK_GroundHQ=30")
     Check "... object detail distance changes" (Has $r.Log "statel rings at 250%")
     Check "... without N3 / DisplaySystem nothing is patched, and the log says so" (Has $r.Log "view distance: characters stock (not patched), ground stock (not patched), objects stock (not patched)")
+    Check "disconnect to login: without GUI.dll nothing is patched, and the log says so" (Has $r.Log "disconnect: lost connection stock (not patched), timeout stock (not patched)")
     Check "... the tab has the view distance note" (Has $r.Xml "own sliders go further")
     Check "the tab has the presets, the frame rate and the settings" ((Has $r.Xml 'opt_variable="RVK_Preset"') -and (Has $r.Xml 'opt_variable="AOVK_FpsCap"') -and (Has $r.Xml 'opt_variable="RVK_Enhance"'))
+    Check "... and an Advanced tab with the sliders, not in the Renderer tab" ((([regex]::Matches($r.Xml, 'label="Advanced"')).Count -eq 1) -and ([regex]::Matches($r.Xml, 'opt_variable="RVK_Tess"')).Count -eq 1 -and ($r.Xml.IndexOf('opt_variable="RVK_Tess"') -gt $r.Xml.IndexOf('label="Advanced"')))
 }
 
 $r = Run "no-renderer" $false ""

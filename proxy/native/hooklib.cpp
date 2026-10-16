@@ -67,6 +67,24 @@ void* HookAt(uint8_t* at, size_t count, const size_t* rel32, size_t rel32Count, 
     return tramp;
 }
 
+bool EhPrologEntry(HMODULE module, const uint8_t* at)
+{
+    // MSVC's _EH_prolog (the static CRT's, linked into the module): the same code in every build of it - GUI.dll's at
+    // 0x1738A4 in the PRK client's (0x5CD32BEA), 0x173954 in the 2023 one's (0x647A09DA).
+    static const uint8_t kEhProlog[] = {0x6A, 0xFF, 0x50, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x50, 0x8B,
+                                        0x44, 0x24, 0x0C, 0x64, 0x89, 0x25, 0x00, 0x00, 0x00, 0x00, 0x89,
+                                        0x6C, 0x24, 0x0C, 0x8D, 0x6C, 0x24, 0x0C, 0x50, 0xC3};
+    if (!at || at[0] != 0xB8 || at[5] != 0xE8)
+        return false;
+    const auto* base = reinterpret_cast<const uint8_t*>(module);
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + reinterpret_cast<const IMAGE_DOS_HEADER*>(base)->e_lfanew);
+    int32_t rel;
+    std::memcpy(&rel, at + 6, 4);
+    const uint8_t* callee = at + 10 + rel;
+    return callee >= base && callee + sizeof(kEhProlog) <= base + nt->OptionalHeader.SizeOfImage &&
+           std::memcmp(callee, kEhProlog, sizeof(kEhProlog)) == 0;
+}
+
 uint8_t* CheckedEntry(HMODULE gui, const char* name, const char* what)
 {
     auto* at = reinterpret_cast<uint8_t*>(GetProcAddress(gui, name));
@@ -74,11 +92,7 @@ uint8_t* CheckedEntry(HMODULE gui, const char* name, const char* what)
         Log("interface: %s not exported - not hooked", what);
         return nullptr;
     }
-    constexpr uint32_t kEhProlog = 0x1738A4;        // FUN_101738a4 in GUI.dll (image base 0x10000000)
-    int32_t rel;
-    std::memcpy(&rel, at + 6, 4);
-    const uint8_t* callee = at + 10 + rel;
-    if (at[0] != 0xB8 || at[5] != 0xE8 || callee != reinterpret_cast<uint8_t*>(gui) + kEhProlog) {
+    if (!EhPrologEntry(gui, at)) {
         Log("interface: %s - unexpected code (another GUI.dll build?), not hooked", what);
         return nullptr;
     }

@@ -11,7 +11,7 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
     message(FATAL_ERROR "ao-vk.dll is loaded by the 32-bit client: build it for x86 (CMakePresets.json)")
 endif()
 
-add_library(ao-vk SHARED ao_vk_plugin.cpp view_distance.cpp)
+add_library(ao-vk SHARED ao_vk_plugin.cpp view_distance.cpp camp_on_disconnect.cpp)
 set_target_properties(ao-vk PROPERTIES PREFIX "")
 target_include_directories(ao-vk PRIVATE include)
 target_compile_definitions(ao-vk PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)

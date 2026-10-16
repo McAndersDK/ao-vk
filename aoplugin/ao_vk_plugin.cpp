@@ -2,17 +2,20 @@
 //
 // randy31.dll is the renderer and stays independent of AOPlugins: it exports its settings table as a small C
 // interface (RvkSettings_* / RvkPresets_*, proxy/ddraw/rvk_settings.h) and saves its settings itself (randy-vk.ini).
-// This plugin turns that table into a "Renderer" tab: each setting a DValue (bool, or int - float settings count their
-// steps) bound to a widget, changes passed on to the renderer. The preset buttons, and the client's frame rate cap
-// (AFCM.dll's Timer_t::m_vMaximumFramerate, kept by AOPlugins in AOPlugins.ini) sit at the top.
+// This plugin turns that table into two tabs: each setting a DValue (bool, or int - float settings count their
+// steps) bound to a widget, changes passed on to the renderer. "Renderer" has the preset buttons, the client's frame
+// rate cap (AFCM.dll's Timer_t::m_vMaximumFramerate, kept by AOPlugins in AOPlugins.ini) and the on / off switches;
+// "Advanced" has every slider and choice.
 //
 // Ported from the Renderer tab of the AOReloaded fork (wannabuh/AOReloaded, src/core/renderer_settings.cpp and
 // fps_cap.cpp), where it lived inside version.dll.
 
 #include "aop_plugin.h"
+#include "camp_on_disconnect.h"
 #include "view_distance.h"
 
 #include <windows.h>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -47,6 +50,7 @@ int(__cdecl* g_presetApply)(uint32_t);
 int(__cdecl* g_presetCurrent)();
 bool g_available;
 std::string g_missing = "ao-vk's renderer (randy31.dll) isn't installed";   // why there's no renderer tab content
+std::vector<std::string> g_dnames;              // each setting's DValue, by table index (empty: none)
 
 constexpr char kPresetVar[] = "RVK_Preset";     // the preset buttons; kCustom: none matches
 constexpr int32_t kCustom = 99;
@@ -62,9 +66,41 @@ bool GetInfo(uint32_t i, RvkSettingInfo& info) {
     return g_get(i, &info) != 0 && info.name;
 }
 
-bool Usable(const RvkSettingInfo& s) {
-    const size_t len = std::strlen(s.name);
-    return len > 0 && len <= 15;                // the game's DValue name limit
+// The DValue of setting `i`: its name, cut to the game's 15 characters (RVK_SandContrast: RVK_SandContras).
+// Null when it has none (no name, or the cut name is another setting's).
+const char* DName(uint32_t i) { return i < g_dnames.size() && !g_dnames[i].empty() ? g_dnames[i].c_str() : nullptr; }
+
+void NameSettings() {
+    const uint32_t count = g_count();
+    g_dnames.assign(count, std::string());
+    for (uint32_t i = 0; i < count; ++i) {
+        RvkSettingInfo s;
+        if (!GetInfo(i, s) || !*s.name) continue;
+        std::string name(s.name, std::min<size_t>(std::strlen(s.name), 15));
+        bool taken = false;
+        for (uint32_t j = 0; j < i; ++j) taken |= g_dnames[j] == name;
+        if (taken) {
+            g_host->log(g_host, "%s: DValue %s is another setting's - not in the tabs", s.name, name.c_str());
+            continue;
+        }
+        g_dnames[i] = std::move(name);
+    }
+}
+
+// A setting, with its DValue, for writing the tabs.
+struct Entry {
+    RvkSettingInfo s;
+    const char* dname;
+};
+
+std::vector<Entry> AllSettings() {
+    std::vector<Entry> all;
+    const uint32_t count = g_count();
+    for (uint32_t i = 0; i < count; ++i) {
+        Entry e;
+        if (GetInfo(i, e.s) && (e.dname = DName(i)) != nullptr) all.push_back(e);
+    }
+    return all;
 }
 
 int32_t ToSteps(const RvkSettingInfo& s, float v) { return static_cast<int32_t>(std::lround(v / s.step)); }
@@ -110,18 +146,16 @@ void AddSetting(const char* name, uint32_t type, int32_t value, int32_t min, int
 
 // Each renderer setting a DValue. The renderer keeps them (randy-vk.ini): AOPlugins doesn't save them.
 void RegisterRendererSettings() {
-    const uint32_t count = g_count();
     uint32_t added = 0;
-    for (uint32_t i = 0; i < count; ++i) {
-        RvkSettingInfo s;
-        if (!GetInfo(i, s) || !Usable(s)) continue;
+    for (const Entry& e : AllSettings()) {
+        const RvkSettingInfo& s = e.s;
         if (s.type == kBool)
-            AddSetting(s.name, AOP_SETTING_BOOL, s.value != 0.0f, 0, 1, AOP_SETTING_NOT_SAVED);
+            AddSetting(e.dname, AOP_SETTING_BOOL, s.value != 0.0f, 0, 1, AOP_SETTING_NOT_SAVED);
         else if (s.type == kFloat)
-            AddSetting(s.name, AOP_SETTING_INT, ToSteps(s, s.value), ToSteps(s, s.min), ToSteps(s, s.max),
+            AddSetting(e.dname, AOP_SETTING_INT, ToSteps(s, s.value), ToSteps(s, s.min), ToSteps(s, s.max),
                        AOP_SETTING_NOT_SAVED);
         else
-            AddSetting(s.name, AOP_SETTING_INT, static_cast<int32_t>(std::lround(s.value)),
+            AddSetting(e.dname, AOP_SETTING_INT, static_cast<int32_t>(std::lround(s.value)),
                        static_cast<int32_t>(s.min), static_cast<int32_t>(s.max), AOP_SETTING_NOT_SAVED);
         ++added;
     }
@@ -132,19 +166,19 @@ void RegisterRendererSettings() {
 // Every renderer setting's DValue (and the preset buttons) to the renderer's values - a preset changes many at once.
 // setSetting: the options window follows, without reporting the change back here.
 void SyncAll() {
-    const uint32_t count = g_count();
-    for (uint32_t i = 0; i < count; ++i) {
-        RvkSettingInfo s;
-        if (GetInfo(i, s) && Usable(s)) g_host->setSetting(g_host, s.name, AsDValue(s, s.value));
-    }
+    for (const Entry& e : AllSettings()) g_host->setSetting(g_host, e.dname, AsDValue(e.s, e.s.value));
     if (g_presetCount) g_host->setSetting(g_host, kPresetVar, CurrentPreset());
 }
 
 void TryRenderer() {
     if (g_available) return;
-    g_available = Resolve();
-    if (g_available) RegisterRendererSettings();
-    else g_host->log(g_host, "no renderer settings: %s", g_missing.c_str());
+    if (!Resolve()) {
+        g_host->log(g_host, "no renderer settings: %s", g_missing.c_str());
+        return;
+    }
+    NameSettings();
+    RegisterRendererSettings();
+    g_available = true;                         // only now: the tab writers and settingChanged read the names
 }
 
 // ---- The frame rate cap ----
@@ -196,11 +230,10 @@ bool Is(const char* a, const char* b) { return a && b && std::strcmp(a, b) == 0;
 bool IsExperimental(const RvkSettingInfo& s) { return Is(s.section, "Experimental"); }
 
 // The settings whose `parent` is `p`, of the requested kind (bool switches or values).
-std::vector<const RvkSettingInfo*> ChildrenOf(const std::vector<RvkSettingInfo>& all, const RvkSettingInfo& p,
-                                              bool bools) {
-    std::vector<const RvkSettingInfo*> list;
-    for (const RvkSettingInfo& c : all)
-        if (Is(c.parent, p.name) && (c.type == kBool) == bools) list.push_back(&c);
+std::vector<const Entry*> ChildrenOf(const std::vector<Entry>& all, const Entry& p, bool bools) {
+    std::vector<const Entry*> list;
+    for (const Entry& c : all)
+        if (Is(c.s.parent, p.s.name) && (c.s.type == kBool) == bools) list.push_back(&c);
     return list;
 }
 
@@ -214,28 +247,35 @@ void Note(std::string& x, const char* text) {
     x += "        <TextView value=\"" + Escape(text) + "\" font=\"LARGE\" layout_borders=\"Rect(10,0,0,3)\" />\n";
 }
 
-void CheckBox(std::string& x, const RvkSettingInfo& s, int indent) {
+// The tab's title and the line under it.
+void Title(std::string& x, const char* title, const char* text) {
+    x += "        <TextView value=\"" + Escape(title) + "\" font=\"HUGE\" layout_borders=\"Rect(0,0,0,5)\" />\n";
+    x += "        <TextView value=\"" + Escape(text) + "\" font=\"LARGE\" layout_borders=\"Rect(0,0,0,10)\" />\n";
+}
+
+void CheckBox(std::string& x, const Entry& e, int indent) {
     char attrs[128];
     std::snprintf(attrs, sizeof(attrs),
                   "\" font=\"LARGE\" layout_borders=\"Rect(%d,0,0,0)\" opt_type=\"variant\" opt_variable=\"", indent);
-    x += "        <OptionCheckBox label=\"" + Escape(s.label) + attrs + s.name + "\"/>\n";
+    x += "        <OptionCheckBox label=\"" + Escape(e.s.label) + attrs + e.dname + "\"/>\n";
 }
 
 // A slider (int: the value; float: steps, shown scaled back) or, for a choice, radio buttons of its values.
-void Value(std::string& x, const RvkSettingInfo& s) {
+void Value(std::string& x, const Entry& e) {
+    const RvkSettingInfo& s = e.s;
     if (s.type == kChoice && s.choices) {
         x += "        <OptionRadioButtonGroup label=\"" + Escape(s.label) +
-             ":\" font=\"LARGE\" layout_borders=\"Rect(10,0,0,3)\" opt_type=\"variant\" opt_variable=\"" + s.name +
+             ":\" font=\"LARGE\" layout_borders=\"Rect(10,0,0,3)\" opt_type=\"variant\" opt_variable=\"" + e.dname +
              "\">\n";
         for (const char* c = s.choices; *c;) {
             while (*c == ' ') ++c;
-            const char* e = c;
-            while (*e && *e != ' ') ++e;
-            if (e == c) break;
-            const std::string value(c, e);
+            const char* end = c;
+            while (*end && *end != ' ') ++end;
+            if (end == c) break;
+            const std::string value(c, end);
             x += "          <RadioButton label=\"" + Escape(value.c_str()) + "\" value=\"" + Escape(value.c_str()) +
                  "\"/>\n";
-            c = e;
+            c = end;
         }
         x += "        </OptionRadioButtonGroup>\n";
         return;
@@ -249,7 +289,7 @@ void Value(std::string& x, const RvkSettingInfo& s) {
         std::snprintf(attrs, sizeof(attrs),
                       "\" font=\"LARGE\" value_fmt=\"&lt;font color=#70C4D0&gt;%%.0f&lt;/font&gt;\" value_scale=\"1\"/>\n");
     x += "        <OptionSlider label=\"" + Escape(s.label) +
-         ":\" layout_borders=\"Rect(10,0,0,3)\" opt_type=\"variant\" opt_variable=\"" + s.name + attrs;
+         ":\" layout_borders=\"Rect(10,0,0,3)\" opt_type=\"variant\" opt_variable=\"" + e.dname + attrs;
 }
 
 void FrameRate(std::string& x, int top) {
@@ -271,82 +311,90 @@ void Presets(std::string& x) {
     Note(x, "To keep a setup of your own, back up randy-vk.ini.");
 }
 
-// The experimental features: the switches first (so they sit right under the other enhancements), then their values
-// under each feature.
-void Experimental(std::string& x, const std::vector<RvkSettingInfo>& all) {
-    bool any = false;
-    for (const RvkSettingInfo& s : all) any |= !s.parent && IsExperimental(s);
-    if (!any) return;
-    Heading(x, "Experimental", 6);
-    Note(x, "New and unfinished features. Off by default; they may be unstable or change.");
-    for (const RvkSettingInfo& p : all) {
-        if (p.parent || !IsExperimental(p)) continue;
-        CheckBox(x, p, 10);
-        for (const RvkSettingInfo* c : ChildrenOf(all, p, true)) CheckBox(x, *c, 30);
-    }
-    for (const RvkSettingInfo& p : all) {
-        if (p.parent || !IsExperimental(p)) continue;
-        const std::vector<const RvkSettingInfo*> values = ChildrenOf(all, p, false);
-        if (values.empty()) continue;
-        Heading(x, p.label, 8);
-        for (const RvkSettingInfo* v : values) Value(x, *v);
-    }
-}
-
-// Every on / off option at the top (by section, a feature's own options indented under it), the experimental ones
-// in a block of their own, then the values (sliders, choices) in blocks headed by their feature or section.
-void __cdecl WriteTab(void* /*user*/, AopBuffer* out) {
+// The Renderer tab: the presets, the frame rate cap and view distance, then every on / off option (by section, a
+// feature's own options indented under it) and the experimental features' switches in a block of their own.
+// Their values (sliders, choices) are in the Advanced tab, so this one stays short.
+void __cdecl WriteRendererTab(void* /*user*/, AopBuffer* out) {
     std::string x;
-    x += "        <TextView value=\"ao-vk renderer\" font=\"HUGE\" layout_borders=\"Rect(0,0,0,5)\" />\n";
     if (!g_available) {
-        x += "        <TextView value=\"" + Escape(g_missing.c_str()) +
-             ". The frame rate cap works without it.\" font=\"LARGE\" layout_borders=\"Rect(0,0,0,10)\" />\n";
+        Title(x, "ao-vk renderer", (g_missing + ". The frame rate cap and view distance work without it.").c_str());
         FrameRate(x, 0);
         aovk::viewdist::WriteTab(x);
         Out(out, x);
         return;
     }
-    x += "        <TextView value=\"Changes apply at once. Settings are saved to randy-vk.ini.\" font=\"LARGE\""
-         " layout_borders=\"Rect(0,0,0,10)\" />\n";
+    Title(x, "ao-vk renderer", "Changes apply at once. Settings are saved to randy-vk.ini.");
+    // ao-vk reads the ground as the game's Shadows mode draws it (a base pass and a lightmap pass) for its grass,
+    // valley mist and terrain lighting; the mode is the player's to set.
+    Note(x, "Set Ground render mode to Shadows in the game's video options: the grass and the terrain's lighting"
+            " need it.");
     if (g_presetCount) Presets(x);
     FrameRate(x, g_presetCount ? 12 : 0);
     aovk::viewdist::WriteTab(x);
 
-    std::vector<RvkSettingInfo> all;
-    const uint32_t count = g_count();
-    for (uint32_t i = 0; i < count; ++i) {
-        RvkSettingInfo s;
-        if (GetInfo(i, s) && Usable(s)) all.push_back(s);
-    }
-
+    const std::vector<Entry> all = AllSettings();
     Heading(x, "Options", 16);
     const char* section = "";
-    for (const RvkSettingInfo& s : all) {
-        if (s.type != kBool || s.parent || IsExperimental(s)) continue;
-        if (!Is(section, s.section)) {
-            section = s.section;
+    for (const Entry& e : all) {
+        if (e.s.type != kBool || e.s.parent || IsExperimental(e.s)) continue;
+        if (!Is(section, e.s.section)) {
+            section = e.s.section;
             Heading(x, section, 6);
         }
-        CheckBox(x, s, 10);
-        for (const RvkSettingInfo* c : ChildrenOf(all, s, true)) CheckBox(x, *c, 30);
+        CheckBox(x, e, 10);
+        for (const Entry* c : ChildrenOf(all, e, true)) CheckBox(x, *c, 30);
     }
-    Experimental(x, all);
 
-    Heading(x, "Adjustments", 16);
-    const char* heading = "";
-    for (const RvkSettingInfo& s : all) {
-        if (s.parent || IsExperimental(s)) continue;
-        if (s.type == kBool) {
-            const std::vector<const RvkSettingInfo*> values = ChildrenOf(all, s, false);
-            if (values.empty()) continue;
-            Heading(x, s.label, 8);
-            heading = s.label;
-            for (const RvkSettingInfo* v : values) Value(x, *v);
-        } else {
-            if (!Is(heading, s.section)) Heading(x, s.section, 8);
-            heading = s.section;
-            Value(x, s);
+    bool any = false;
+    for (const Entry& e : all) any |= !e.s.parent && IsExperimental(e.s);
+    if (any) {
+        Heading(x, "Experimental", 6);
+        Note(x, "New and unfinished features. Off by default; they may be unstable or change.");
+        for (const Entry& p : all) {
+            if (p.s.parent || !IsExperimental(p.s)) continue;
+            CheckBox(x, p, 10);
+            for (const Entry* c : ChildrenOf(all, p, true)) CheckBox(x, *c, 30);
         }
+    }
+    Out(out, x);
+}
+
+// The Advanced tab: every value (sliders, choices) - a block per feature (its label) or, for values of no feature,
+// one per section; then the experimental features' values.
+void __cdecl WriteAdvancedTab(void* /*user*/, AopBuffer* out) {
+    std::string x;
+    if (!g_available) {
+        Title(x, "ao-vk renderer: advanced", (g_missing + ".").c_str());
+        Out(out, x);
+        return;
+    }
+    Title(x, "ao-vk renderer: advanced", "Every slider and choice. Changes apply at once. Settings are saved to"
+                                         " randy-vk.ini.");
+    const std::vector<Entry> all = AllSettings();
+    const char* heading = "";
+    for (const Entry& e : all) {
+        if (e.s.parent || IsExperimental(e.s)) continue;
+        if (e.s.type == kBool) {
+            const std::vector<const Entry*> values = ChildrenOf(all, e, false);
+            if (values.empty()) continue;
+            Heading(x, e.s.label, 8);
+            heading = e.s.label;
+            for (const Entry* v : values) Value(x, *v);
+        } else {
+            if (!Is(heading, e.s.section)) Heading(x, e.s.section, 8);
+            heading = e.s.section;
+            Value(x, e);
+        }
+    }
+    bool experimental = false;
+    for (const Entry& p : all) {
+        if (p.s.parent || !IsExperimental(p.s)) continue;
+        const std::vector<const Entry*> values = ChildrenOf(all, p, false);
+        if (values.empty()) continue;
+        if (!experimental) Heading(x, "Experimental", 16);
+        experimental = true;
+        Heading(x, p.s.label, 8);
+        for (const Entry* v : values) Value(x, *v);
     }
     Out(out, x);
 }
@@ -355,6 +403,7 @@ void __cdecl WriteTab(void* /*user*/, AopBuffer* out) {
 
 void __cdecl GameReady() {
     aovk::viewdist::GameReady();
+    aovk::camp::GameReady();
     InitFpsCap();
     TryRenderer();
 }
@@ -386,11 +435,13 @@ void __cdecl SettingChanged(const char* name, int32_t value) {
     const uint32_t count = g_count();
     for (uint32_t i = 0; i < count; ++i) {
         RvkSettingInfo s;
-        if (!GetInfo(i, s) || std::strcmp(s.name, name) != 0) continue;
+        if (!Is(DName(i), name) || !GetInfo(i, s)) continue;
         float setting = s.type == kFloat ? static_cast<float>(value) * s.step : static_cast<float>(value);
         if (s.type == kBool) setting = value ? 1.0f : 0.0f;
-        g_set(name, setting);                   // the renderer applies and saves it
-        g_host->log(g_host, "%s = %g", name, static_cast<double>(setting));
+        if (s.min <= s.max) setting = std::clamp(setting, s.min, s.max);   // (std::clamp: undefined otherwise)
+        if (setting == s.value) return;         // (sliders send their value every frame while dragged)
+        g_set(s.name, setting);                 // the renderer applies and saves it
+        g_host->log(g_host, "%s = %g", s.name, static_cast<double>(setting));
         if (g_presetCount) g_host->setSetting(g_host, kPresetVar, CurrentPreset());   // by hand: Custom, likely
         return;
     }
@@ -421,12 +472,15 @@ AOP_EXPORT const AopPlugin* __cdecl AopPluginAttach(const AopHost* host) {
     }
     g_host = host;
     aovk::viewdist::Attach(host);
+    aovk::camp::Attach(host);
     // The cap is AOPlugins' to keep (AOPlugins.ini [ao-vk]); the renderer's settings come in gameReady, once
     // randy31.dll can be asked.
     // The AOReloaded fork kept the cap as AOR_FpsCap in AOReloaded.ini: its value is the default here, once.
     const int32_t fps = aovk::viewdist::AOReloadedIni(host, "AOR_FpsCap", kStockFps);
     AddSetting(kFpsVar, AOP_SETTING_INT, fps < kMinFps ? kMinFps : fps > kMaxFps ? kMaxFps : fps, kMinFps, kMaxFps, 0);
-    // "Renderer" also replaces a static copy of the tab in a GUI skin (PRK-VK's Root.xml has one).
-    if (!host->addOptionsTab(host, "Renderer", &WriteTab, nullptr)) return nullptr;
+    // "Renderer" also replaces a static copy of the tab in a GUI skin (PRK-VK's Root.xml has one). Its values (the
+    // sliders and choices) are in a tab of their own, right after it.
+    if (!host->addOptionsTab(host, "Renderer", &WriteRendererTab, nullptr)) return nullptr;
+    host->addOptionsTab(host, "Advanced", &WriteAdvancedTab, nullptr);   // a refusal is in the log
     return &kPlugin;
 }

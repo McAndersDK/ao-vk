@@ -20,9 +20,12 @@ void Log(const char* fmt, ...);
 // re-aimed - then the rest of it. Null if it can't be patched.
 void* HookAt(uint8_t* at, size_t count, const size_t* rel32, size_t rel32Count, void* target, const char* what);
 
-// A GUI.dll export that starts with MSVC's exception frame prologue - mov eax, <handler>; call <GUI.dll's _EH_prolog>
-// (the PRK client's GUI.dll, 0x5CD32BEA) - so that HookAt(at, 10, {6}) may take it; null (logged) when it isn't
-// exported or its code differs (another GUI.dll build: left alone).
+// Does the code at `at` (in `module`) start with MSVC's exception frame prologue - mov eax, <handler>; call
+// <the module's _EH_prolog>? Then HookAt(at, 10, {6}) may take it. _EH_prolog is recognised by its code, so any build.
+bool EhPrologEntry(HMODULE module, const uint8_t* at);
+
+// A GUI.dll export that starts with that prologue (EhPrologEntry); null (logged) when it isn't exported or its code
+// differs (left alone).
 uint8_t* CheckedEntry(HMODULE gui, const char* name, const char* what);
 
 namespace hooklib {
