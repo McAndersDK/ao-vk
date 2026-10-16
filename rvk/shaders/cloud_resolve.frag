@@ -60,7 +60,13 @@ void main()
         if (wsum > 1e-4) { now = acc / wsum; haveNow = true; }
         else if (known > 0.0) { now = sum / known; haveNow = true; }
     }
-    vec4 result = now;
+    // Covered here this frame (this pixel marched and found covered): unknown, drawn as none.
+    const vec4 kUnknown = vec4(0.0, 0.0, 0.0, -1.0);
+    if (fresh && own.a < 0.0) {
+        outClouds = kUnknown;
+        return;
+    }
+    vec4 result = haveNow ? now : kUnknown;
     if (R.sub.z > 0.5) {
         // This pixel's direction, and where it was on screen last frame.
         vec2 ndc = vec2((float(hp.x) + 0.5) / R.size.x * 2.0 - 1.0, 1.0 - (float(hp.y) + 0.5) / R.size.y * 2.0);
@@ -71,13 +77,27 @@ void main()
             vec2 p = clip.xy / clip.w;
             vec2 uv = vec2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
             if (all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0)))) {
-                // (Kept within what was marched round it - where nothing round it was, as it was: hidden there.)
-                vec4 before = texture(history, uv);
-                if (known > 0.0) before = clamp(before, lo, hi);
-                result = fresh && own.a >= 0.0 ? mix(before, now, R.sub.w) : before;
+                // Last frame's there, bilinear over its known texels only (an unknown one - covered then - left out).
+                vec2 at = uv * R.size.xy - 0.5;
+                ivec2 base = ivec2(floor(at)), hl = ivec2(R.size.xy) - 1;
+                vec2 f = at - vec2(base);
+                vec4 acc = vec4(0.0);
+                float wsum = 0.0;
+                for (int k = 0; k < 4; ++k) {
+                    ivec2 o = ivec2(k & 1, k >> 1);
+                    vec4 c = texelFetch(history, clamp(base + o, ivec2(0), hl), 0);
+                    float w = (o.x == 1 ? f.x : 1.0 - f.x) * (o.y == 1 ? f.y : 1.0 - f.y);
+                    if (c.a >= 0.0) { acc += c * w; wsum += w; }
+                }
+                if (wsum > 1e-4) {
+                    // (Kept within what was marched round it now - only what was: a covered neighbour is no clear
+                    // sky. Taken as one, beside a moving object the clouds were kept down to none - a blue outline.)
+                    vec4 before = acc / wsum;
+                    if (known > 0.0) before = clamp(before, lo, hi);
+                    result = fresh ? mix(before, now, R.sub.w) : before;
+                }
             }
         }
     }
-    // (Never unknown in the history: a covered spot holds the clouds round it, ready when it is uncovered.)
-    outClouds = max(result, vec4(0.0));
+    outClouds = result;
 }
