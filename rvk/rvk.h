@@ -327,6 +327,7 @@ public:
     void SetSway(float strength) { m_sway = strength; m_constantsDirty = true; m_frameLightsDirty = true; }
     void SetWindStorm(float scale) { m_windStormScale = scale; }   // RVK_WindStorm (wind.cpp)
     void SetStormTint(bool on) { m_stormTint = on; }               // RVK_StormTint (Draw: the game's storm sheet)
+    void SetStormFlash(bool on) { m_stormFlash = on; }             // RVK_StormFlash (Draw: the game's lightning glow)
     void SetSandHaze(float amount) { m_sandHaze = amount; }        // RVK_SandHaze (wind.cpp)
     void SetSandBlow(float amount) { m_sandBlow = amount; }        // RVK_SandBlow (smoke.cpp: the sand volume)
     void SetSandProcedural(bool on) { m_sandProcedural = on; }     // RVK_SandProc (smoke_sim.comp stage 12)
@@ -1884,6 +1885,8 @@ private:
     double m_windClockPrev = -1.0;               // m_frameClock at the last update
     bool m_stormTint = false;                    // RVK_StormTint: the game's storm tint drawn (with the new weather)
     uint32_t m_stormTintSkipped = 0;             // its draws left out (the wind log line)
+    bool m_stormFlash = false;                   // RVK_StormFlash: the game's lightning glow over the clouds drawn
+    uint32_t m_stormFlashSkipped = 0;            // its draws left out (the wind log line)
     // A sand or ash storm (wind.cpp): its colour and strength from the game's tint, seen left out (Draw).
     uint32_t m_stormTintColour = 0;              // its vertex colour (ARGB: alpha its strength)
     double m_stormTintSeen = -1e9;               // when (m_frameClock)

@@ -990,6 +990,11 @@ void ThreadedDevice::SetWindStorm(float scale)
     Enqueue([this, scale](const uint8_t*) { m_device.SetWindStorm(scale); });
 }
 
+void ThreadedDevice::SetStormFlash(bool on)
+{
+    Enqueue([this, on](const uint8_t*) { m_device.SetStormFlash(on); });
+}
+
 void ThreadedDevice::SetStormTint(bool on)
 {
     Enqueue([this, on](const uint8_t*) { m_device.SetStormTint(on); });

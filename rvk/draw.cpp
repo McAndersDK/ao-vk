@@ -2195,6 +2195,13 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
             return;
         }
     }
+    // The game's lightning glow (VisualCloudlight_t: a big additive mesh at the clouds' height, its vertex colours
+    // pulsing with each strike - the whole sky flickers; an in-game run of frame dumps): with the new weather left out
+    // (RVK_StormFlash brings it back). The bolts (VisualLightning_t) stay.
+    if (m_weatherParams.enable && !m_stormFlash && std::strncmp(m_drawVisualName, "VisualCloudlight_t", 18) == 0) {
+        ++m_stormFlashSkipped;
+        return;
+    }
     ++m_frameDraw;
     // GPU profiling: which class of scene draw this is (splits the "scene" block; see ProfileSceneClass).
     m_drawSceneClass = 0;

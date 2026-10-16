@@ -125,6 +125,7 @@ public:
     void SetFxaa(bool enable);
     void SetWindStorm(float scale);
     void SetStormTint(bool on);
+    void SetStormFlash(bool on);
     void SetSandHaze(float amount);
     void SetSandBlow(float amount);
     void SetSandProcedural(bool on);

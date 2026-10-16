@@ -113,11 +113,11 @@ void Device::UpdateWind()
     if (m_frameNumber % 600 == 0)
     {
         Log("wind: towards %.2f %.2f (%s), strength x%.2f, gusts x%.2f, storm %.2f; the game's storm tint left out %u "
-            "times (colour %08x), sand %.2f%s", double(m_windDir[0]), double(m_windDir[1]),
+            "times (colour %08x), its lightning glow %u, sand %.2f%s", double(m_windDir[0]), double(m_windDir[1]),
             fromGame && gl > 0.05f ? "the game's weather" : "the sky's", double(m_windStrength), double(m_windGusts),
-            double(m_storm), m_stormTintSkipped, m_stormTintColour, double(m_sand),
+            double(m_storm), m_stormTintSkipped, m_stormTintColour, m_stormFlashSkipped, double(m_sand),
             forced ? (m_sandAsh ? " (forced: ash)" : " (forced: sand)") : "");
-        m_stormTintSkipped = 0;
+        m_stormTintSkipped = m_stormFlashSkipped = 0;
     }
 }
 
