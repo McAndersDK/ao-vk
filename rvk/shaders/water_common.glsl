@@ -36,6 +36,8 @@ layout(set = 0, binding = 0) uniform WaterFrame {
                         // segments (binding 2 in the grid and the spray)
     vec4 fall2;         // x: the spray (RVK_WaterSpray); y: the churn and foam where they land (RVK_WaterChurn);
                         // z: how fast they fall (RVK_WaterSpeed); w: how hard it rains (rvk rain.cpp, 0..1)
+    vec4 storm;         // a storm (rvk water.cpp): x how hard (rough water: taller waves, whitecaps, gust patches), y
+                        // the gusts' strength, zw the gusts' frame (wind.glsl WindAxes)
 } W;
 
 // A fall's foot (rvk/water.cpp m_waterFoot): a segment of where it meets the pool - a: x0 y0 z0 x1; b: y1 z1, the way

@@ -10,6 +10,7 @@
 //   - the game's fog over all of it.
 // W.look.x blends two looks: 0 = the game's water made richer (its colour, its texture, more opaque), 1 = realistic.
 #include "water_common.glsl"
+#include "wind.glsl"
 
 layout(set = 0, binding = 5) uniform sampler2DArrayShadow shadowMap;   // the sun's cascades
 layout(set = 0, binding = 9) uniform sampler2D sceneCopy;              // the HDR scene before the water
@@ -286,7 +287,11 @@ void main()
     if (dot(N, V) < 0.0 && mesh) N = -N;
     float rippleFade = 1.0 - smoothstep(25.0, 220.0, dist);
     // (Each layer only where it shows: what is faded out entirely is not computed.)
-    vec2 slope = mesh || rippleFade <= 0.0 ? vec2(0.0) : Ripples(vPos.xz, t) * (W.look2.z * 0.22 * rippleFade);
+    // A storm (W.storm): the ripples rougher all over, and much rougher where a gust front is passing - dark ruffled
+    // patches racing across the water ahead of the wind.
+    float gustHere = W.storm.x > 0.0 ? Gust(WindAxes(vPos.xz, W.wind.xy, W.storm.zw), W.time.x) : 0.0;
+    float rough = 1.0 + W.storm.x * (0.4 + 2.2 * gustHere * min(W.storm.y, 2.0) / 2.0);
+    vec2 slope = mesh || rippleFade <= 0.0 ? vec2(0.0) : Ripples(vPos.xz, t) * (W.look2.z * 0.22 * rippleFade * rough);
     // Characters in the water disturb the surface around them (the simulated field: wakes, bow waves, their rings).
     vec3 disturb = vec3(0.0);
     if (!mesh && W.ripple.x > 0.5 && rippleFade > 0.0)
@@ -505,7 +510,9 @@ void main()
         float crest = smoothstep(0.75, 0.35, vFold);
         float pattern = texture(detail, vPos.xz * 0.23 + vec2(t * 0.02, -t * 0.013)).b * 0.6 +
                         texture(detail, vPos.xz * 0.61 - vec2(t * 0.031, t * 0.017)).a * 0.4;
-        float amount = clamp((shore * shore * 1.1 + crest * 0.8) * W.look2.x * mix(0.7, 1.0, style), 0.0, 1.0);
+        // (A storm: whitecaps - the crests break white, and the gust fronts streak the water with spray.)
+        float amount = clamp((shore * shore * 1.1 + crest * (0.8 + 0.9 * W.storm.x) + 0.25 * W.storm.x * gustHere) *
+                             W.look2.x * mix(0.7, 1.0, style), 0.0, 1.0);
         foam = smoothstep(1.0 - amount, 1.0 - amount + 0.2, pattern) * amount;
         foam *= 1.0 - smoothstep(60.0, 260.0, dist);
         vec3 foamLight = ambient + sun * (max(dot(N, L), 0.0) * shadow);

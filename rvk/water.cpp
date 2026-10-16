@@ -64,6 +64,8 @@ struct WaterFrame {
                                                  // z: how many foot segments (binding 2 in the grid and spray draws)
     float fall2[4];                              // x: the spray (RVK_WaterSpray), y: the churn (RVK_WaterChurn),
                                                  // z: how fast the falls fall (RVK_WaterSpeed), w: the rain
+    float storm[4];                              // a storm: x how hard (0..1+), y the gusts' strength, zw the gusts'
+                                                 // frame (wind.glsl WindAxes)
 };
 
 // A fall's foot as the grid's foam and the spray read it (binding 2; water_common.glsl FootSegment): a segment of where
@@ -1431,7 +1433,17 @@ void Device::DrawWater(const WaterVertex* vertices, uint32_t vertexCount, const 
     wf.wind[1] = wind[1];
     // Wave height: the setting, and the body's size - a pond stays calm, the open sea has a swell.
     float body = map ? std::clamp((map->extent - 60.0f) / 700.0f, 0.0f, 1.0f) : 0.0f;
-    wf.wind[2] = P.waves * (0.12f + 0.88f * body * body);
+    // (A storm: rough water - the waves up to 1.8x taller (more washed over the shore), as much on a pond: choppy.)
+    const float stormy = std::clamp(m_storm * std::max(m_windStormScale, 0.0f), 0.0f, 1.5f);
+    wf.wind[2] = P.waves * (0.12f + 0.88f * body * body) * (1.0f + 0.8f * stormy);
+    wf.storm[0] = stormy;
+    wf.storm[1] = Gusts();
+    {
+        float frame[4];
+        WindFrame(frame);
+        wf.storm[2] = frame[0];
+        wf.storm[3] = frame[1];
+    }
     wf.wind[3] = 0.35f + 0.65f * body;
     if (m_terrainSun[0] + m_terrainSun[1] + m_terrainSun[2] > 0.0f) {
         std::memcpy(wf.sunColour, m_terrainSun, 16);
