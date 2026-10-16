@@ -78,7 +78,7 @@ image for the full size.
 
 ### West Bank
 
-Sun shadows, HDR, colour grading and the ground grass.
+Sun shadows, tone mapping, colour grading and the ground grass.
 
 ![West Bank by day](docs/screenshots/west-bank.jpg)
 
@@ -141,8 +141,10 @@ Spell effects with GPU particles, and depth of field.
 - Shadows fade out as the sun nears the horizon, and a low sun no longer lights what the hills hide from it (valleys
   under mountains stay in shade; Experimental section, on by default).
 
-**HDR and effects**
-- HDR rendering with tone mapping and exposure control.
+**Effects**
+- The scene is drawn off-screen with colours brighter than white, then tone mapped (with exposure control)
+  into the normal 8-bit picture - nothing to do with HDR monitors. Every effect is drawn in that off-screen scene;
+  `RVK_Hdr` (ini only) switches it off for troubleshooting, and every effect with it.
 - Bloom (depth-aware, so halos don't bleed through objects in front) and glow on spell and fire effects.
 - Night glow: lit windows, signs and screens glow after dark.
 - Ambient occlusion and screen-space indirect light (bounce light).
@@ -154,7 +156,7 @@ Spell effects with GPU particles, and depth of field.
 - Colour grading: saturation, contrast, warmth, a cooler night tint, vignette, and your own `.cube` look-up tables
   (`randy-vk-day.cube`, `randy-vk-night.cube` next to `randy-vk.ini`).
 
-**Sky, air and night** (on by default, needs HDR)
+**Sky, air and night** (on by default)
 - The air: haze that thickens with height and turns bluer far off, the sun's glow around it, haze over the distant
   land, and light rays through gaps in the clouds.
 - Valley mist at night and at dawn, burning off as the sun climbs.
@@ -163,7 +165,7 @@ Spell effects with GPU particles, and depth of field.
 - Darker nights, lit by the moon, with lamps and windows glowing (`RVK_NightDark`: 0 as the game, 1 moonlit, 2 dark).
 - The ships over the cities hazed into the distance instead of cut off.
 
-**Clouds, rain and smoke** (Experimental section, off by default; need HDR)
+**Clouds, rain and smoke** (Experimental section, off by default)
 - Volumetric clouds: a cloud layer over the sky that follows the game's own clouds and weather, from scattered
   clouds on dry days to overcast and a low grey deck in rain, each zone with its own climate (deserts clearer,
   coasts and forests cloudier), lit by the sun and the moon, sunset-coloured, casting drifting shadows on the
@@ -189,7 +191,7 @@ Spell effects with GPU particles, and depth of field.
 - Leaves on trees, shrubs and palms (Experimental section, off by default): sprigs of leaves flutter on the branches,
   catch the sun, cast shadows, and fall in gusts.
 
-**Water** (Experimental section, off by default; needs HDR)
+**Water** (Experimental section, off by default)
 - The game's flat water is replaced by a real surface: waves (a gentle ripple on ponds, a swell on the open sea),
   small ripples, refraction of what is under it, water that gets deeper in colour the deeper it is, caustics on the
   bottom, reflections of the scene and the sky with a sun glint, foam along shores, and the game's fog.
@@ -199,7 +201,7 @@ Spell effects with GPU particles, and depth of field.
   not at all, and jumping in makes a big splash with rings spreading out from it. Wake strength, visibility,
   duration, speed, treading water and splash each have a slider.
 - One slider from "the game's water made richer" (its own colour and texture) to realistic water; halfway by
-  default. Needs HDR.
+  default.
 - Waterfalls: our own falling sheet over each of the game's falls, with strands, sparkles of sun and lamplight, spray
   and mist at the foot, and churn and foam where they land.
 
@@ -379,7 +381,7 @@ Some useful ones:
 | `RVK_CharLight` | 0.25 | brightness of lights characters carry (your own included) |
 | `RVK_TessOn`, `RVK_Tess*` | on | tessellation (rounder characters): roundness, detail, distance |
 | `RVK_FoliageLod` | 35 | distance from which foliage is shaded cheaply |
-| `RVK_GrassOn` | 1 | our own ground grass: procedural blades over the terrain (off = the game's foliage only; needs HDR) |
+| `RVK_GrassOn` | 1 | our own ground grass: procedural blades over the terrain (off = the game's foliage only) |
 | `RVK_GrassTex` | 1 | grass only where the ground's own texture is green (not on sand, brick, roads) |
 | `RVK_GrassDist` / `RVK_GrassBlades` / `RVK_GrassHeight` | 40 / 8 / 0.3 | how far the grass reaches (world units), blades a patch, blade height |
 | `RVK_GrassWidth` | 0.75 | blade width (0.25–3) |
@@ -391,7 +393,7 @@ Some useful ones:
 | `RVK_GrassTrail` | 1 | grass trodden by characters stays down a few seconds behind them (needs `RVK_PushOn`) |
 | `RVK_GrassShadow` | 1 | grass blades cast the sun's shadow near the camera, onto the ground and each other (needs `RVK_SunShadow`) |
 | `RVK_GrassEven` | 1 | an even grass colour: one green (1) rather than the colours of the ground under each blade (0) |
-| `RVK_WaterOn` | 0 | the new water (off = the game's own; needs HDR). Experimental: off by default |
+| `RVK_WaterOn` | 0 | the new water (off = the game's own). Experimental: off by default |
 | `RVK_WaterStyle` | 0.5 | 0 = the game's water made richer, 1 = realistic |
 | `RVK_WaterQual` | 2 | 1 low, 2 medium, 3 high: surface detail and reflection quality |
 | `RVK_WaterWaves` / `RVK_WaterRipple` | 0.3 / 1 | wave height, small ripples |
@@ -403,10 +405,10 @@ Some useful ones:
 | `RVK_WaterSheen` / `RVK_WaterSpark` | 1 / 1 | waterfalls: how much their clear water reflects (up to 2), their sparkles of sunlight and lamplight (0 = none) |
 | `RVK_WaterSpray` / `RVK_WaterChurn` | 1 / 1 | waterfalls: the spray and mist at their foot, the pool churned and foaming where they land (0 = none) |
 | `RVK_WaterSpeed` | 1.75 | waterfalls: how fast the water falls (1 = as fast as real water would for the game's units in metres) |
-| `RVK_WeatherOn` | 0 | the new weather: rvk draws the game's rain instead of it (needs HDR). Experimental: off by default |
+| `RVK_WeatherOn` | 0 | the new weather: rvk draws the game's rain instead of it. Experimental: off by default |
 | `RVK_RainForce` / `RVK_RainAmount` / `RVK_RainSplash` | 0 / 1 / 1 | rain this hard whatever the game's weather (0 = the game's; for trying it), how many drops, how many splashes where it lands; rain rings on water come with it |
 | `RVK_RainBright` | 1 | how bright the rain and its splashes are |
-| `RVK_SmokeOn` | 0 | simulated smoke: a fluid simulated round each smoke source, lit by the sun and the lamps (needs HDR). Experimental: off by default |
+| `RVK_SmokeOn` | 0 | simulated smoke: a fluid simulated round each smoke source, lit by the sun and the lamps. Experimental: off by default |
 | `RVK_SmokeQual` / `RVK_SmokeRes` / `RVK_SmokeThick` | 2 / 12 / 1 | its grid: cells per world unit of a source's box (a long-lived source's taller box gets more), at most 64 / 96 / 128 a side (quality 1 / 2 / 3); how thick it is (up to 8) |
 | `RVK_SmokeLife` | 1 | how long the smoke lasts, times the game's (0.25 - 4): longer is taller and thicker |
 | `RVK_SmokeStir` | 1 | how much characters stir it: walking through pushes it aside and leaves eddies (0: not at all) |
@@ -421,7 +423,7 @@ Some useful ones:
 | --- | --- | --- | --- |
 | E | all enhancements on / off | F10 | per-pixel lighting |
 | F8 | light override | F7 | sun shadows |
-| F6 | point light shadows | F5 | HDR |
+| F6 | point light shadows | F5 | all effects (`RVK_Hdr`) |
 | F4 | bloom | F3 | ambient occlusion |
 | F2 | generated relief | F1 | anisotropic filtering |
 | G | indirect light | V | volumetric light |
@@ -458,7 +460,8 @@ feature costs exactly where you are.
 - In very large crowds the game's own CPU work (its interface, game logic) still limits the frame rate; the native
   character code (below) takes the renderer's share of it off the game's thread.
 - Shadows are drawn from the untessellated characters.
-- Ground grass and the new water need HDR (`RVK_Hdr`): with it off they don't show.
+- The game's ground render mode must be **Shadows** (video options): the grass, the valley mist and the terrain's
+  lighting read the ground as that mode draws it. AOReloaded keeps it at Shadows while randy-vk is loaded.
 - The water's reflections are screen-space: what is off screen reflects as sky.
 
 ## How it works

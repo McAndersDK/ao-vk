@@ -44,7 +44,7 @@ Setting g_settings[] = {
 
     {"RVK_PixelLight", "Per-pixel lighting",                                       "Lighting",         Bool,  0, 1, 1, 1, "RANDYVK_PIXEL_LIGHTING", 0},
     {"RVK_LightOver",  "All nearby lights (light override)",   "Lighting",         Bool,  0, 1, 1, 1, "RANDYVK_LIGHT_OVERRIDE", 0},
-    {"RVK_Headroom",   "Light headroom without HDR",                               "Lighting",         Float, 1, 2, 0.05f, 1.15f, "RANDYVK_LIGHT_HEADROOM", 0, "RVK_LightOver"},
+    {"RVK_Headroom", "Light headroom without effects", "Lighting",         Float, 1, 2, 0.05f, 1.15f, "RANDYVK_LIGHT_HEADROOM", 0, "RVK_LightOver"},
     {"RVK_OwnLight",   "A character's own light lights the character",             "Lighting",         Bool,  0, 1, 1, 1, nullptr, 0, "RVK_LightOver"},
     {"RVK_LeafLightOn","Sunlight through leaves",                                  "Lighting",         Bool,  0, 1, 1, 1, nullptr, 0},
     {"RVK_LeafLight",  "Strength",                                                 "Lighting",         Float, 0.25f, 2, 0.25f, 1, nullptr, 0, "RVK_LeafLightOn"},
@@ -66,7 +66,7 @@ Setting g_settings[] = {
     {"RVK_PbrEnv", "Reflected surroundings", "Materials",         Float, 0, 2, 0.1f, 1, nullptr, 0, "RVK_Pbr"},
     {"RVK_PbrSsr", "Screen-space reflections", "Materials", Float, 0, 2, 0.1f, 1, nullptr, 0, "RVK_Pbr"},
     {"RVK_PbrAo", "Occlusion map strength", "Materials",         Float, 0, 1, 0.1f, 1, nullptr, 0, "RVK_Pbr"},
-    {"RVK_PbrProbe", "Environment probe (with HDR)", "Materials", Float, 0, 1, 0.1f, 1, nullptr, 0, "RVK_Pbr"},
+    {"RVK_PbrProbe", "Environment probe", "Materials", Float, 0, 1, 0.1f, 1, nullptr, 0, "RVK_Pbr"},
     {"RVK_PbrGlow", "Emissive map brightness", "Materials", Float, 0, 8, 0.25f, 2, nullptr, 0, "RVK_Pbr"},
     {"RVK_PbrDebug",   "Debug view (Ctrl+Shift+K)", "Debug", Choice, 0, 9, 1, 0, nullptr, 0, "RVK_Pbr", "0 1 2 3 4 5 6 7 8 9"},
     {"RVK_Albedo", "Enhanced textures", "Materials",     Bool,  0, 1, 1, 1, nullptr, 0},
@@ -80,7 +80,7 @@ Setting g_settings[] = {
     {"RVK_FolEdges",   "Soft leaf edges", "Plants", Bool, 0, 1, 1, 1, nullptr, 0},
     {"RVK_FolLodOn",   "Cheaper shading of distant foliage",                       "Plants",           Bool,  0, 1, 1, 1, nullptr, 0},
     {"RVK_FoliageLod", "From this distance (world units)",                         "Plants",           Int,   10, 150, 1, 35, nullptr, 0, "RVK_FolLodOn"},
-    {"RVK_GrassOn",    "Ground grass (procedural blades; needs HDR)",               "Plants",           Bool,  0, 1, 1, 1, nullptr, 0},
+    {"RVK_GrassOn", "Ground grass", "Plants",           Bool,  0, 1, 1, 1, nullptr, 0},
     {"RVK_GrassTex",   "Only on grassy ground",    "Plants",           Bool,  0, 1, 1, 1, nullptr, 0, "RVK_GrassOn"},
     {"RVK_GrassDist",  "Grass up to this distance (world units)",                   "Plants",           Int,   8, 80, 1, 40, nullptr, 0, "RVK_GrassOn"},
     {"RVK_GrassBlades","Blades a patch (denser with a lower height)",               "Plants",           Float, 1, 12, 0.5f, 8, nullptr, 0, "RVK_GrassOn"},
@@ -109,7 +109,7 @@ Setting g_settings[] = {
     {"RVK_LeafShadow", "Leaves cast sun shadows",  "Experimental",     Bool,  0, 1, 1, 1, nullptr, 0, "RVK_LeafOn"},
     {"RVK_LeafFall", "Falling leaves (0 = none)", "Experimental",     Float, 0, 3, 0.25f, 1, nullptr, 0, "RVK_LeafOn"},
 
-    {"RVK_WaterOn",    "New water (needs HDR)", "Experimental",    Bool,  0, 1, 1, 0, nullptr, 0},
+    {"RVK_WaterOn", "New water", "Experimental",    Bool,  0, 1, 1, 0, nullptr, 0},
     {"RVK_WaterStyle", "Look (game-like to realistic)",  "Experimental",     Float, 0, 1, 0.05f, 0.5f, nullptr, 0, "RVK_WaterOn"},
     {"RVK_WaterQual",  "Quality (1 low, 2 medium, 3 high)",                        "Experimental",     Int,   1, 3, 1, 2, nullptr, 0, "RVK_WaterOn"},
     {"RVK_WaterWaves", "Wave height",                                              "Experimental",     Float, 0, 3, 0.1f, 0.3f, nullptr, 0, "RVK_WaterOn"},
@@ -132,7 +132,7 @@ Setting g_settings[] = {
     {"RVK_WaterChurn", "Waterfalls: churn and foam where they land",               "Experimental",     Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WaterOn"},
     {"RVK_WaterSpeed", "Waterfalls: how fast the water falls",                    "Experimental",     Float, 0.25f, 4, 0.05f, 1.75f, nullptr, 0, "RVK_WaterOn"},
 
-    {"RVK_WeatherOn", "New weather (needs HDR)", "Experimental",    Bool,  0, 1, 1, 0, nullptr, 0},
+    {"RVK_WeatherOn", "New weather", "Experimental",    Bool,  0, 1, 1, 0, nullptr, 0},
     {"RVK_RainForce", "Force rain (0 = the game's weather)", "Experimental",     Float, 0, 1, 0.05f, 0, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_RainSpeed",  "Rain: how fast the drops fall (units a second)", "Experimental", Float, 3, 40, 0.5f, 15, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_RainLength", "Rain: how long each falling drop's streak is (units)", "Experimental", Float, 0.05f, 2, 0.05f, 0.45f, nullptr, 0, "RVK_WeatherOn"},
@@ -165,7 +165,7 @@ Setting g_settings[] = {
     {"RVK_SandTint",   "Sand and ash storms, with the sand fog: the light under the storm the dust's colour - the sun behind it lights the land orange (0: the sun's own)", "Experimental", Float, 0, 1, 0.05f, 0.6f, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_SandBlow",   "Sand and ash storms: sand blowing round you, simulated - streaks, eddies, kicked up by feet (x; 0: none)", "Experimental", Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
 
-    {"RVK_SmokeOn",    "Simulated smoke (needs HDR)",  "Experimental",    Bool,  0, 1, 1, 0, nullptr, 0},
+    {"RVK_SmokeOn", "Simulated smoke", "Experimental",    Bool,  0, 1, 1, 0, nullptr, 0},
     {"RVK_SmokeQual", "Quality (1 low, 2 medium, 3 high)", "Experimental",     Int,   1, 3, 1, 2, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeRes",   "Smoke: cells per world unit (detail)",                    "Experimental",     Float, 4, 24, 1, 12, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeThick", "Thickness", "Experimental",     Float, 0.1f, 8, 0.1f, 1, nullptr, 0, "RVK_SmokeOn"},
@@ -176,7 +176,7 @@ Setting g_settings[] = {
     {"RVK_SmokeOpaque", "Smoke: how opaque it is drawn",                           "Experimental",     Float, 0.05f, 8, 0.05f, 1, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeBudget","Smoke: the simulation's GPU time a frame, about (ms; over it the smoke steps less often; 0: no cap)", "Experimental", Float, 0, 8, 0.25f, 1.5f, nullptr, 0, "RVK_SmokeOn"},
     {"RVK_SmokeHalf",  "Smoke: drawn at half resolution (much cheaper)",          "Experimental",     Bool,  0, 1, 1, 1, nullptr, 0, "RVK_SmokeOn"},
-    {"RVK_CloudsOn", "Volumetric clouds (needs HDR)", "Experimental", Bool,  0, 1, 1, 0, nullptr, 0},
+    {"RVK_CloudsOn", "Volumetric clouds", "Experimental", Bool,  0, 1, 1, 0, nullptr, 0},
     {"RVK_CloudThick", "Clouds: how thick",                                        "Experimental",     Float, 0.1f, 4, 0.1f, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudBright", "Clouds: how light",                                       "Experimental",     Float, 0.25f, 3, 0.05f, 1, nullptr, 0, "RVK_CloudsOn"},
     {"RVK_CloudNight",  "Clouds: how light at night (x the above)",                 "Experimental",     Float, 0.25f, 2, 0.05f, 0.8f, nullptr, 0, "RVK_CloudsOn"},
@@ -216,48 +216,48 @@ Setting g_settings[] = {
     {"RVK_PtStrength", "Strength",                                                 "Shadows",          Float, 0, 1, 0.05f, 1, "RANDYVK_POINT_SHADOW_STRENGTH", 0, "RVK_PtOn"},
     {"RVK_PtDay",      "Strength in daylight (fraction)",                          "Shadows",          Float, 0, 1, 0.05f, 1, "RANDYVK_POINT_SHADOW_DAY", 0, "RVK_PtOn"},
 
-    {"RVK_Hdr",        "HDR scene and tone mapping",                               "HDR and effects",  Bool,  0, 1, 1, 1, "RANDYVK_HDR", 0},
-    {"RVK_Exposure",   "Exposure",                                                 "HDR and effects",  Float, 0.5f, 2, 0.05f, 1, "RANDYVK_EXPOSURE", 0, "RVK_Hdr"},
-    {"RVK_Knee",       "Tone mapping knee (1 = only clip)",                        "HDR and effects",  Float, 0.5f, 1, 0.05f, 0.85f, "RANDYVK_TONEMAP_KNEE", 0, "RVK_Hdr"},
-    {"RVK_HdrRoom",    "Local light headroom",                                     "HDR and effects",  Float, 1, 4, 0.25f, 1.5f, "RANDYVK_HDR_HEADROOM", 0, "RVK_Hdr"},
-    {"RVK_BloomOn",    "Bloom",                                                    "HDR and effects",  Bool,  0, 1, 1, 1, nullptr, 0},
-    {"RVK_Bloom",      "Strength",                                                 "HDR and effects",  Float, 0.25f, 5, 0.25f, 1, "RANDYVK_BLOOM", 0, "RVK_BloomOn"},
-    {"RVK_BloomThr",   "Threshold (1 = above white)",                              "HDR and effects",  Float, 0.5f, 2, 0.05f, 1, "RANDYVK_BLOOM_THRESHOLD", 0, "RVK_BloomOn"},
-    {"RVK_BloomOcc",   "Over objects in front of its light (1 = unchanged)",       "HDR and effects",  Float, 0, 1, 0.05f, 0.15f, nullptr, 0, "RVK_BloomOn"},
-    {"RVK_FxGlowOn",   "Glow of effects (spells, fire, light halos)",              "HDR and effects",  Bool,  0, 1, 1, 1, nullptr, 0},
-    {"RVK_BloomFx",    "Strength",                                                 "HDR and effects",  Float, 0.25f, 4, 0.25f, 1, "RANDYVK_BLOOM_EFFECTS", 0, "RVK_FxGlowOn"},
-    {"RVK_NightOn",    "Night glow of windows, signs and screens",                 "HDR and effects",  Bool,  0, 1, 1, 1, nullptr, 0},
-    {"RVK_NightGlow",  "Strength",                                                 "HDR and effects",  Float, 0.25f, 4, 0.25f, 0.5f, nullptr, 0, "RVK_NightOn"},
-    {"RVK_MoonOn",     "Moonlight at night (light and shadows from the moon)",     "HDR and effects",  Bool,  0, 1, 1, 1, nullptr, 0},
-    {"RVK_MoonLight",  "Strength",                                                 "HDR and effects",  Float, 0.25f, 3, 0.25f, 1, nullptr, 0, "RVK_MoonOn"},
-    {"RVK_NightDark",  "How dark nights get (0 as the game, 1 moonlit, 2 dark)",   "HDR and effects",  Float, 0, 2, 0.1f, 1, nullptr, 0, "RVK_Hdr"},
-    {"RVK_AoOn",       "Ambient occlusion",                                        "HDR and effects",  Bool,  0, 1, 1, 1, nullptr, 0},
-    {"RVK_Ao",         "Strength",                                                 "HDR and effects",  Float, 0.25f, 3, 0.25f, 1, "RANDYVK_AO", 0, "RVK_AoOn"},
-    {"RVK_AoRadius",   "Radius (world units)",                                     "HDR and effects",  Float, 0.25f, 4, 0.25f, 1, "RANDYVK_AO_RADIUS", 0, "RVK_AoOn"},
-    {"RVK_GiOn",       "Indirect light (bounce light from the lit scene)",         "HDR and effects",  Bool,  0, 1, 1, 1, nullptr, 0},
-    {"RVK_Gi",         "Strength",                                                 "HDR and effects",  Float, 0.25f, 3, 0.25f, 1.75f, nullptr, 0, "RVK_GiOn"},
-    {"RVK_GiRadius",   "Reach (world units)",                                      "HDR and effects",  Float, 1, 12, 0.5f, 4, nullptr, 0, "RVK_GiOn"},
-    {"RVK_VolOn",      "Volumetric light (sun shafts)",                            "HDR and effects",  Bool,  0, 1, 1, 1, nullptr, 0},
-    {"RVK_Volume",     "Strength",                                                 "HDR and effects",  Float, 0.25f, 4, 0.25f, 0.5f, nullptr, 0, "RVK_VolOn"},
-    {"RVK_VolHaze",    "How hazy the air is",                                      "HDR and effects",  Float, 0.25f, 4, 0.25f, 0.5f, nullptr, 0, "RVK_VolOn"},
-    {"RVK_VolShafts",  "Shaft contrast (0 = physical)",                            "HDR and effects",  Float, 0, 3, 0.25f, 1, nullptr, 0, "RVK_VolOn"},
-    {"RVK_VolRays",    "Light rays through gaps in the clouds",                    "HDR and effects",  Float, 0, 3, 0.25f, 1, nullptr, 0, "RVK_VolOn"},
-    {"RVK_VolLand",    "Haze over distant land (cool, as the air makes it)",       "HDR and effects",  Float, 0, 1, 0.05f, 0.4f, nullptr, 0},
-    {"RVK_Atmos", "Atmospheric haze", "HDR and effects", Bool, 0, 1, 1, 1, nullptr, 0},
-    {"RVK_Mist", "Valley mist (night and dawn)", "HDR and effects", Float, 0, 2, 0.1f, 1, nullptr, 0, "RVK_Atmos"},
-    {"RVK_Sun",        "The suns in the sky, how bright (0 none: the game's glow only)", "HDR and effects", Float, 0, 2, 0.1f, 1, nullptr, 0, "RVK_Hdr"},
-    {"RVK_SunSize",    "The suns' size (1: the game's own; less: tamer)", "HDR and effects", Float, 0.3f, 1.5f, 0.05f, 0.75f, nullptr, 0, "RVK_Sun"},
-    {"RVK_SunBleed",   "How much of the suns' glow shows through thick cloud (0 none)", "HDR and effects", Float, 0, 1, 0.05f, 0.3f, nullptr, 0, "RVK_Sun"},
-    {"RVK_GameSun",    "The game's own sun glow sprites (off: only the suns above)", "HDR and effects", Bool, 0, 1, 1, 0, nullptr, 0},
-    {"RVK_SsrOn",      "Reflections (screen-space)",                               "HDR and effects",  Bool,  0, 1, 1, 1, nullptr, 0},
-    {"RVK_Ssr",        "Strength",                                                 "HDR and effects",  Float, 0.25f, 2, 0.25f, 1, nullptr, 0, "RVK_SsrOn"},
-    {"RVK_SsrWater",   "Water",                                                    "HDR and effects",  Float, 0, 1, 0.05f, 0.25f, nullptr, 0, "RVK_SsrOn"},
-    {"RVK_SsrGloss",   "Glossy surfaces",                                          "HDR and effects",  Float, 0, 1, 0.05f, 0.3f, nullptr, 0, "RVK_SsrOn"},
-    {"RVK_SsrWet",     "Wet look of floors and ground (0 = dry)",                  "HDR and effects",  Float, 0, 1, 0.05f, 0, nullptr, 0, "RVK_SsrOn"},
-    {"RVK_MBlurOn",    "Motion blur",                                              "HDR and effects",  Bool,  0, 1, 1, 1, nullptr, 0},
-    {"RVK_MBlurObj",   "Per-object (off = camera only)",                           "HDR and effects",  Bool,  0, 1, 1, 1, nullptr, 0, "RVK_MBlurOn"},
-    {"RVK_MBlur",      "Exposure (fraction of 1/60 s)",                            "HDR and effects",  Float, 0.05f, 2, 0.05f, 0.15f, "RANDYVK_MOTION_BLUR", 0, "RVK_MBlurOn"},
-    {"RVK_MBlurNear",  "Camera blur: sharp nearer than (world units)",             "HDR and effects",  Float, 2, 20, 0.5f, 8, "RANDYVK_MOTION_BLUR_NEAR", 0, "RVK_MBlurOn"},
+    {"RVK_Hdr", "Off-screen scene for every effect (0: none - the game's own drawing)", "Effects",  Bool,  0, 1, 1, 1, "RANDYVK_HDR", 0},
+    {"RVK_Exposure", "Exposure", "Tone mapping",  Float, 0.5f, 2, 0.05f, 1, "RANDYVK_EXPOSURE", 0, "RVK_Hdr"},
+    {"RVK_Knee", "Tone mapping knee (1 = only clip)", "Tone mapping",  Float, 0.5f, 1, 0.05f, 0.85f, "RANDYVK_TONEMAP_KNEE", 0, "RVK_Hdr"},
+    {"RVK_HdrRoom", "Local light headroom", "Tone mapping",  Float, 1, 4, 0.25f, 1.5f, "RANDYVK_HDR_HEADROOM", 0, "RVK_Hdr"},
+    {"RVK_BloomOn", "Bloom", "Effects",  Bool,  0, 1, 1, 1, nullptr, 0},
+    {"RVK_Bloom", "Strength", "Effects",  Float, 0.25f, 5, 0.25f, 1, "RANDYVK_BLOOM", 0, "RVK_BloomOn"},
+    {"RVK_BloomThr", "Threshold (1 = above white)", "Effects",  Float, 0.5f, 2, 0.05f, 1, "RANDYVK_BLOOM_THRESHOLD", 0, "RVK_BloomOn"},
+    {"RVK_BloomOcc", "Over objects in front of its light (1 = unchanged)", "Effects",  Float, 0, 1, 0.05f, 0.15f, nullptr, 0, "RVK_BloomOn"},
+    {"RVK_FxGlowOn", "Glow of effects (spells, fire, light halos)", "Effects",  Bool,  0, 1, 1, 1, nullptr, 0},
+    {"RVK_BloomFx", "Strength", "Effects",  Float, 0.25f, 4, 0.25f, 1, "RANDYVK_BLOOM_EFFECTS", 0, "RVK_FxGlowOn"},
+    {"RVK_NightOn", "Night glow of windows, signs and screens", "Effects",  Bool,  0, 1, 1, 1, nullptr, 0},
+    {"RVK_NightGlow", "Strength", "Effects",  Float, 0.25f, 4, 0.25f, 0.5f, nullptr, 0, "RVK_NightOn"},
+    {"RVK_MoonOn", "Moonlight at night (light and shadows from the moon)", "Effects",  Bool,  0, 1, 1, 1, nullptr, 0},
+    {"RVK_MoonLight", "Strength", "Effects",  Float, 0.25f, 3, 0.25f, 1, nullptr, 0, "RVK_MoonOn"},
+    {"RVK_AoOn", "Ambient occlusion", "Effects",  Bool,  0, 1, 1, 1, nullptr, 0},
+    {"RVK_Ao", "Strength", "Effects",  Float, 0.25f, 3, 0.25f, 1, "RANDYVK_AO", 0, "RVK_AoOn"},
+    {"RVK_AoRadius", "Radius (world units)", "Effects",  Float, 0.25f, 4, 0.25f, 1, "RANDYVK_AO_RADIUS", 0, "RVK_AoOn"},
+    {"RVK_GiOn", "Indirect light (bounce light from the lit scene)", "Effects",  Bool,  0, 1, 1, 1, nullptr, 0},
+    {"RVK_Gi", "Strength", "Effects",  Float, 0.25f, 3, 0.25f, 1.75f, nullptr, 0, "RVK_GiOn"},
+    {"RVK_GiRadius", "Reach (world units)", "Effects",  Float, 1, 12, 0.5f, 4, nullptr, 0, "RVK_GiOn"},
+    {"RVK_VolOn", "Volumetric light (sun shafts)", "Effects",  Bool,  0, 1, 1, 1, nullptr, 0},
+    {"RVK_Volume", "Strength", "Effects",  Float, 0.25f, 4, 0.25f, 0.5f, nullptr, 0, "RVK_VolOn"},
+    {"RVK_VolHaze", "How hazy the air is", "Effects",  Float, 0.25f, 4, 0.25f, 0.5f, nullptr, 0, "RVK_VolOn"},
+    {"RVK_VolShafts", "Shaft contrast (0 = physical)", "Effects",  Float, 0, 3, 0.25f, 1, nullptr, 0, "RVK_VolOn"},
+    {"RVK_VolRays", "Light rays through gaps in the clouds", "Effects",  Float, 0, 3, 0.25f, 1, nullptr, 0, "RVK_VolOn"},
+    {"RVK_VolLand", "Haze over distant land (cool, as the air makes it)", "Effects",  Float, 0, 1, 0.05f, 0.4f, nullptr, 0},
+    {"RVK_NightDark", "How dark nights get (0 as the game, 1 moonlit, 2 dark)", "Effects",  Float, 0, 2, 0.1f, 1, nullptr, 0, "RVK_Hdr"},
+    {"RVK_Sun", "Suns in the sky (0 = the game's own)", "Effects", Float, 0, 2, 0.1f, 1, nullptr, 0, "RVK_Hdr"},
+    {"RVK_SunSize", "The suns' size (1: the game's own; less: tamer)", "Effects", Float, 0.3f, 1.5f, 0.05f, 0.75f, nullptr, 0, "RVK_Sun"},
+    {"RVK_SunBleed", "How much of the suns' glow shows through thick cloud (0 none)", "Effects", Float, 0, 1, 0.05f, 0.3f, nullptr, 0, "RVK_Sun"},
+    {"RVK_Atmos", "Atmospheric haze", "Effects", Bool, 0, 1, 1, 1, nullptr, 0},
+    {"RVK_Mist", "Valley mist (night and dawn)", "Effects", Float, 0, 2, 0.1f, 1, nullptr, 0, "RVK_Atmos"},
+    {"RVK_GameSun", "The game's own sun glow sprites (off: only the suns above)", "Effects", Bool, 0, 1, 1, 0, nullptr, 0},
+    {"RVK_SsrOn", "Reflections (screen-space)", "Effects",  Bool,  0, 1, 1, 1, nullptr, 0},
+    {"RVK_Ssr", "Strength", "Effects",  Float, 0.25f, 2, 0.25f, 1, nullptr, 0, "RVK_SsrOn"},
+    {"RVK_SsrWater", "Water", "Effects",  Float, 0, 1, 0.05f, 0.25f, nullptr, 0, "RVK_SsrOn"},
+    {"RVK_SsrGloss", "Glossy surfaces", "Effects",  Float, 0, 1, 0.05f, 0.3f, nullptr, 0, "RVK_SsrOn"},
+    {"RVK_SsrWet", "Wet look of floors and ground (0 = dry)", "Effects",  Float, 0, 1, 0.05f, 0, nullptr, 0, "RVK_SsrOn"},
+    {"RVK_MBlurOn", "Motion blur", "Effects",  Bool,  0, 1, 1, 1, nullptr, 0},
+    {"RVK_MBlurObj", "Per-object (off = camera only)", "Effects",  Bool,  0, 1, 1, 1, nullptr, 0, "RVK_MBlurOn"},
+    {"RVK_MBlur", "Exposure (fraction of 1/60 s)", "Effects",  Float, 0.05f, 2, 0.05f, 0.15f, "RANDYVK_MOTION_BLUR", 0, "RVK_MBlurOn"},
+    {"RVK_MBlurNear", "Camera blur: sharp nearer than (world units)", "Effects",  Float, 2, 20, 0.5f, 8, "RANDYVK_MOTION_BLUR_NEAR", 0, "RVK_MBlurOn"},
 
     {"RVK_Taa",        "Temporal anti-aliasing",                                   "Anti-aliasing",    Bool,  0, 1, 1, 1, nullptr, 0},
     {"RVK_Sharpen",    "Sharpening after it (0 = none)",                           "Anti-aliasing",    Float, 0, 1, 0.05f, 0.4f, nullptr, 0, "RVK_Taa"},
@@ -361,12 +361,24 @@ const char* const kHidden[] = {
     "RVK_CloudHalf", "RVK_CloudLayer", "RVK_CloudHeight", "RVK_CloudShade", "RVK_CloudLow", "RVK_CloudSheet",
 };
 
+// Switches taken out of the window that are meant to stay on (in randy-vk.ini for troubleshooting): the settings
+// they switch stay in the window as if they had no switch. RVK_Hdr - the off-screen scene every effect is drawn in -
+// read as HDR display output to players.
+const char* const kAlwaysOn[] = {"RVK_Hdr"};
+
+bool AlwaysOn(const char* name)
+{
+    for (const char* a : kAlwaysOn)
+        if (name && std::strcmp(a, name) == 0) return true;
+    return false;
+}
+
 bool Hidden(const Setting& s)
 {
-    if (std::strcmp(s.section, "Debug") == 0) return true;
+    if (std::strcmp(s.section, "Debug") == 0 || AlwaysOn(s.name)) return true;
     for (const char* h : kHidden)
         if (std::strcmp(h, s.name) == 0) return true;
-    const Setting* parent = s.parent ? Find(s.parent) : nullptr;
+    const Setting* parent = s.parent && !AlwaysOn(s.parent) ? Find(s.parent) : nullptr;
     return parent && Hidden(*parent);
 }
 
@@ -741,6 +753,16 @@ void Load()
             break;
         }
     }
+    // Once: the always-on switches back on - turned off while they were in the window, they would now leave their
+    // features off with no way back from it.
+    if (GetPrivateProfileIntA("Migrations", "AlwaysOn", 0, g_iniPath) == 0) {
+        for (Setting& s : g_settings)
+            if (AlwaysOn(s.name) && s.value == 0.0f) {
+                s.value = 1.0f;
+                RvkLog("settings: %s was off - on again (no longer in the settings window)", s.name);
+            }
+        WritePrivateProfileStringA("Migrations", "AlwaysOn", "1", g_iniPath);
+    }
     for (Setting& s : g_settings) {
         s.value = Clamp(s, s.value);
         Save(s);                                  // the ini always lists every setting
@@ -1026,7 +1048,7 @@ int RvkSettings_Get(uint32_t index, RvkSettingInfo* out)
     out->value = s.value;
     out->defaultValue = s.defaultValue;
     if (out->size >= sizeof(RvkSettingInfo)) {
-        out->parent = s.parent;
+        out->parent = AlwaysOn(s.parent) ? nullptr : s.parent;   // (grouped by their section instead)
         out->choices = s.choices;
     }
     return 1;
