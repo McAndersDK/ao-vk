@@ -820,6 +820,7 @@ void Device::CacheCaster(uint64_t key, const ShadowCaster& c, const void* vertic
     if (c.indexCount)
         std::memcpy(dst + indexAt, indices, size_t(c.indexCount) * 2);
     m_casterCache.emplace(key, e);
+    AddCoverMesh(key, e, vertices, indices);
     if (m_cacheTraceLines < 300 && m_frameNumber > 600) {   // (churn: see UpdateCasterCache)
         ++m_cacheTraceLines;
         Log("caster cache frame %llu: remembered %016llx box (%.1f %.1f %.1f)..(%.1f %.1f %.1f) v %u",
@@ -831,6 +832,12 @@ void Device::CacheCaster(uint64_t key, const ShadowCaster& c, const void* vertic
 void Device::ForgetCachedCaster(std::unordered_map<uint64_t, CachedCaster>::iterator it)
 {
     ArenaFree(it->second.chunk, it->second.slot, it->second.slotBytes);   // reused once the GPU is done with it
+    auto cover = m_coverMeshes.find(it->first);
+    if (cover != m_coverMeshes.end()) {
+        m_coverTriangles -= cover->second.tri.size() / 9;
+        m_coverMeshes.erase(cover);
+        ++m_coverMeshGen;
+    }
     m_casterCache.erase(it);
     ++m_casterCacheEpoch;                        // (the objects' pointers to remembered casters: ObjectEntry::cached)
 }

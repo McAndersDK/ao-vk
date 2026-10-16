@@ -1964,6 +1964,7 @@ private:
         // not (a roof, an overhang, an arch - the sand's solid keeps only what does); how far its ground lies below
         // the ground round it (a hollow: puddles gather there).
         std::vector<float> cover, hollow;
+        uint32_t coverGen = 0;                   // (m_coverMeshGen when built)
         std::vector<uint8_t> fine;               // (the ground captured close up - not the coarse terrain grid's)
         // The flow round solid obstacles (SandFlow): the wind's direction there (x z, a unit wind's), how far the air
         // arriving there was pushed aside on its way (x z, world), the nearest obstacle's top (world y).
@@ -1986,6 +1987,8 @@ private:
         uint32_t row = 0;
         size_t item = 0;
         std::vector<uint32_t> items;
+        std::vector<uint64_t> meshes;            // (m_coverMeshes over the map, then)
+        size_t mesh = 0;
         SandSweep sweep;                         // (the new map's, before it is swapped in)
     };
     SandSweep m_sandSweep;                       // the current map's, the wind having turned
@@ -2012,6 +2015,16 @@ private:
     double m_sandFarCarried = 0.0;               // how far the wind has carried them (world; wrapped at 1e6)
     void UpdateSandMap();
     void RasterSandItem(SandMap& m, uint32_t item);
+    // Three world points a triangle: into the map from above (RasterSandItem's own, for any piece).
+    void RasterSandTriangles(SandMap& m, const float* tri, size_t triangles, bool seeThrough);
+    // The remembered (cached) static casters' triangles in world space - what the game draws that isn't a placed
+    // object (a playfield's buildings, roofs, awnings): rasterised into the sand / rain map too (CacheCaster, kept while
+    // remembered).
+    struct CoverMesh { float boundsMin[3], boundsMax[3]; std::vector<float> tri; bool seeThrough; };
+    std::unordered_map<uint64_t, CoverMesh> m_coverMeshes;
+    size_t m_coverTriangles = 0;
+    uint32_t m_coverMeshGen = 0;
+    void AddCoverMesh(uint64_t key, const CachedCaster& e, const void* vertices, const uint16_t* indices);
     void SandFlowCells(const SandMap& m, SandSweep& j);
     void SandOffsetRows(SandSweep& j, int from, int to);
     bool StepSandSweep(SandSweep& j, SandMap& m, double deadline);

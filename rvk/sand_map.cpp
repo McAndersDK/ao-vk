@@ -167,7 +167,8 @@ void Device::UpdateSandMap()
     if (!job.active) {
         const bool moved = !m_sandMap.valid || std::abs(ex - m_sandMap.origin[0]) > kMapN / 4 ||
                            std::abs(ez - m_sandMap.origin[1]) > kMapN / 4;
-        const bool stale = m_frameClock - m_sandMap.built > 4.0 || m_sandMap.statelGen != m_statelGeneration;
+        const bool stale = m_frameClock - m_sandMap.built > 4.0 || m_sandMap.statelGen != m_statelGeneration ||
+                           (m_sandMap.coverGen != m_coverMeshGen && m_frameClock - m_sandMap.built > 1.0);
         if (moved || stale) {
             job = SandMapJob{};
             job.active = true;
@@ -187,6 +188,10 @@ void Device::UpdateSandMap()
             m.statelGen = m_statelGeneration;
             const float x0 = float(ex) * kMapCell, z0 = float(ez) * kMapCell, size = kMapN * kMapCell;
             StatelItemsIn(x0, z0, x0 + size, z0 + size, job.items);
+            m.coverGen = m_coverMeshGen;
+            for (const auto& [key, c] : m_coverMeshes)
+                if (c.boundsMax[0] >= x0 && c.boundsMin[0] <= x0 + size && c.boundsMax[2] >= z0 && c.boundsMin[2] <= z0 + size)
+                    job.meshes.push_back(key);
         }
     }
     if (job.active) {
@@ -213,7 +218,14 @@ void Device::UpdateSandMap()
         // The placed objects, an item at a time.
         while (job.row >= uint32_t(kMapN) && job.item < job.items.size() && NowMs() - start < kBudgetMs)
             RasterSandItem(m, job.items[job.item++]);
-        if (job.row >= uint32_t(kMapN) && job.item >= job.items.size() && !job.swept) {
+        // ... and what else the game draws standing still (remembered casters: a playfield's buildings, roofs).
+        while (job.row >= uint32_t(kMapN) && job.item >= job.items.size() && job.mesh < job.meshes.size() &&
+               NowMs() - start < kBudgetMs) {
+            auto c = m_coverMeshes.find(job.meshes[job.mesh++]);
+            if (c != m_coverMeshes.end())
+                RasterSandTriangles(m, c->second.tri.data(), c->second.tri.size() / 9, c->second.seeThrough);
+        }
+        if (job.row >= uint32_t(kMapN) && job.item >= job.items.size() && job.mesh >= job.meshes.size() && !job.swept) {
             if (!job.nearest) {
                 FinishSandCells(m);
                 SandNearest(m);
@@ -241,10 +253,11 @@ void Device::UpdateSandMap()
                     crown += m_sandMap.crownHi[c] > kUnknown * 0.5f;
                 }
                 Log("sand map: %d x %d cells of %.1f round (%.0f %.0f): ground known %.0f%%, solid %.1f%%, see-through "
-                    "%.1f%%; %zu placed pieces", kMapN, kMapN, double(kMapCell), double(m_frameEye[0]),
+                    "%.1f%%; %zu placed pieces, %zu other meshes (%zu triangles kept)", kMapN, kMapN, double(kMapCell), double(m_frameEye[0]),
                     double(m_frameEye[2]), 100.0 * double(ground) / double(m_sandMap.ground.size()),
                     100.0 * double(solid) / double(m_sandMap.ground.size()),
-                    100.0 * double(crown) / double(m_sandMap.ground.size()), job.items.size());
+                    100.0 * double(crown) / double(m_sandMap.ground.size()), job.items.size(), job.meshes.size(),
+                    m_coverTriangles);
             }
         }
     }
@@ -521,23 +534,31 @@ void Device::RasterSandItem(SandMap& m, uint32_t index)
     // (A cut-out mostly whole - a roof's, a grating's - keeps the rain off as a solid one; a canopy's leaves are seen
     // through, the wind and the rain through them slowed.)
     const bool seeThrough = p.alphaRef >= 0.0f && p.opaque < kRoofOpaque;
-    const float ox = float(m.origin[0]) * kMapCell, oz = float(m.origin[1]) * kMapCell;
     if (uint64_t(p.firstVertex) + p.vertexCount > m_statelCpuPositions.size() / 3 ||
         uint64_t(p.firstIndex) + p.indexCount > m_statelCpuIndices.size())
         return;
     const auto& w = it.world.m;
-    auto place = [&](uint16_t i, float out[3]) {
-        const float* v = &m_statelCpuPositions[(size_t(p.firstVertex) + i) * 3];
-        for (int k = 0; k < 3; ++k) out[k] = v[0] * w[0][k] + v[1] * w[1][k] + v[2] * w[2][k] + w[3][k];
-    };
+    std::vector<float> tri;
+    tri.reserve(size_t(p.indexCount) * 3);
     for (uint32_t t = 0; t + 2 < p.indexCount; t += 3) {
-        float a[3], b[3], c[3];
         const uint16_t* idx = &m_statelCpuIndices[p.firstIndex + t];
         if (idx[0] >= p.vertexCount || idx[1] >= p.vertexCount || idx[2] >= p.vertexCount)
             continue;
-        place(idx[0], a);
-        place(idx[1], b);
-        place(idx[2], c);
+        for (int k = 0; k < 3; ++k) {
+            const float* v = &m_statelCpuPositions[(size_t(p.firstVertex) + idx[k]) * 3];
+            for (int j = 0; j < 3; ++j) tri.push_back(v[0] * w[0][j] + v[1] * w[1][j] + v[2] * w[2][j] + w[3][j]);
+        }
+    }
+    RasterSandTriangles(m, tri.data(), tri.size() / 9, seeThrough);
+}
+
+void Device::RasterSandTriangles(SandMap& m, const float* tri, size_t triangles, bool seeThrough)
+{
+    const float ox = float(m.origin[0]) * kMapCell, oz = float(m.origin[1]) * kMapCell;
+    for (size_t t = 0; t < triangles; ++t) {
+        const float* a = tri + t * 9;
+        const float* b = a + 3;
+        const float* c = a + 6;
         const float a2[2] = {a[0] - ox, a[2] - oz}, b2[2] = {b[0] - ox, b[2] - oz}, c2[2] = {c[0] - ox, c[2] - oz};
         const int x0 = std::max(int(std::floor(std::min({a2[0], b2[0], c2[0]}) / kMapCell)), 0);
         const int x1 = std::min(int(std::floor(std::max({a2[0], b2[0], c2[0]}) / kMapCell)), kMapN - 1);
@@ -575,6 +596,48 @@ void Device::RasterSandItem(SandMap& m, uint32_t index)
                 }
             }
     }
+}
+
+// A remembered static caster's triangles kept for the map (world space; triangle lists and strips). Not the ground,
+// characters, plants with leaves; a cut-out one (its texture with holes) as see-through. Bounded in all.
+void Device::AddCoverMesh(uint64_t key, const CachedCaster& e, const void* vertices, const uint16_t* indices)
+{
+    constexpr size_t kMostTriangles = 400000, kMostOne = 20000;
+    const VisualKind kind = VisualKind(e.kind);
+    if ((kind != VisualKind::Static && kind != VisualKind::Unknown) || e.leafKey || (e.primitive != 4 && e.primitive != 5))
+        return;
+    const size_t n = e.indexCount ? e.indexCount : e.vertexCount;
+    const size_t triangles = e.primitive == 4 ? n / 3 : n >= 3 ? n - 2 : 0;
+    if (!triangles || triangles > kMostOne || m_coverTriangles + triangles > kMostTriangles)
+        return;
+    CoverMesh c;
+    std::memcpy(c.boundsMin, e.boundsMin, sizeof(c.boundsMin));
+    std::memcpy(c.boundsMax, e.boundsMax, sizeof(c.boundsMax));
+    c.seeThrough = e.texture && !e.texture->m_opaque && e.alphaRef >= 0.0f;
+    c.tri.reserve(triangles * 9);
+    const uint8_t* v = static_cast<const uint8_t*>(vertices);
+    const auto& w = e.world.m;
+    auto put = [&](size_t i) {
+        const uint32_t k = e.indexCount ? indices[i] : uint32_t(i);
+        if (k >= e.vertexCount) { for (int j = 0; j < 3; ++j) c.tri.push_back(0.0f); return false; }
+        float p[3];
+        std::memcpy(p, v + size_t(k) * e.stride, sizeof(p));
+        for (int j = 0; j < 3; ++j) c.tri.push_back(p[0] * w[0][j] + p[1] * w[1][j] + p[2] * w[2][j] + w[3][j]);
+        return true;
+    };
+    for (size_t t = 0; t < triangles; ++t) {
+        const size_t base = e.primitive == 4 ? t * 3 : t;
+        const size_t before = c.tri.size();
+        if (!(put(base) & put(base + 1) & put(base + 2)))
+            c.tri.resize(before);                // (an index out of range: left out)
+    }
+    if (c.tri.empty())
+        return;
+    m_coverTriangles += c.tri.size() / 9;
+    auto old = m_coverMeshes.find(key);
+    if (old != m_coverMeshes.end()) m_coverTriangles -= old->second.tri.size() / 9;
+    m_coverMeshes[key] = std::move(c);
+    ++m_coverMeshGen;
 }
 
 // The terrain grid's height at a world x, z (bilinear over its known cells; kUnknown outside or unknown).
