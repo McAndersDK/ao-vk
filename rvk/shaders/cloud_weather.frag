@@ -41,7 +41,10 @@ void main()
     float edge = smoothstep(W.storm.y, W.storm.y * 1.35, fromEye);
     float sealed = W.storm.x * (1.0 - edge), cells = W.storm.x * edge;
     float type = W.info.z;
-    cover = mix(cover, 0.78 + 0.22 * smoothstep(0.2, 0.8, soft), sealed);
+    // (Its masses at two scales - one ~25 km - heavy dark ones and lighter stretches between, never a hole.)
+    float mass = Spread(texture(noiseTexture, vec3(q * 0.37 + 2.3, 0.44 + W.info.x * 0.0002)).r, 0.5, 0.75);
+    float heavy = smoothstep(0.2, 0.8, 0.55 * soft + 0.45 * mass);
+    cover = mix(cover, 0.78 + 0.22 * heavy, sealed);
     if (cells > 0.0) {
         float c = Spread(texture(noiseTexture, vec3(q * 0.55 + 1.7, 0.33 + W.info.x * 0.0002)).r, 0.5, 0.75);
         float tower = smoothstep(0.5, 0.72, c);
@@ -52,5 +55,20 @@ void main()
     // A: how far above the layer's base the clouds start here - an uneven underside (seen from below, an overcast
     // is lumps and folds at different heights, lit differently, not one flat ceiling).
     float base = Spread(texture(noiseTexture, vec3(q * 3.3 + 0.71, 0.27 + W.info.x * 0.0003)).r, 0.54, 0.80);
-    outWeather = vec4(clamp(cover, 0.0, 1.0), type, W.info.w, base);
+    float density = W.info.w;
+    if (sealed > 0.0) {
+        // A storm's underside at three scales - long swells (~10 km), folds (~2.5 km), the fine lumps above - and lowest
+        // under its heaviest masses: dark bellies hanging down (user: its lumps all at one height made waves). (Not thinner
+        // between: see-through cloud is marched through its whole depth - the cost doubled.)
+        float swell = Spread(texture(noiseTexture, vec3(q * 0.9 + 3.1, 0.71 + W.info.x * 0.0002)).r, 0.5, 0.75);
+        float fold = Spread(texture(noiseTexture, vec3(q * 3.7 + 1.3, 0.13 + W.info.x * 0.0004)).g, 0.5, 0.8);
+        // (Their mix stretched back out to the full range - an average of four noises is far flatter than each: the
+        // underside became one flat floor - the long swells most: the fine lumps' rows broken into heights.)
+        float fine2 = Spread(texture(noiseTexture, vec3(q * 7.9 + 0.29, 0.58 + W.info.x * 0.0005)).b, 0.5, 0.8);
+        float mixed = 0.42 * swell + 0.25 * fold + 0.23 * base + 0.1 * fine2;
+        float stormBase = clamp((mixed - 0.5) * 2.0 + 0.5 - 0.3 * (heavy - 0.5), 0.0, 1.0);
+        float k = sealed / max(W.storm.x, 1e-3);
+        base = mix(base, stormBase, k);
+    }
+    outWeather = vec4(clamp(cover, 0.0, 1.0), type, clamp(density, 0.0, 1.0), base);
 }

@@ -106,9 +106,30 @@ float Density(vec3 p, bool detail)
     vec4 w = textureLod(weatherMap, uv, 0.0);
     if (w.r < 0.005)                             // (clear: nothing - the warp below reaches only a few texels)
         return 0.0;
+    // (Under a storm's raised floor: nothing - out early, before the noise: a ray passed up to ~2.5 km of the layer's
+    // empty bottom there, every sample paying for the shape noise.)
+    if (L.ambient.w > 0.5 && w.g > 0.93 && h < (w.a * 900.0 - 160.0) / gThick)
+        return 0.0;
     vec3 q = (p + gWind) * L.shape.x;
     q.y *= 1.6;                                  // (cells a little flatter than wide)
-    vec4 n = textureLod(shapeNoise, q, 0.0);
+    // A storm (its sealed deck: type ~0.95, by the storm sky): no single lump size - the body's cells pushed about by a
+    // slow field and blended with cells 2.3 times smaller where another slow field says, drawn out a little along the
+    // wind (rolls) - its lumps had all one size on one plane: a wave pattern (user).
+    float storm = L.ambient.w * smoothstep(0.85, 0.93, w.g);
+    vec4 n;
+    if (storm > 0.0) {
+        vec2 along = normalize(L.wind.xz + vec2(1e-3, 0.0));
+        float a = dot(q.xz, along), c = dot(q.xz, vec2(-along.y, along.x));
+        vec2 st = along * (a * mix(1.0, 0.67, storm)) + vec2(-along.y, along.x) * c;
+        vec3 qs = vec3(st.x, q.y, st.y);
+        if (detail) {                            // (the sun's march without: ~6 of them a sample)
+            vec4 f = textureLod(shapeNoise, (p + gWind * 0.7) / 14000.0, 0.0);
+            qs += (f.gba - 0.5) * 0.7 * storm;
+        }
+        n = textureLod(shapeNoise, qs, 0.0);
+    } else {
+        n = textureLod(shapeNoise, q, 0.0);
+    }
     // The weather read a little off where the body's noise says, differently at each height: coverage's edges then
     // lean and wander instead of standing as straight walls (seen from below, walls line up into streaks).
     w = textureLod(weatherMap, uv + (n.gb - 0.5) * (500.0 * L.weather.z), 0.0);
@@ -119,9 +140,14 @@ float Density(vec3 p, bool detail)
     if (cover < 0.01)
         return 0.0;
     float fbm = n.g * 0.625 + n.b * 0.25 + n.a * 0.125;
-    float lift = w.a * (0.07 + 0.08 * L.ambient.w);   // (in a storm - L.ambient.w - a lumpier underside)                     // (the uneven underside: the clouds start this much higher here -
+    float lift = w.a * (0.07 + 0.08 * L.ambient.w);   // (in a storm - L.ambient.w - a lumpier underside)
+    lift = mix(lift, w.a * 900.0 / gThick, storm);   // (a storm's: its base up to 900 units higher, by the map's swells)                     // (the uneven underside: the clouds start this much higher here -
                                                  // gently: more, and an overcast hangs in waves)
-    float body = Remap(n.r, fbm - 1.0, 1.0, 0.0, 1.0) * Profile(clamp((h - lift) / (1.0 - lift), 0.0, 1.0), w.g);
+    // (A storm's floor ragged: its height wanders with the 3D noise, ~+-90 units, solid above it - not a sharp floor of
+    // round bulbs. Not by thinning it: a see-through underside marched deep cost ~1.7 ms in game.)
+    lift += (n.b - 0.5) * (180.0 / gThick) * storm;
+    float hb = clamp((h - lift) / (1.0 - lift), 0.0, 1.0);
+    float body = Remap(n.r, fbm - 1.0, 1.0, 0.0, 1.0) * Profile(hb, w.g);
     // Coverage eats into the body from its thin parts: little cover, only the cores remain.
     float d = clamp(Remap(body, 1.0 - cover, 1.0, 0.0, 1.0), 0.0, 1.0) * cover;
     if (d <= 0.0 || !detail)                     // (the detail below only takes away)
@@ -130,7 +156,9 @@ float Density(vec3 p, bool detail)
     // towards the top, where cumulus heap up.
     float billow = textureLod(shapeNoise, q * 3.1 + 0.17, 0.0).g;
     // (As much as the edges' erosion: the weather's detail - storms smoother.)
-    body = Remap(body, (1.0 - billow) * mix(0.15, 0.35, clamp(h * 2.0, 0.0, 1.0)) * clamp(L.shape.z / 0.65, 0.3, 1.5), 1.0, 0.0, 1.0);
+    // (A storm's underside without them: they made its even bulbs.)
+    float billowAmount = mix(0.15, 0.35, clamp(h * 2.0, 0.0, 1.0)) * mix(1.0, 0.35 + 0.65 * smoothstep(0.05, 0.3, hb), storm);
+    body = Remap(body, (1.0 - billow) * billowAmount * clamp(L.shape.z / 0.65, 0.3, 1.5), 1.0, 0.0, 1.0);
     d = clamp(Remap(body, 1.0 - cover, 1.0, 0.0, 1.0), 0.0, 1.0) * cover;
     if (d <= 0.0)
         return 0.0;
@@ -436,8 +464,11 @@ void main()
     // (Step lengths by the layer's usual thickness, not a thunderstorm's three times taller: its steps three times as
     // long left its cloud in terraces - user's dump.)
     float baseThick = min(gThick, 1300.0);
-    float minStep = baseThick * 0.012, along = (t1 - t0) / float(steps);
-    float t = t0 + jitter * clamp(t0 * 0.012, minStep, along);
+    // (A storm's steps longer: its varied underside hangs closer, where steps are short - the cost grew with it; the
+    // blue noise and the edge's small steps keep it smooth.)
+    float growth = mix(0.012, 0.018, L.ambient.w);
+    float minStep = baseThick * growth, along = (t1 - t0) / float(steps);
+    float t = t0 + jitter * clamp(t0 * growth, minStep, along);
     float lightJitter = fract(blue.g + FL.taa.z);   // (the sun's steps moved too: no shells of light)
     // Adaptive steps (vertexfragment.com "volumetric cloud banding", after Horizon Zero Dawn): long steps through clear
     // air; at the first cloud a quarter of the step, three of them back (the edge lies before the sample), and small
@@ -451,7 +482,7 @@ void main()
     bool refined = false;                        // (the first edge found)
     float odLast = -1.0;                         // (the last sample's way to the sun)
     for (int i = 0; i < steps + 8 && transmit > 0.01 && t < t1; ++i) {
-        float big = clamp(t * 0.012, minStep, max(along, minStep));
+        float big = clamp(t * growth, minStep, max(along, minStep));
         bool fine = fineLeft > 0 && fineMax > 0;
         float dt = fine ? big * 0.25 : big;
         vec3 p = eye + dir * t;
@@ -481,8 +512,8 @@ void main()
         bool reuse = fine && (fineMax & 1) == 1 && odLast >= 0.0;
         float od = reuse ? odLast : 0.0;
         bool far = tHere > 8000.0;
-        int lightSteps = far ? 2 : int(L.view.w);
-        float ls = baseThick * (far ? 0.1 : 0.045), grow = far ? 2.2 : 1.5;
+        int lightSteps = far ? 2 : int(L.view.w) - (L.ambient.w > 0.5 ? 1 : 0);   // (a storm hides the sun: one less)
+        float ls = baseThick * (far ? 0.1 : 0.045), grow = far ? 2.2 : (lightSteps < int(L.view.w) ? 1.75 : 1.5);
         vec3 lp = p + sunL * (ls * (lightJitter - 0.5));
         for (int k = 0; k < lightSteps && !reuse; ++k) {
             lp += sunL * ls;
