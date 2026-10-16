@@ -461,7 +461,7 @@ feature costs exactly where you are.
   character code (below) takes the renderer's share of it off the game's thread.
 - Shadows are drawn from the untessellated characters.
 - The game's ground render mode must be **Shadows** (video options): the grass, the valley mist and the terrain's
-  lighting read the ground as that mode draws it. AOReloaded keeps it at Shadows while randy-vk is loaded.
+  lighting read the ground as that mode draws it (the Renderer tab says so).
 - The water's reflections are screen-space: what is off screen reflects as sky.
 
 ## How it works
