@@ -1342,12 +1342,14 @@ void Device::UpdateCloudDrift()
     m_cloudDrift[1] -= m_cloudWindDir[1] / dl * m_cloudWindSpeed * dt;
     m_cloudDrift[2] += 1.5f * dt;
     // The clouds' churn (cloud_layer.frag Density): a slow field through which they are pushed about, itself moving on -
-    // changed wholly in ~90 s on a fair day, ~20 s in a storm (user: realistic, a storm's faster); its detail rising
-    // faster in a storm (boiling); the weather map's masses growing and breaking up four times as fast.
+    // changed wholly in ~90 s on a fair day, ~35 s in a storm (user: realistic, a storm's faster - at 20 s with a 7 km
+    // field pushing ~1350 units, a lava lamp); its detail rising
+    // faster in a storm (boiling); the weather map's masses growing and breaking up twice as fast (4x: holes opening and
+    // closing in seconds).
     const float morph = std::clamp(m_cloudParams.morph, 0.0f, 3.0f), storm = StormSky();
-    m_cloudMorphPhase = std::fmod(m_cloudMorphPhase + morph * (0.25f / (90.0f + (20.0f - 90.0f) * storm)) * dt, 1.0f);
+    m_cloudMorphPhase = std::fmod(m_cloudMorphPhase + morph * (0.25f / (90.0f + (35.0f - 90.0f) * storm)) * dt, 1.0f);
     m_cloudBoil = std::fmod(m_cloudBoil + morph * 8.0f * storm * dt, 100000.0f);
-    m_cloudWeatherTime = std::fmod(m_cloudWeatherTime + double((1.0f + 3.0f * storm * std::min(morph, 1.0f)) * dt), 36000.0);
+    m_cloudWeatherTime = std::fmod(m_cloudWeatherTime + double((1.0f + storm * std::min(morph, 1.0f)) * dt), 36000.0);
     // Scud: in a thunderstorm the low deck races along under the layer, three times as fast and more (the storm's
     // gusts) - added up, so a change of pace never jumps it.
     const float scudSpeed = m_cloudWindSpeed * 2.5f * StormSky();
@@ -1661,12 +1663,12 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     lf.scud[0] = m_scudDrift[0];
     lf.scud[1] = m_scudDrift[1];
     lf.scud[2] = scud;                           // (cloud_layer.frag DeckDensity: torn into ragged fragments)
-    // The churn (UpdateCloudDrift): its field's phase, how far it pushes (body tiles: ~540 units fair, ~1350 a storm's -
-    // its own mixed lumps), the detail's extra rise.
+    // The churn (UpdateCloudDrift): its field's phase, how far it pushes (body tiles: ~180 units fair, ~450 a storm's -
+    // the edges and lumps changing, not whole clouds bulging: user, a lava lamp at 3x), the detail's extra rise.
     {
         const float morph = std::clamp(m_cloudParams.morph, 0.0f, 3.0f);
         lf.morph[0] = m_cloudMorphPhase;
-        lf.morph[1] = std::min(morph, 1.0f) * (0.12f + 0.18f * StormSky());
+        lf.morph[1] = std::min(morph, 1.0f) * (0.04f + 0.06f * StormSky());
         lf.morph[2] = m_cloudBoil;
         // (The rain veils under a storm: some with its sky alone, all while it rains - any rain: the game's is ~0.1.)
         const float rainy = smoothstep01(0.0f, 0.05f, std::clamp(m_rain, 0.0f, 1.0f));

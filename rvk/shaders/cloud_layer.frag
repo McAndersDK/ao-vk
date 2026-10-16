@@ -130,9 +130,10 @@ float Density(vec3 p, bool detail)
     // The churn: the cells pushed about by a slow field that itself moves on (its phase through the noise) - shapes
     // keep changing as they drift, never stretched out (the push stays bounded); the tops more than the bases. (User:
     // the clouds were static.) In the sun's march too, or the light would stand still while the shapes move.
-    // (The sun's march takes its sample's push - gPushKept: the field is ~7 km across, its steps within ~1 km.)
+    // (The sun's march takes its sample's push - gPushKept: the field's cells ~600 units, its steps mostly within
+    // ~300 - a 7 km field pushing whole clouds about looked a lava lamp: user.)
     if (!gPushKept)
-        gPush = textureLod(shapeNoise, (p + gWind * 0.85) * vec3(1.0, 1.6, 1.0) / 7000.0 + vec3(0.0, L.morph.x, 0.0), 0.0).gba - 0.5;
+        gPush = textureLod(shapeNoise, (p + gWind * 0.85) * vec3(1.0, 1.6, 1.0) / 2500.0 + vec3(0.0, L.morph.x, 0.0), 0.0).gba - 0.5;
     q += gPush * (L.morph.y * (0.6 + 0.8 * h));
     // A storm (its sealed deck: type ~0.95, by the storm sky): its cells drawn out a little along the wind (rolls), pushed
     // further by the churn - its lumps had all one size on one plane: a wave pattern (user).
