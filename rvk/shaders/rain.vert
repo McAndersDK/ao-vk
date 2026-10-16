@@ -52,7 +52,8 @@ void main()
     vec3 rel = (head - R.camera.xyz) / (size * 0.5);
     float edge = 1.0 - smoothstep(0.65, 1.0, max(abs(rel.x), max(abs(rel.y), abs(rel.z))));
     float dist = distance(head, R.camera.xyz);
-    float alpha = R.colour.w * edge * smoothstep(0.3, 1.2, dist) * mix(1.0, 0.6 + 2.6 * gust, R.curtains.x) * look;
+    float alpha = R.colour.w * edge * smoothstep(0.3, 1.2, dist) * mix(1.0, 0.9 + 0.65 * gust, 0.6 * R.curtains.x) * look;   // (curtains: subtle - stronger, the gust fronts swept
+                                                                                   // by as bright bands at an even beat)
 
     vec4 cHead = R.viewProj * vec4(head, 1.0), cTail = R.viewProj * vec4(tail, 1.0);
     if (cHead.w < 0.05 || cTail.w < 0.05 || alpha <= 0.0) {

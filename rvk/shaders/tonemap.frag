@@ -256,7 +256,7 @@ void main()
     // Water: a drop hides a little of what is behind it, gives some back focused (a lens: brighter), and adds the light
     // it reflects - clear, lighter streaks, not painted ones (the user: as our water).
     float rainA = clamp(rain.a, 0.0, 1.0);
-    c = c * (1.0 - 0.25 * rainA) + c * (0.3 * rainA) + rain.rgb;
+    c = c * (1.0 - 0.15 * rainA) + c * (0.2 * rainA) + rain.rgb;
     c = max((c + Volumetric() * volumetric + glow) * P.params.y, vec3(0.0));
     // Night (RVK_NightDark x how much it is night): darker - the darks and middle tones down, the sky more; what is
     // bright kept (lamps, windows, the moon, stars, moonlit cloud edges), so it stands out of the dark.

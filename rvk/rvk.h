@@ -614,6 +614,7 @@ public:
         float brightness = 1.0f;                 // RVK_RainBright: the drops' and splashes' light, x
         float speed = 15.0f;                     // RVK_RainSpeed: a drop's fall (units / s)
         float length = 0.45f;                    // RVK_RainLength: a falling drop's streak (units)
+        float lean = 0.3f;                       // RVK_RainLean: its most slant, sideways per unit of fall (0.3 ~17 deg)
         float stormForce = 0.0f;                 // RVK_StormForce: a thunderstorm this hard regardless of the game's
                                                  // (its rain, its wind, lightning of our own; 0 = the game's)
         float strikeRate = 6.0f;                 // RVK_StrikeRate: its strikes a minute at full strength

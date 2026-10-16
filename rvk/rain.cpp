@@ -230,8 +230,9 @@ void Device::RenderRain(VkCommandBuffer cmd)
     if (!drops)
         return;
 
-    // The wind leans the rain (the game's, smoothed; at most ~45 degrees) - without one, the shared wind's (wind.cpp),
-    // as hard as the storm.
+    // The wind leans the rain (the game's, smoothed; at most RVK_RainLean of the fall - ~17 degrees: the game's storms
+    // blow ~40 units a second, and capped at 45 degrees the rain came in near level - the user) - without one, the
+    // shared wind's (wind.cpp), as hard as the storm.
     const float stormLean = 4.0f * m_storm * std::max(m_windStormScale, 0.0f);
     const float shared[3] = {m_windDir[0] * stormLean, 0.0f, m_windDir[1] * stormLean};
     for (int i = 0; i < 3; ++i) {
@@ -241,7 +242,8 @@ void Device::RenderRain(VkCommandBuffer cmd)
     float wind[3] = {m_rainWind[0], 0.0f, m_rainWind[2]};
     const float wl = std::hypot(wind[0], wind[2]);
     const float fallSpeed = std::clamp(P.speed, 1.0f, 60.0f);   // RVK_RainSpeed
-    if (wl > fallSpeed) { wind[0] *= fallSpeed / wl; wind[2] *= fallSpeed / wl; }
+    const float maxLean = std::clamp(P.lean, 0.0f, 1.0f) * fallSpeed;
+    if (wl > maxLean) { const float k = wl > 1e-4f ? maxLean / wl : 0.0f; wind[0] *= k; wind[2] *= k; }
     // The drops' way so far, added up (rain.vert: a drop's place from it, so a change of lean moves them on, never
     // jumps them); wrapped now and then (one jump a few hours apart).
     const float velocity[3] = {wind[0], -fallSpeed, wind[2]};
@@ -273,7 +275,7 @@ void Device::RenderRain(VkCommandBuffer cmd)
     for (int i = 0; i < 3; ++i) rf.drift[i] = float(m_rainDrift[i]);
     // In a storm the gust fronts (wind.glsl Gust) lean the rain harder as they pass, and gather it into curtains.
     const float stormy = std::clamp(m_storm * std::max(m_windStormScale, 0.0f), 0.0f, 1.5f);
-    rf.drift[3] = 5.0f * stormy;
+    rf.drift[3] = 0.4f * maxLean * stormy;   // (a gust front's extra lean: a little - the rain stays steep)
     rf.curtains[0] = std::min(stormy, 1.0f);
     rf.curtains[1] = std::clamp(P.length, 0.02f, 5.0f) / fallSpeed;   // (RVK_RainLength: the streak, as seconds of its fall)
     // The game's drop colour tints it (a colourless one: plain water); its opacity is the rain's own.
@@ -290,7 +292,7 @@ void Device::RenderRain(VkCommandBuffer cmd)
     const float bright = std::clamp(P.brightness, 0.0f, 4.0f);
     for (int i = 0; i < 3; ++i)
         rf.colour[i] *= bright;
-    rf.colour[3] = 0.35f;
+    rf.colour[3] = 0.22f;                       // (fairly see-through - the user: not solid)
     if (m_terrainAmbient[3] > 0.5f)
         std::memcpy(rf.ambient, m_terrainAmbient, 16);
     else
