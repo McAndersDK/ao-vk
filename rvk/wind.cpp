@@ -48,7 +48,7 @@ void Device::UpdateWind()
     const bool forced = m_sandForce > 0.0f;
     const bool tint = forced || now - m_stormTintSeen < 0.5;
     const uint32_t tintColour = forced ? (m_sandAsh ? 0x009A9590u : 0x00C07830u) : m_stormTintColour;
-    const float sandTarget = forced ? 0.38f * m_sandForce : tint ? float(m_stormTintColour >> 24) / 255.0f : 0.0f;
+    const float sandTarget = m_indoors ? 0.0f : forced ? 0.38f * m_sandForce : tint ? float(m_stormTintColour >> 24) / 255.0f : 0.0f;
     m_sand += (sandTarget - m_sand) * (dt > 0.0f ? 1.0f - std::exp(-dt / 3.0f) : 1.0f);
     if (m_sand < 1e-3f && sandTarget == 0.0f) m_sand = 0.0f;
     if (tint) {

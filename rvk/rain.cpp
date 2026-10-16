@@ -39,7 +39,8 @@ const uint32_t kDebrisVertSpirv[] = {
 const uint32_t kDebrisFragSpirv[] = {
 #include "debris.frag.inc"
 };
-constexpr uint32_t kDebrisMax = 900;            // a full storm's bits round the camera (RVK_StormDebris 1)
+constexpr uint32_t kDebrisMax = 900;            // a full storm's bits round the camera (RVK_StormDebris 1): of them
+constexpr uint32_t kDebrisTrees = 700;          // ... torn from trees (drawn only where there are), the rest lying about
 const uint32_t kBoltVertSpirv[] = {
 #include "bolt.vert.inc"
 };
@@ -275,6 +276,8 @@ void Device::RenderDebris(VkCommandBuffer cmd)
     float ground;
     rf.drift[3] = GroundAt(eye[0], eye[2], &ground, nullptr, nullptr) ? ground : eye[1] - 1.7f;
     rf.curtains[0] = storm;
+    rf.curtains[1] = std::clamp(m_sand * 4.0f, 0.0f, 1.0f);   // (a sandstorm: no leaves lying about)
+    rf.curtains[2] = float(bits * kDebrisTrees / kDebrisMax);
     if (m_terrainAmbient[3] > 0.5f)
         std::memcpy(rf.ambient, m_terrainAmbient, 16);
     else
@@ -336,7 +339,7 @@ void Device::RenderRain(VkCommandBuffer cmd)
     const float dt = m_rainLastClock < 0.0 ? 0.0f : float(std::clamp(now - m_rainLastClock, 0.0, 0.25));
     m_rainLastClock = now;
     float target = 0.0f;
-    if (P.enable) {
+    if (P.enable && !m_indoors) {
         if (P.force > 0.0f || P.stormForce > 0.0f)
             target = std::min(std::max(P.force, P.stormForce), 1.0f);   // (forced: rain, or a thunderstorm's)
         else if (now - m_weatherGameTime < 0.5) {
@@ -718,7 +721,7 @@ void Device::UpdateLightning()
     // A forced thunderstorm (RVK_StormForce): strikes of our own, at random (RVK_StrikeRate a minute as the storm
     // stands at full strength), anywhere from near to far round the camera, from the cloud base.
     const WeatherParams& P = m_weatherParams;
-    if (P.stormForce > 0.0f && P.strikeRate > 0.0f && dt > 0.0f && m_frameEyeValid) {
+    if (P.stormForce > 0.0f && P.strikeRate > 0.0f && dt > 0.0f && m_frameEyeValid && !m_indoors) {
         const uint32_t seed = uint32_t(m_frameNumber) * 747796405u + 2891336453u;
         const float chance = 1.0f - std::exp(-P.strikeRate / 60.0f * std::min(m_storm, 1.0f) * dt);
         if (StrikeHash(seed, 11) < chance && now - m_flashStart > 0.8) {

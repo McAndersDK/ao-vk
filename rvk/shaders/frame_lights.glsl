@@ -54,7 +54,8 @@ layout(set = 0, binding = FL_BINDING, std140) uniform FrameLights {
     vec4 flashWorld;            // ... the strike (world xyz: the storm's fog lit round it)
     vec4 rainNear;              // x: 1 = the tone mapping's rain layer (binding 16) holds this frame's rain; y: how much a
                                 // thunderstorm hides the sun (rvk Device::StormOvercast: the land darker, shadows gone); z:
-                                // a storm's blowing (ffp.vert FallingLeaf: leaves torn off and carried far)
+                                // a storm's blowing (ffp.vert FallingLeaf: leaves torn off and carried far); w: 1 = the
+                                // screen-space reflections on (ffp_main's wet ground: its own sky sheen lighter)
     vec4 wet;                   // the wet ground (rvk rain.cpp): x how soaked, y the puddles, z the rain's clock, w the
                                 // cover map's heights' reference (world y)
     vec4 cover;                 // the rain's cover map (rvk sand_map.cpp RainCoverMap): corner x, z, 1 / size, bindless

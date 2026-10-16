@@ -1266,7 +1266,7 @@ bool WriteSandPack(const char* path, const std::vector<SandBox>& boxes)
                                        2, 3, 7, 2, 7, 6, 0, 2, 6, 0, 6, 4, 1, 5, 7, 1, 7, 3};
     for (uint32_t i = 0; i < n; ++i) put(kTris, sizeof(kTris));                           // indices
     while (out.size() % 4) out.push_back(0);
-    for (int k = 0; k < 64; ++k) out.push_back(128);                                       // texels
+    for (int k = 0; k < 64; ++k) out.push_back(uint8_t(((k ^ (k >> 3)) & 1) ? 255 : 0));   // texels (half leaves)
     FILE* f = std::fopen(path, "wb");
     if (!f) return false;
     std::fwrite(out.data(), 1, out.size(), f);

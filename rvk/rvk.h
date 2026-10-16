@@ -917,7 +917,10 @@ private:
     bool Overbright2x(uint32_t fvf) const;
     uint64_t m_frameNumber = 0;
     bool m_frameLightsDirty = true;
-    bool m_frameEyeValid = false;                // the camera the frame's light list is chosen from
+    bool m_frameEyeValid = false;
+    uint32_t m_frameRoomVisuals = 0, m_frameTerrainVisuals = 0;   // this frame's draws of rooms, of terrain (BeginFrame)
+    uint32_t m_indoorRun = 0;                    // frames in a row the other way
+    bool m_indoors = false;                      // a room's playfield: no weather                // the camera the frame's light list is chosen from
     float m_frameEye[3] = {}, m_frameForward[3] = {};
     void UpdateFrameEye();
     uint64_t m_frameLightsGeneration = ~0ull;
@@ -1201,7 +1204,9 @@ private:
     struct CasterStreak { uint64_t lastFrame = 0; uint32_t count = 0; float at[3] = {}; bool moved = false; };
     std::unordered_map<uint64_t, CachedCaster> m_casterCache;
     // Placed objects (statels.cpp): every piece of the playfield's static objects, placed; a grid (x, z) over them.
-    struct StatelPiece { uint32_t firstVertex, vertexCount, firstIndex, indexCount; Texture* texture; float alphaRef; };
+    // (opaque: of a cut-out piece's mask, the share kept by its alpha test - a roof's cut-out mostly whole, a canopy's
+    // leaves not; 1 for a solid piece.)
+    struct StatelPiece { uint32_t firstVertex, vertexCount, firstIndex, indexCount; Texture* texture; float alphaRef, opaque; };
     struct StatelItem { d3d::Matrix world; float boundsMin[3], boundsMax[3]; uint32_t piece, statel; uint8_t kind; };
     struct StatelPlaced { float x, y, z; int yaw, pitch, roll; float scale; uint32_t mesh; };   // (for the log)
     std::vector<StatelPiece> m_statelPieces;
@@ -2028,6 +2033,7 @@ private:
     uint32_t m_rainCoverGen = ~0u;
     float m_rainCoverRef = 0.0f;
     float m_rainCoverOut[4] = {};                // (this frame's: RainCoverMap's out, 0 0 0 0 without)
+    void DumpRainCover(std::FILE* f, float x, float z);   // (the frame dump: the rain's cover there, the pieces over it)
     void DumpSandMap(const std::string& path) const;
     std::vector<float> m_sandGround;             // per column (4 floats): its top (the ground or a solid's; box units),
                                                  // how much sand it gives, the shelter heights solid, see-through (box

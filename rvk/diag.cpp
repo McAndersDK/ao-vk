@@ -147,6 +147,10 @@ void Device::EndFrameDump()
                                  "remembered; mode %u, placement %s\n",
                      m_statelPlayfield, m_statelItems.size(), m_statelItemsThisFrame, m_statelCoveredLast, m_statelMode,
                      StatelPlacementState().c_str());
+        DumpRainCover(m_dumpFile, m_frameEye[0], m_frameEye[2]);
+        for (const WaterBody& b : m_waterBodies)        // (the characters near: the player under the camera among them)
+            if (std::hypot(b.x - m_frameEye[0], b.z - m_frameEye[2]) < 6.0f)
+                DumpRainCover(m_dumpFile, b.x, b.z);
         std::fprintf(m_dumpFile, "# sun shadow items within 120 of the eye (T this frame, M remembered, P placed; cascades bits):\n");
         for (const ShadowItem& it : m_shadowItems) {
             float d2 = 0.0f;

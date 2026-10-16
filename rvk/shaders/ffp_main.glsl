@@ -431,6 +431,23 @@ vec3 PbrAmbientSpecular(vec3 nu, vec3 V, vec3 ambientLight)
     return EnvBrdfApprox(gPbrF0, gPbrRough, nv) * env * so;
 }
 
+// What wet ground reflects in a direction R: the environment probe (what the camera has seen that way; level 0 for
+// a puddle's mirror, 1 for soaked ground's blur) where it is sure, else the sky's light guessed as PbrAmbientSpecular
+// does. Needs no screen-space reflections.
+vec3 WetReflection(vec3 R, int level)
+{
+    vec3 amb = C.ambient.rgb + FL.sunColor.rgb * 0.15;
+    vec3 sky = ((C.flags.x & F_FOG) != 0u ? mix(amb, C.fogColor.rgb, 0.5) : amb) + FL.sunColor.rgb * 0.25;
+    vec3 env = mix(amb * 0.5, max(sky * 1.3, FL.cloudSky.rgb), smoothstep(-0.4, 0.6, R.y));
+    uint probe = floatBitsToUint(FL.pbr2.w);
+    if ((probe & 0xFFFFFu) != 0u) {
+        uint img = (probe & 0xFFFFFu) - 1u, smp = (probe >> 20) & 0xFFu;
+        vec4 p = textureLod(sampler2D(texImages[img], bindlessSamplers[smp]), EnvAtlasUv(R, level), 0.0);
+        env = mix(env, p.rgb, clamp(p.a, 0.0, 1.0));
+    }
+    return env;
+}
+
 // Normal mapping (F_NORMALMAP): the texture's own tangent-space normal map, OpenGL convention (what Blender bakes:
 // +X along +u, +Y up in the image = against D3D's v). A normal (x, y, z) is the height slope (-x/z, y/z) per world
 // unit along u and down-v; scaled by the world size of a uv unit it bends the normal exactly like the generated
@@ -836,7 +853,21 @@ void main()
             float site = clamp(cov.y * 1.2 + WetNoise(vPosW.xz / 4.5) * 0.7 + WetNoise(vPosW.xz / 1.6 + 7.3) * 0.3 - 0.25, 0.0, 1.0);
             float fill = FL.wet.y;
             gPuddle = open * smoothstep(0.8, 0.95, n.y) * smoothstep(1.0 - 0.6 * fill, 1.12 - 0.6 * fill, site) * min(fill * 3.0, 1.0);
-            current.rgb *= (1.0 - 0.35 * gWetLook) * (1.0 - 0.4 * gPuddle);   // (soaked: darker; under water: darker still)
+            current.rgb *= (1.0 - 0.35 * gWetLook) * (1.0 - 0.25 * gPuddle);   // (soaked: darker; under water: darker still)
+            // The sky's sheen on it (Fresnel: the more the flatter it is seen) and the sun's (or a flash's) glint - its
+            // own, so the wet shows without the screen-space reflections (the user plays with them off); with them on,
+            // lighter (they reflect the scene over it).
+            vec3 V = normalize(C.eyePos.xyz - vPosW);
+            float fres = 0.02 + 0.98 * pow(1.0 - max(dot(n, V), 0.0), 5.0);
+            float own = FL.rainNear.w > 0.5 ? 0.35 : 1.0;
+            vec3 Rw = reflect(-V, n);
+            vec3 sky = WetReflection(Rw, gPuddle > 0.5 ? 0 : 1);
+            if (FL.flash.w > 0.0) sky += FL.flash.rgb * 0.6;
+            float sheen = gWetLook * gWetUp * (0.06 + 0.55 * fres) + gPuddle * (0.12 + 0.85 * fres);
+            current.rgb = mix(current.rgb, sky, clamp(sheen * own, 0.0, 0.9));
+            vec3 L = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
+            float glint = pow(max(dot(reflect(-V, n), L), 0.0), mix(40.0, 400.0, gPuddle));
+            current.rgb += FL.sunColor.rgb * (glint * (0.4 * gWetLook * gWetUp + 2.0 * gPuddle) * (0.3 + fres));
             // Rain on the puddles: rings spreading, glinting with the sky's light.
             if (gPuddle > 0.0 && FL.rainNear.y + FL.wet.x > 0.0)
                 current.rgb += C.fogColor.rgb * (0.25 * gPuddle * WetRipples(vPosW.xz, FL.wet.z) * min(FL.wet.x * 2.0, 1.0));

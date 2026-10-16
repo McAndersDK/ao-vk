@@ -368,9 +368,10 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
     fl->rainNear[0] = m_rainNearFrame == m_frameNumber && m_rainNear ? 1.0f : 0.0f;
     fl->rainNear[1] = StormOvercast();
     fl->rainNear[2] = std::clamp(m_storm * std::max(m_windStormScale, 0.0f), 0.0f, 1.0f) * std::clamp(m_stormDebris, 0.0f, 2.0f);
+    fl->rainNear[3] = m_ssr > 0.0f ? 1.0f : 0.0f;
     // The wet ground and the rain's cover map (its bindless slot packed as the terrain's sun map's).
-    fl->wet[0] = m_wetness;
-    fl->wet[1] = m_puddles;
+    fl->wet[0] = m_indoors ? 0.0f : m_wetness;
+    fl->wet[1] = m_indoors ? 0.0f : m_puddles;
     fl->wet[2] = float(std::fmod(m_rainClock, 3600.0));
     fl->wet[3] = m_rainCoverOut[3];
     for (int i = 0; i < 4; ++i) fl->cover[i] = 0.0f;
@@ -1554,6 +1555,8 @@ uint32_t Device::CarriedLight(uint32_t fvf, const void* vertices, uint32_t verte
 void Device::SetDrawVisual(uint32_t kind, const char* className, uint32_t owner, uint32_t visual)
 {
     m_drawVisualKind = kind;
+    if (VisualKind(kind) == VisualKind::Terrain) ++m_frameTerrainVisuals;
+    else if (VisualKind(kind) == VisualKind::Room) ++m_frameRoomVisuals;
     m_drawVisualName = className ? className : "";
     // (A sky visual is named by its class chain, "VisualSingleCloud_t<...".)
     m_drawIsCloudPuff = className && std::strncmp(className, "VisualSingleCloud_t", 19) == 0 &&

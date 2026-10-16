@@ -511,12 +511,16 @@ bool Device::StepSandSweep(SandSweep& j, SandMap& m, double deadline)
     return false;
 }
 
+constexpr float kRoofOpaque = 0.8f;
+
 // A placed piece rasterised into the map from above.
 void Device::RasterSandItem(SandMap& m, uint32_t index)
 {
     const StatelItem& it = m_statelItems[index];
     const StatelPiece& p = m_statelPieces[it.piece];
-    const bool seeThrough = p.alphaRef >= 0.0f;
+    // (A cut-out mostly whole - a roof's, a grating's - keeps the rain off as a solid one; a canopy's leaves are seen
+    // through, the wind and the rain through them slowed.)
+    const bool seeThrough = p.alphaRef >= 0.0f && p.opaque < kRoofOpaque;
     const float ox = float(m.origin[0]) * kMapCell, oz = float(m.origin[1]) * kMapCell;
     if (uint64_t(p.firstVertex) + p.vertexCount > m_statelCpuPositions.size() / 3 ||
         uint64_t(p.firstIndex) + p.indexCount > m_statelCpuIndices.size())
@@ -753,6 +757,37 @@ bool Device::RainCoverMap(float out[4])
     out[2] = 1.0f / (float(kMapN) * kMapCell);
     out[3] = m_rainCoverRef;
     return true;
+}
+
+// The frame dump: what keeps the rain off at a world x, z - the map's cell (solid cover, canopy, ground) and every
+// placed piece whose box stands over it (cut-out or not, how much of its mask is whole, how it counts).
+void Device::DumpRainCover(std::FILE* f, float x, float z)
+{
+    const SandMap& m = m_sandMap;
+    const int cx = int(std::floor(x / kMapCell)) - m.origin[0], cz = int(std::floor(z / kMapCell)) - m.origin[1];
+    if (!m.valid || cx < 0 || cz < 0 || cx >= kMapN || cz >= kMapN || m.cover.size() != size_t(kMapN) * kMapN) {
+        std::fprintf(f, "# rain cover at %.1f %.1f: no map (valid %d)\n", double(x), double(z), int(m.valid));
+        return;
+    }
+    const size_t c = size_t(cz) * kMapN + cx;
+    auto v = [](float y) { return y > kUnknown * 0.5f && y < 1e8f ? double(y) : -1.0; };
+    std::fprintf(f, "# rain cover at %.1f %.1f (cell %d %d): cover %.2f, canopy %.2f, ground %.2f, solid %.2f, floor %.2f, "
+                    "hollow %.2f; wetness %.2f puddles %.2f rain %.2f (-1: none)\n",
+                 double(x), double(z), cx, cz, v(m.cover[c]), v(m.crownHi[c]), v(m.ground[c]), v(m.solid[c]),
+                 v(m.floor[c]), double(m.hollow.size() > c ? m.hollow[c] : 0.0f), double(m_wetness), double(m_puddles),
+                 double(m_rain));
+    std::vector<uint32_t> items;
+    StatelItemsIn(x - 0.25f, z - 0.25f, x + 0.25f, z + 0.25f, items);
+    for (uint32_t i : items) {
+        const StatelItem& it = m_statelItems[i];
+        const StatelPiece& p = m_statelPieces[it.piece];
+        if (x < it.boundsMin[0] || x > it.boundsMax[0] || z < it.boundsMin[2] || z > it.boundsMax[2])
+            continue;
+        std::fprintf(f, "#   piece %u (statel %u, kind %u): y %.2f..%.2f, %s alpha ref %.2f, %.0f%% of its mask whole -> %s\n",
+                     it.piece, it.statel, unsigned(it.kind), double(it.boundsMin[1]), double(it.boundsMax[1]),
+                     p.alphaRef >= 0.0f ? "cut-out" : "solid", double(p.alphaRef), double(p.opaque) * 100.0,
+                     p.alphaRef >= 0.0f && p.opaque < kRoofOpaque ? "see-through (canopy)" : "solid");
+    }
 }
 
 // The frame dump's picture of the map (<dump>-sand.bmp, two pixels a cell, north up): the ground grey by its height,

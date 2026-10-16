@@ -1495,6 +1495,20 @@ void Device::SetRenderTarget(Texture* target)
 
 void Device::BeginFrame()
 {
+    // Indoors (a room's playfield: rooms drawn, no terrain) for 10 frames running, or out again: no weather in there
+    // (a forced storm went on raining and striking inside - the user). The weather goes at once, not eased.
+    {
+        const bool inside = m_frameRoomVisuals > 0 && m_frameTerrainVisuals == 0;
+        m_indoorRun = inside == m_indoors ? 0 : m_indoorRun + 1;
+        if (m_indoorRun >= 10) {
+            m_indoors = inside;
+            m_indoorRun = 0;
+            Log("weather: %s (rooms %u, terrain %u drawn)", inside ? "indoors - none" : "outdoors", m_frameRoomVisuals,
+                m_frameTerrainVisuals);
+            if (inside) m_rain = m_sand = m_storm = 0.0f;
+        }
+        m_frameRoomVisuals = m_frameTerrainVisuals = 0;
+    }
     m_pickActive = m_pickArmed;                  // texture picking (RequestPick): this frame's draws
     m_pickArmed = false;
     m_pickBest = nullptr;

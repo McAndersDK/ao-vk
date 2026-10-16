@@ -19,6 +19,7 @@
 #include "internal.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -235,10 +236,16 @@ bool Device::LoadStatels(const char* path, uint32_t playfield)
 
     // The cut-out pieces' alpha masks: white, the mask in alpha.
     std::vector<uint32_t> argb;
+    std::vector<std::array<uint32_t, 257>> alphaAbove(h.textures);   // (texels with alpha >= a, a = 0..256)
     for (uint32_t i = 0; i < h.textures; ++i) {
         const PackTexture& t = textures[i];
         Texture* tex = nullptr;
+        alphaAbove[i].fill(0);
         if (t.width && t.height && uint64_t(t.texelOffset) + uint64_t(t.width) * t.height <= h.texelBytes) {
+            for (size_t k = 0; k < size_t(t.width) * t.height; ++k)
+                ++alphaAbove[i][texels[t.texelOffset + k]];
+            for (int a = 254; a >= 0; --a)
+                alphaAbove[i][size_t(a)] += alphaAbove[i][size_t(a) + 1];
             argb.resize(size_t(t.width) * t.height);
             for (size_t k = 0; k < argb.size(); ++k)
                 argb[k] = uint32_t(texels[t.texelOffset + k]) << 24 | 0xFFFFFFu;
@@ -257,6 +264,12 @@ bool Device::LoadStatels(const char* path, uint32_t playfield)
         out.indexCount = p.indexCount;
         out.texture = p.texture >= 0 ? m_statelMasks[size_t(p.texture)] : nullptr;
         out.alphaRef = p.texture >= 0 && out.texture ? p.alphaRef : -1.0f;
+        out.opaque = 1.0f;
+        if (out.alphaRef >= 0.0f && alphaAbove[size_t(p.texture)][0] > 0) {
+            const auto& above = alphaAbove[size_t(p.texture)];
+            const int ref = std::clamp(int(std::ceil(out.alphaRef <= 1.0f ? out.alphaRef * 255.0f : out.alphaRef)), 0, 256);
+            out.opaque = float(above[size_t(ref)]) / float(above[0]);
+        }
     }
 
     // Every statel's pieces placed: piece -> mesh (its frames) -> world (the statel).
