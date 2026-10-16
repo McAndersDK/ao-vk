@@ -33,6 +33,13 @@ const uint32_t kSplashVertSpirv[] = {
 const uint32_t kSplashFragSpirv[] = {
 #include "splash.frag.inc"
 };
+const uint32_t kDebrisVertSpirv[] = {
+#include "debris.vert.inc"
+};
+const uint32_t kDebrisFragSpirv[] = {
+#include "debris.frag.inc"
+};
+constexpr uint32_t kDebrisMax = 900;            // a full storm's bits round the camera (RVK_StormDebris 1)
 const uint32_t kBoltVertSpirv[] = {
 #include "bolt.vert.inc"
 };
@@ -145,7 +152,7 @@ bool Device::CreateRainResources(std::string* error)
     // splashes read the depth instead).
     // targets: the scene's five (as the scene pass), or 1 - the rain layer alone (its outputs past the first dropped).
     auto make = [&](const uint32_t* vs, size_t vsSize, const uint32_t* fs, size_t fsSize, bool depth, VkPipeline* out,
-                    uint32_t targets = 5) {
+                    uint32_t targets = 5, bool depthWrite = false) {
     VkShaderModule vert = VK_NULL_HANDLE, frag = VK_NULL_HANDLE;
     bool ok = module(vs, vsSize, &vert) && module(fs, fsSize, &frag);
     if (ok) {
@@ -168,7 +175,7 @@ bool Device::CreateRainResources(std::string* error)
         ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
         VkPipelineDepthStencilStateCreateInfo dss{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
         dss.depthTestEnable = depth ? VK_TRUE : VK_FALSE;
-        dss.depthWriteEnable = VK_FALSE;
+        dss.depthWriteEnable = depthWrite ? VK_TRUE : VK_FALSE;
         dss.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
         // Premultiplied over every target alike (no independent blending): the shader gives the scene's colour its
         // light and the motion target the drops' motion (premultiplied too), the others nothing.
@@ -215,6 +222,7 @@ bool Device::CreateRainResources(std::string* error)
     return make(kRainVertSpirv, sizeof(kRainVertSpirv), kRainFragSpirv, sizeof(kRainFragSpirv), true, &m_rainPipeline) &&
            make(kRainVertSpirv, sizeof(kRainVertSpirv), kRainFragSpirv, sizeof(kRainFragSpirv), true, &m_rainNearPipeline, 1) &&
            make(kBoltVertSpirv, sizeof(kBoltVertSpirv), kBoltFragSpirv, sizeof(kBoltFragSpirv), true, &m_boltPipeline, 1) &&
+           make(kDebrisVertSpirv, sizeof(kDebrisVertSpirv), kDebrisFragSpirv, sizeof(kDebrisFragSpirv), true, &m_debrisPipeline, 5, true) &&
            make(kSplashVertSpirv, sizeof(kSplashVertSpirv), kSplashFragSpirv, sizeof(kSplashFragSpirv), false,
                 &m_splashPipeline);
 }
@@ -225,8 +233,97 @@ void Device::DestroyRainResources()
     if (m_splashPipeline) { vkDestroyPipeline(m_device, m_splashPipeline, nullptr); m_splashPipeline = VK_NULL_HANDLE; }
     if (m_rainNearPipeline) { vkDestroyPipeline(m_device, m_rainNearPipeline, nullptr); m_rainNearPipeline = VK_NULL_HANDLE; }
     if (m_boltPipeline) { vkDestroyPipeline(m_device, m_boltPipeline, nullptr); m_boltPipeline = VK_NULL_HANDLE; }
+    if (m_debrisPipeline) { vkDestroyPipeline(m_device, m_debrisPipeline, nullptr); m_debrisPipeline = VK_NULL_HANDLE; }
     if (m_rainLayout) { vkDestroyPipelineLayout(m_device, m_rainLayout, nullptr); m_rainLayout = VK_NULL_HANDLE; }
     if (m_rainSetLayout) { vkDestroyDescriptorSetLayout(m_device, m_rainSetLayout, nullptr); m_rainSetLayout = VK_NULL_HANDLE; }
+}
+
+// A storm's blown debris (RVK_StormDebris; debris.vert/frag): over the scene before the rain, written as surfaces are
+// (depth, motion), so the haze and the storm's fog veil it by its own distance. A storm's - rain or sand - wind.
+void Device::RenderDebris(VkCommandBuffer cmd)
+{
+    const double now = m_frameClock;
+    const float dt = m_debrisClock < 0.0 ? 0.0f : float(std::clamp(now - m_debrisClock, 0.0, 0.25));
+    m_debrisClock = now;
+    const float storm = std::clamp(m_storm * std::max(m_windStormScale, 0.0f), 0.0f, 1.0f);
+    // Its way so far along the wind (added up: a change of pace moves it on), as fast as the storm blows.
+    const float speed = 2.0f + 7.0f * storm;
+    const float vel[3] = {m_windDir[0] * speed, 0.0f, m_windDir[1] * speed};
+    for (int i = 0; i < 3; ++i)
+        m_debrisDrift[i] = std::fmod(m_debrisDrift[i] + double(vel[i]) * dt, 30000.0);
+    m_debrisClockAll += dt;
+    const uint32_t bits = uint32_t(float(kDebrisMax) * storm * std::clamp(m_stormDebris, 0.0f, 3.0f));
+    if (!m_weatherParams.enable || storm < 0.08f || bits < 16 || !m_debrisPipeline || !m_scene || !m_hdr)
+        return;
+    const auto& vm = m_view.m;
+    float eye[3];
+    for (int i = 0; i < 3; ++i)
+        eye[i] = -(vm[3][0] * vm[i][0] + vm[3][1] * vm[i][1] + vm[3][2] * vm[i][2]);
+    RainFrame rf{};
+    rf.viewProj = MulMatrix(m_view, m_proj);
+    rf.prevViewProj = m_prevViewProjValid ? MulMatrix(m_prevView, m_prevProj) : rf.viewProj;
+    rf.view = m_view;
+    for (int i = 0; i < 3; ++i) rf.camera[i] = eye[i];
+    rf.camera[3] = TaaActive() ? 1.0f : 0.0f;
+    rf.time[0] = float(std::fmod(m_debrisClockAll, 3600.0));
+    rf.time[1] = float(std::fmod(m_debrisClockAll - dt, 3600.0));
+    rf.time[2] = storm;
+    rf.time[3] = float(bits);
+    for (int i = 0; i < 3; ++i) rf.fall[i] = vel[i];
+    rf.fall[3] = 14.0f;                          // (the box's half size)
+    for (int i = 0; i < 3; ++i) rf.drift[i] = float(m_debrisDrift[i]);
+    float ground;
+    rf.drift[3] = GroundAt(eye[0], eye[2], &ground, nullptr, nullptr) ? ground : eye[1] - 1.7f;
+    rf.curtains[0] = storm;
+    if (m_terrainAmbient[3] > 0.5f)
+        std::memcpy(rf.ambient, m_terrainAmbient, 16);
+    else
+        ArgbTo4(m_rs[d3d::RS_AMBIENT], rf.ambient);
+    SceneFog(rf.fogColour, rf.fogParams);
+    rf.viewport[0] = float(m_scene->m_width);
+    rf.viewport[1] = float(m_scene->m_height);
+    rf.viewport[2] = 1.0f / rf.viewport[0];
+    rf.viewport[3] = 1.0f / rf.viewport[1];
+    rf.proj[0] = m_proj.m[2][2];
+    rf.proj[1] = m_proj.m[3][2];
+    rf.proj[2] = m_proj.m[0][0];
+    rf.proj[3] = m_proj.m[1][1];
+    EnsureRingSpace(sizeof(RainFrame) + sizeof(FrameLights) + 1024);
+    if (m_frameLightsDirty || m_frameLightsGeneration != m_ringGeneration)
+        WriteFrameLights();
+    void* cpu = nullptr;
+    const VkDeviceSize offset = Allocate(sizeof(RainFrame), 256, &cpu);
+    std::memcpy(cpu, &rf, sizeof(rf));
+    Frame& f = m_frames[m_frameIndex];
+    BeginRenderingOn(m_scene);
+    const float sw = float(m_scene->m_width), sh = float(m_scene->m_height);
+    VkViewport viewport{0.5f, sh + 0.5f, sw, -sh, 0.0f, 1.0f};
+    VkRect2D scissor{{0, 0}, {m_scene->m_width, m_scene->m_height}};
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_debrisPipeline);
+    VkDescriptorBufferInfo blockInfo{f.ring, offset, sizeof(RainFrame)};
+    VkDescriptorBufferInfo lightsInfo{f.ring, m_frameLightsOffset, sizeof(FrameLights)};
+    const bool coverMap = m_rainCover && m_rainCover->m_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkDescriptorImageInfo coverInfo{m_pointSampler, coverMap ? m_rainCover->m_view : m_blackTexture->m_view,
+                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet writes[3] = {};
+    for (int i = 0; i < 3; ++i) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    }
+    writes[0].dstBinding = 0;
+    writes[0].pBufferInfo = &blockInfo;
+    writes[1].dstBinding = 4;
+    writes[1].pBufferInfo = &lightsInfo;
+    writes[2].dstBinding = 2;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[2].pImageInfo = &coverInfo;
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rainLayout, 0, 3, writes);
+    vkCmdDraw(cmd, bits * 6, 1, 0, 0);
+    EndRendering();
+    ProfileMark("storm debris");
 }
 
 // The rain, over the finished scene (EndScene: its rendering just closed).

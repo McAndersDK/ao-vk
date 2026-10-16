@@ -144,6 +144,7 @@ Setting g_settings[] = {
     {"RVK_StormTint",  "The game's storm tint: its flat sheet over the screen in sand and ash storms (off: left out)", "Experimental", Bool, 0, 1, 1, 0, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_StormForce", "Thunderstorm: force one this hard - rain, storm wind and lightning (0 = the game's weather)", "Experimental", Float, 0, 1, 0.05f, 0, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_StrikeRate", "Thunderstorm, forced: lightning strikes a minute at full strength", "Experimental", Float, 0, 60, 1, 6, nullptr, 0, "RVK_WeatherOn"},
+    {"RVK_StormDebris", "Storms: blown debris - leaves, straw and twigs skimming over the ground, leaves torn off the trees (x; 0: none)", "Experimental", Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_StormBolt",  "Lightning: our own bolts - branching, flickering with each stroke, glowing - in place of the game's (x; 0: the game's)", "Experimental", Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_RainWet",    "Rain: the ground soaked - darker and reflecting - and puddles gathering in hollows; dry under roofs and trees (x; 0: none)", "Experimental", Float, 0, 1.5f, 0.05f, 1, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_StormDark",  "Thunderstorms: the land darker as the storm hides the sun - its shadows gone (x; 0: lit as the game lights it)", "Experimental", Float, 0, 1.5f, 0.05f, 1, nullptr, 0, "RVK_WeatherOn"},
@@ -503,6 +504,7 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
     else if (is("RVK_StormDark")) d->SetStormDark(V(n));
     else if (is("RVK_RainWet")) d->SetRainWet(V(n));
     else if (is("RVK_StormBolt")) d->SetStormBolt(V(n));
+    else if (is("RVK_StormDebris")) d->SetStormDebris(V(n));
     else if (is("RVK_SandHaze")) d->SetSandHaze(V(n));
     else if (is("RVK_SandBlow")) d->SetSandBlow(V(n));
     else if (is("RVK_SandProc")) d->SetSandProcedural(V(n) != 0.0f);

@@ -113,3 +113,13 @@ Each phase playable on its own; demo scenes for each (the grass bench with a sto
    horizon. Unverified in game (the demo shows no sky).
 5. Scud (storms77): in a thunderstorm the low deck sinks lower, races along 2.5x the layer's wind (m_scudDrift,
    added up) and is torn into ragged fragments a few hundred units across (cloud_layer.frag DeckDensity, L.scud).
+
+## Phase 4 done (2026-10-16, storms79)
+
+- Torn smoke: the storm's own wind on the smoke (smoke.cpp StormSmokeWind: up to ~4 units/s, gusting), the sim drags it
+  faster and gusty eddies tear it (smoke_sim.comp, a wind past 0.8 = a storm); its box leans no further.
+- Rough water: waves up to 1.8x, ripples rougher and much rougher in passing gust fronts (dark ruffled patches racing
+  across), crests breaking white, spray streaks on the gusts (water.frag W.storm).
+- Blown debris (RVK_StormDebris): leaves, straw and twigs skimming and hopping over the ground round the camera
+  (debris.vert/frag: stateless as the rain, the cover map's B now the ground), opaque with depth and motion; trees
+  shed more leaves in a storm, carried far on the wind (ffp.vert FallingLeaf, FL.rainNear.z).

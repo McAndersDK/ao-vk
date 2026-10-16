@@ -711,7 +711,7 @@ bool Device::SandFogShelter(float out[4])
 }
 
 // The rain's cover map (rain.vert, splash.vert, ffp_main's wet ground), made again when the map is: per cell R the
-// highest solid thing over it, G B the see-through cover's top and bottom (over m_rainCoverRef; -9000 none), A how
+// highest solid thing over it, G the see-through cover's top, B the ground (over m_rainCoverRef; -9000 none), A how
 // far its ground lies in a hollow. Built whenever it rains or the ground is wet (rain.cpp), not only in a sandstorm.
 bool Device::RainCoverMap(float out[4])
 {
@@ -742,7 +742,7 @@ bool Device::RainCoverMap(float out[4])
         for (size_t c = 0; c < size_t(kMapN) * kMapN; ++c) {
             texels[c * 4 + 0] = half(rel(m.cover[c]));
             texels[c * 4 + 1] = half(rel(m.crownHi[c]));
-            texels[c * 4 + 2] = half(m.crownHi[c] > kUnknown * 0.5f ? rel(m.crownLo[c]) : -9000.0f);
+            texels[c * 4 + 2] = half(rel(m.ground[c]));   // (the ground: a storm's debris skims it)
             texels[c * 4 + 3] = half(std::min(m.hollow[c], 8.0f));
         }
         UpdateTexture(m_rainCover, 0, 0, 0, kMapN, kMapN, texels.data(), kMapN * 8);

@@ -367,6 +367,7 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
     Lightning(fl->flash, fl->flashView, fl->flashProj, fl->flashWorld);
     fl->rainNear[0] = m_rainNearFrame == m_frameNumber && m_rainNear ? 1.0f : 0.0f;
     fl->rainNear[1] = StormOvercast();
+    fl->rainNear[2] = std::clamp(m_storm * std::max(m_windStormScale, 0.0f), 0.0f, 1.0f) * std::clamp(m_stormDebris, 0.0f, 2.0f);
     // The wet ground and the rain's cover map (its bindless slot packed as the terrain's sun map's).
     fl->wet[0] = m_wetness;
     fl->wet[1] = m_puddles;

@@ -176,7 +176,8 @@ bool FallingLeaf(uint slot, vec2 corner, float time, out vec3 pos, out vec3 norm
     uint cs = LeafHash(seed ^ (uint(cycle) * 0x85EBCA6Bu));
     vec2 wd = FL.wind.xy;
     float gust = Gust(WindAxes(D.world[3].xz, wd, FL.windFrame.xy), time - age) * GrassGusts(FL.leaves.z);
-    if (LeafHashU(cs) >= clamp(FL.leafView.z * (0.3 + 1.2 * gust), 0.0, 1.0)) return false;
+    float storm = FL.rainNear.z;                 // (a storm: more leaves torn off, carried far on the wind)
+    if (LeafHashU(cs) >= clamp(FL.leafView.z * (0.3 + 1.2 * gust) * (1.0 + 3.0 * storm), 0.0, 1.0)) return false;
     uint src = D.leafSet.x + LeafHash(cs ^ 0x51ED27u) % D.leafSet.z;
     uvec4 a = LV.words[2u * src], b = LV.words[2u * src + 1u];
     vec2 h0 = unpackHalf2x16(a.w), h1 = unpackHalf2x16(b.x), h2 = unpackHalf2x16(b.y);
@@ -184,10 +185,10 @@ bool FallingLeaf(uint slot, vec2 corner, float time, out vec3 pos, out vec3 norm
     vec3 start = (D.world * vec4(uintBitsToFloat(a.xyz), 1.0)).xyz;
     vec3 u = W * vec3(h0, h1.x), v = W * vec3(h1.y, h2);
     float height = max(start.y - uintBitsToFloat(D.leafSet.w), 0.0);
-    float speed = 0.7 + 0.5 * LeafHashU(cs ^ 7u);    // world units a second
+    float speed = (0.7 + 0.5 * LeafHashU(cs ^ 7u)) * (1.0 - 0.4 * storm);    // world units a second (lofted in a storm)
     float fallTime = height / speed;
     if (age >= fallTime + kLie) return false;
-    float flying = min(age, fallTime), drift = 0.5 + 0.9 * gust;
+    float flying = min(age, fallTime), drift = 0.5 + 0.9 * gust + storm * (3.0 + 5.0 * gust);
     float spin = flying * (2.0 + 2.0 * LeafHashU(cs ^ 11u)) + 6.2831853 * LeafHashU(cs ^ 23u);
     vec3 off = vec3(wd.x, 0.0, wd.y) * drift * flying + vec3(cos(spin), 0.0, sin(spin)) * 0.35 * min(flying, 1.0);
     off.y = -speed * flying;

@@ -363,6 +363,7 @@ public:
     void SetStormDark(float s) { m_stormDark = s; }                // RVK_StormDark (x)
     void SetRainWet(float s) { m_rainWet = s; }                    // RVK_RainWet (x)
     void SetStormBolt(float s) { m_stormBolt = s; }                // RVK_StormBolt (x; 0: the game's bolts)
+    void SetStormDebris(float s) { m_stormDebris = s; }            // RVK_StormDebris (x)
     void SetWetNow(float wet, float puddles) { m_wetness = wet; m_puddles = puddles; }   // (tests: soaked already)
     float StormOvercast() const;
     void StormSmokeWind(float out[3]) const;                       // a storm's own wind on the smoke (smoke.cpp)                                   // how much a thunderstorm hides the sun (rain.cpp)
@@ -2046,6 +2047,10 @@ private:
     VkPipeline m_splashPipeline = VK_NULL_HANDLE;
     VkPipeline m_rainNearPipeline = VK_NULL_HANDLE;   // the streaks again, into m_rainNear alone
     VkPipeline m_boltPipeline = VK_NULL_HANDLE;  // our lightning bolts, into m_rainNear (bolt.vert/frag)
+    VkPipeline m_debrisPipeline = VK_NULL_HANDLE;   // a storm's blown debris (debris.vert/frag)
+    void RenderDebris(VkCommandBuffer cmd);
+    double m_debrisDrift[3] = {0, 0, 0}, m_debrisClock = -1.0, m_debrisClockAll = 0.0;
+    float m_stormDebris = 1.0f;                  // RVK_StormDebris: blown leaves, straw and twigs, x
     std::vector<float> m_boltSegs;               // the last strike's bolt: per segment a (xyz, width), b (xyz, brightness)
     float m_stormBolt = 1.0f;                    // RVK_StormBolt: our own bolts (the game's left out), x; 0: the game's
     void MakeBolt(const float top[3], const float bottom[3], uint32_t seed);
