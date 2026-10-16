@@ -15,7 +15,6 @@ layout(location = 2) out float vAlpha;      // its opacity (0: not drawn)
 layout(location = 3) out vec4 vClip;
 layout(location = 4) out vec4 vPrevClip;
 
-const float kStreak = 0.075;                // seconds of the fall a streak shows
 const float kNearShare = 0.4;               // of the drops, in a box of kNearSize x the box round the camera (the
 const float kNearSize = 0.38;               //   near ones make the rain: there it is denser)
 const float kWidth = 0.012;                 // a drop's width (units)
@@ -38,7 +37,7 @@ void main()
     // A gust front passing leans it further (the streak: the eye reads the slant) and gathers the rain there into a
     // curtain, thinner between (about as much rain on the whole).
     float gust = Gust(WindAxes(head.xz, FL.wind.xy, FL.windFrame.xy), FL.wind.z);
-    vec3 tail = head - (v + vec3(FL.wind.x, 0.0, FL.wind.y) * (R.drift.w * gust)) * kStreak;
+    vec3 tail = head - (v + vec3(FL.wind.x, 0.0, FL.wind.y) * (R.drift.w * gust)) * R.curtains.y;
 
     // Faded out towards the box's walls (where the drops wrap) and right at the camera.
     vec3 rel = (head - R.camera.xyz) / (size * 0.5);

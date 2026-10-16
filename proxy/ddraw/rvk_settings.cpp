@@ -134,6 +134,8 @@ Setting g_settings[] = {
 
     {"RVK_WeatherOn",  "New weather (rain; needs HDR)", "Experimental",    Bool,  0, 1, 1, 0, nullptr, 0},
     {"RVK_RainForce",  "Rain: force it this hard (0 = the game's weather)",       "Experimental",     Float, 0, 1, 0.05f, 0, nullptr, 0, "RVK_WeatherOn"},
+    {"RVK_RainSpeed",  "Rain: how fast the drops fall (units a second)", "Experimental", Float, 3, 40, 0.5f, 15, nullptr, 0, "RVK_WeatherOn"},
+    {"RVK_RainLength", "Rain: how long each falling drop's streak is (units)", "Experimental", Float, 0.05f, 2, 0.05f, 0.45f, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_RainAmount", "Rain: how many drops",                                     "Experimental",     Float, 0, 4, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_RainSplash", "Rain: splashes where it lands (0 = none)",                "Experimental",     Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_RainBright", "Rain: brightness",                                         "Experimental",     Float, 0, 3, 0.05f, 1, nullptr, 0, "RVK_WeatherOn"},
@@ -563,6 +565,8 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
         w.amount = V("RVK_RainAmount");
         w.splashes = V("RVK_RainSplash");
         w.brightness = V("RVK_RainBright");
+        w.speed = V("RVK_RainSpeed");
+        w.length = V("RVK_RainLength");
         w.stormForce = V("RVK_StormForce");
         w.strikeRate = V("RVK_StrikeRate");
         d->SetWeatherParams(w);

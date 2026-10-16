@@ -1153,6 +1153,7 @@ float g_sandBlow = 1.0f;          // --sand-blow X: RVK_SandBlow
 uint32_t g_sandRes = 0;           // --sand-res N: RVK_SandRes
 float g_windStorm = 1.0f;         // --wind-storm X: RVK_WindStorm
 float g_sandForce = 0.0f;         // --sand-force X: RVK_SandForce
+float g_rainSpeed = 15.0f, g_rainLength = 0.45f;   // --rain-speed S, --rain-length L: RVK_RainSpeed, RVK_RainLength
 float g_stormForce = 0.0f;        // --storm F: RVK_StormForce (a thunderstorm: rain, wind, our own strikes)
 float g_strikeRate = 6.0f;        // --strike-rate R: RVK_StrikeRate (strikes a minute)
 int g_lightningAt = -1;           // --lightning-at N: a strike ahead of the camera at frame N (the grass bench)
@@ -3855,6 +3856,8 @@ int main(int argc, char** argv)
         else if (a == "--smoke-density" && i + 1 < argc) g_smokeDensity = float(std::atof(argv[++i]));
         else if (a == "--rain" && i + 1 < argc) { g_rainForce = float(std::atof(argv[++i])); hdr = true; }
         else if (a == "--lightning-at" && i + 1 < argc) g_lightningAt = std::atoi(argv[++i]);
+        else if (a == "--rain-speed" && i + 1 < argc) g_rainSpeed = float(std::atof(argv[++i]));
+        else if (a == "--rain-length" && i + 1 < argc) g_rainLength = float(std::atof(argv[++i]));
         else if (a == "--storm" && i + 1 < argc) { g_stormForce = float(std::atof(argv[++i])); hdr = true; }
         else if (a == "--strike-rate" && i + 1 < argc) g_strikeRate = float(std::atof(argv[++i]));
         else if (a == "--water-mesh-at" && i + 3 < argc) { for (float& x : g_waterMeshAt) x = float(std::atof(argv[++i])); }
@@ -4077,6 +4080,8 @@ int main(int argc, char** argv)
         weather.force = g_rainForce;
         weather.stormForce = g_stormForce;
         weather.strikeRate = g_strikeRate;
+        weather.speed = g_rainSpeed;
+        weather.length = g_rainLength;
         dev.SetWeatherParams(weather);
     }
     dev.SetSandBlow(g_sandBlow);

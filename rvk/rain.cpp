@@ -48,12 +48,12 @@ struct RainFrame {
     float proj[4];                               // D3D projection m[2][2], m[3][2], m[0][0], m[1][1]
     float drift[4];                              // xyz: how far the rain has moved (world, wrapped); w: the gust fronts'
                                                  // extra lean (units / s at a front's peak)
-    float curtains[4];                           // x: the rain gathered into curtains along the gust fronts (0 .. 1)
+    float curtains[4];                           // x: the rain gathered into curtains along the gust fronts (0 .. 1);
+                                                 // y: seconds of the fall a streak shows
 };
 
 constexpr uint32_t kRainMaxDrops = 24000;       // at full rain, RVK_RainAmount 1
 constexpr float kRainBox = 16.0f;               // half size of the box round the camera (units)
-constexpr float kRainSpeed = 9.0f;              // a raindrop's fall (units / s; about a metre)
 constexpr float kGameRainMax = 0.45f;           // the game's rain weather: process(intensity^3 x this)
 constexpr float kGameRainFrom = 0.25f;          // ... intensity where its rain shows (rain from 0 here)
 constexpr uint32_t kSplashMax = 2500;           // splash slots at full rain (splash.vert: most find no surface)
@@ -235,10 +235,11 @@ void Device::RenderRain(VkCommandBuffer cmd)
     }
     float wind[3] = {m_rainWind[0], 0.0f, m_rainWind[2]};
     const float wl = std::hypot(wind[0], wind[2]);
-    if (wl > kRainSpeed) { wind[0] *= kRainSpeed / wl; wind[2] *= kRainSpeed / wl; }
+    const float fallSpeed = std::clamp(P.speed, 1.0f, 60.0f);   // RVK_RainSpeed
+    if (wl > fallSpeed) { wind[0] *= fallSpeed / wl; wind[2] *= fallSpeed / wl; }
     // The drops' way so far, added up (rain.vert: a drop's place from it, so a change of lean moves them on, never
     // jumps them); wrapped now and then (one jump a few hours apart).
-    const float velocity[3] = {wind[0], -kRainSpeed, wind[2]};
+    const float velocity[3] = {wind[0], -fallSpeed, wind[2]};
     for (int i = 0; i < 3; ++i) {
         m_rainDrift[i] += double(velocity[i]) * dt;
         if (std::fabs(m_rainDrift[i]) > 30000.0) m_rainDrift[i] = std::fmod(m_rainDrift[i], 30000.0);
@@ -261,7 +262,7 @@ void Device::RenderRain(VkCommandBuffer cmd)
     rf.time[2] = m_rain;
     rf.time[3] = float(drops);
     rf.fall[0] = wind[0];
-    rf.fall[1] = -kRainSpeed;
+    rf.fall[1] = -fallSpeed;
     rf.fall[2] = wind[2];
     rf.fall[3] = kRainBox;
     for (int i = 0; i < 3; ++i) rf.drift[i] = float(m_rainDrift[i]);
@@ -269,6 +270,7 @@ void Device::RenderRain(VkCommandBuffer cmd)
     const float stormy = std::clamp(m_storm * std::max(m_windStormScale, 0.0f), 0.0f, 1.5f);
     rf.drift[3] = 5.0f * stormy;
     rf.curtains[0] = std::min(stormy, 1.0f);
+    rf.curtains[1] = std::clamp(P.length, 0.02f, 5.0f) / fallSpeed;   // (RVK_RainLength: the streak, as seconds of its fall)
     // The game's drop colour tints it (a colourless one: plain water); its opacity is the rain's own.
     const uint32_t c = fromGame && m_weatherGame.colour ? m_weatherGame.colour : 0xC8D0D8u;
     rf.colour[0] = float((c >> 16) & 0xFF) / 255.0f;

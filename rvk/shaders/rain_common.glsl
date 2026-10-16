@@ -16,7 +16,8 @@ layout(set = 0, binding = 0) uniform RainFrame {
     vec4 proj;          // D3D projection m[2][2], m[3][2], m[0][0], m[1][1] (the splashes: depth -> view)
     vec4 drift;         // xyz: how far the rain has moved (world; its velocity added up); w: the gust fronts' extra
                         // lean (units / s at a front's peak)
-    vec4 curtains;      // x: the rain gathered into curtains along the gust fronts (0 .. 1)
+    vec4 curtains;      // x: the rain gathered into curtains along the gust fronts (0 .. 1); y: seconds of the fall a
+                        // streak shows (RVK_RainLength / RVK_RainSpeed)
 } R;
 
 // The linear view depth of a depth buffer value.
