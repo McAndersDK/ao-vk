@@ -499,6 +499,13 @@ vec3 CloudSheet(vec4 tex)
     sun += MoonLight() * (0.3 + 0.2 * moonPhase) * (1.0 - 0.45 * thick) * mix(tint, vec3(dot(tint, luma)), 0.5);
     vec3 sky = FL.cloudSky.rgb * mix(1.0, 0.72, thick) * NightSky() * mix(1.0, 0.7, MoonShare()) * tint;
     vec3 S = (sun + sky + Afterglow(sunL) * 0.6 * tint) * FL.cloudTint.w * mix(0.8, 1.05, dot(tex.rgb, luma));
+    // Lightning (rvk rain.cpp Lightning): the sheet lit as the cloud layer is (cloud_layer.frag FlashInCloud) - the
+    // sheets sit on the game's small sky, so where this one would be at the clouds' height (~900 over the eye), by
+    // how far across from the strike.
+    if (FL.flash.w > 0.0) {
+        vec2 at = C.eyePos.xz + dir.xz / max(dir.y, 0.08) * 900.0 - FL.flashWorld.xz;
+        S += vec3(0.8, 0.85, 1.0) * tint * (FL.flash.w * 1.2 * (1.0 - 0.3 * thick) / (1.0 + dot(at, at) / (1500.0 * 1500.0)));
+    }
     float low = HorizonBand(dir, FL.cloudAir.w);
     return mix(S, AirColour(FL.cloudAir.rgb, low), max(0.25, low));
 }
