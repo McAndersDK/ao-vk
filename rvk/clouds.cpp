@@ -84,18 +84,22 @@ struct ShadowFrame {
 constexpr uint32_t kNoiseSize = 64;             // the clouds' noise image (cells a side; tiling)
 // RVK_CloudLayer.
 constexpr uint32_t kShapeSize = 128, kDetailSize = 64;   // the layer's noise images (cells a side; tiling)
-constexpr uint32_t kWeatherSize = 256;          // the weather map (pixels a side)
+constexpr uint32_t kWeatherSize = 512;          // the weather map (pixels a side)
 constexpr float kDeckThickness = 300.0f;        // the low deck (stratus): its thickness (world)
 constexpr float kLayerShadowArea = 8000.0f;     // RVK_CloudLayer's shadow map: over this much (world) round the camera
                                                 // (~8 units a texel: the clouds' edges and small clouds as patches on
                                                 // the ground - at 47 a cloud's shadow covered all the land in view)
 // The game's puff textures (RDB 1010004): single_cloud01..03 (121213, 121212, 121211) fibrous puffs, 04 streaky wisps.
 constexpr uint32_t kCloudTexWispy = 121214;
-constexpr float kWeatherArea = 24000.0f;        // ... over this much of the world round the camera
+constexpr float kWeatherArea = 64000.0f;        // ... over this much of the world round the camera (a storm's out
+                                                // to kStormReach: 125 units a texel)
 constexpr float kLayerThickness = 1300.0f;      // the layer's base to its top (world)
 constexpr float kLayerRadius = 400000.0f;       // the sphere it bends round (the horizon's curve; 60 km sank the
                                                 // far clouds below the eye's level, onto the hills)
 constexpr float kLayerReach = 16000.0f;         // the march's farthest (world)
+constexpr float kStormReach = 40000.0f;         // ... in a thunderstorm: its mass out to the horizon (the 400 km
+                                                // sphere drops the base ~2000 units there - user: clouds only in a
+                                                // circle round the player)
 struct WeatherFrame {
     float area[4], info[4], drift[4], storm[4];
 };
@@ -1359,6 +1363,7 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
     wf.area[0] = std::floor((eye[0] - area * 0.5f) / texel) * texel;
     wf.area[1] = std::floor((eye[2] - area * 0.5f) / texel) * texel;
     wf.area[2] = area;
+    wf.area[3] = float(kWeatherSize);
     const double clock = std::fmod(m_frameClock, 3600.0);
     const float rain = StormSky();
     float cover = 0.0f, flat = 0.0f, weight = 0.0f, wispy = 0.0f;
@@ -1430,7 +1435,7 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
     }
     wf.info[1] = m_cloudCloudy;
     wf.storm[0] = smoothstep01(0.1f, 0.7f, rain);   // (cloud_weather.frag: the storm's cover sealed)
-    wf.storm[1] = 6500.0f;                           // ... out to here; beyond, its towering cells
+    wf.storm[1] = kStormReach;                       // ... out to the horizon: one mass (user - no towers apart)
     wf.info[2] = m_cloudType;
     static const float typeOverride = getenv("RANDYVK_CLOUD_TYPE") ? float(atof(getenv("RANDYVK_CLOUD_TYPE"))) : -1.0f;
     if (typeOverride >= 0.0f)
@@ -1519,7 +1524,7 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     // (A thunderstorm's layer taller: its towers - cloud_layer.frag Profile - the rest keep to the lower 1300.)
     lf.layer[1] = m_cloudBase + kLayerThickness * (1.0f + 2.0f * smoothstep01(0.1f, 0.7f, StormSky()));
     lf.layer[2] = kLayerRadius;
-    lf.layer[3] = kLayerReach;
+    lf.layer[3] = kLayerReach + (kStormReach - kLayerReach) * smoothstep01(0.1f, 0.7f, StormSky());
     lf.weather[0] = m_cloudWeatherArea[0];
     lf.weather[1] = m_cloudWeatherArea[1];
     lf.weather[2] = 1.0f / m_cloudWeatherArea[2];

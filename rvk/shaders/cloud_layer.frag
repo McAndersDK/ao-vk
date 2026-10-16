@@ -455,7 +455,7 @@ void main()
         bool fine = fineLeft > 0 && fineMax > 0;
         float dt = fine ? big * 0.25 : big;
         vec3 p = eye + dir * t;
-        float d = Density(p, true);
+        float d = Density(p, t < 8000.0);        // (far off no detail: too small to see, half the cost)
         if (fine) --fineMax;
         if (d <= 0.001) {
             if (fine) --fineLeft;

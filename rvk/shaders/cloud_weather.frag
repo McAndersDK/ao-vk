@@ -3,7 +3,7 @@
 // where - R coverage (0 clear .. 1 overcast), G cloud type (0 flat stratus .. 0.5 cumulus .. 1 towering storm cloud),
 // B density, A the clouds' base (above the layer's). A drifting field of clouds fixed in the world, as much of the sky covered as the game's sky is cloudy.
 layout(set = 0, binding = 0) uniform WeatherFrame {
-    vec4 area;          // the map's corner x, z (world), its size (world)
+    vec4 area;          // the map's corner x, z (world), its size (world), its size (pixels)
     vec4 info;          // x: time (s), y: how cloudy the sky is (0..1), z: the type, w: the density
     vec4 drift;         // xy: how far the field has drifted (world), z: the field's scale (world units a noise tile),
                         // w: RVK_CloudCover (a bias, -1..1)
@@ -20,7 +20,7 @@ float Spread(float v, float lo, float hi) { return clamp(0.1 + 0.8 * (v - lo) / 
 
 void main()
 {
-    vec2 p = W.area.xy + gl_FragCoord.xy / 256.0 * W.area.z;
+    vec2 p = W.area.xy + gl_FragCoord.xy / W.area.w * W.area.z;
     float cloudy = clamp(W.info.y + W.drift.w, 0.0, 1.0);
     // The field: two scales of drifting noise; the more cloudy, the lower its cut (overcast leaves few gaps).
     vec2 q = (p + W.drift.xy) / W.drift.z;
