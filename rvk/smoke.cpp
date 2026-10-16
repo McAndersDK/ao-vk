@@ -126,22 +126,30 @@ struct SmokeBodies {
 
 constexpr float kWindScale = 0.1f, kWindMax = 0.8f;    // of the game's wind (its sprites drift far less than it says)
 
-// The wind a source's smoke is carried by (world / s, x z).
-void SmokeWind(const Device::SmokeSource& s, const float rain[3], float out[2])
+// The wind a source's smoke is carried by (world / s, x z): the game's, and in a storm the storm's own (storm: its push
+// x z, how much more it may blow - Device::StormSmokeWind; smoke torn sideways, the user's storm plan phase 4).
+void SmokeWind(const Device::SmokeSource& s, const float rain[3], const float storm[3], float out[2])
 {
     out[0] = (s.wind[0] + rain[0]) * kWindScale;
     out[1] = (s.wind[2] + rain[2]) * kWindScale;
-    const float l = std::hypot(out[0], out[1]);
+    float l = std::hypot(out[0], out[1]);
     if (l > kWindMax) { out[0] *= kWindMax / l; out[1] *= kWindMax / l; }
+    out[0] += storm[0];
+    out[1] += storm[1];
+    l = std::hypot(out[0], out[1]);
+    const float cap = kWindMax + storm[2];
+    if (l > cap) { out[0] *= cap / l; out[1] *= cap / l; }
 }
 
 // A source's box: standing on it, the source near its floor - and upwind of the middle, as far as the wind blows
 // it (the plume leans downwind, in the box).
 void SmokeCorner(const Device::SmokeSource& s, const float wind[2], float out[3])
 {
-    out[0] = s.pos[0] - s.size * (0.5f - 0.3f * wind[0] / kWindMax);
+    // (As far as the wind leans it - a storm's no further than the strongest calm wind's: the source stays in the box.)
+    const float l = std::hypot(wind[0], wind[1]), k = l > kWindMax ? kWindMax / l : 1.0f;
+    out[0] = s.pos[0] - s.size * (0.5f - 0.3f * wind[0] * k / kWindMax);
     out[1] = s.pos[1] - s.size * 0.08f;
-    out[2] = s.pos[2] - s.size * (0.5f - 0.3f * wind[1] / kWindMax);
+    out[2] = s.pos[2] - s.size * (0.5f - 0.3f * wind[1] * k / kWindMax);
 }
 
 // How hard a source puffs now (0.2..1): uneven, so the smoke rises in billows, not as a steady column.
@@ -329,7 +337,7 @@ void Device::SmokeSourceFrame(uint64_t key, const SmokeSource& source)
         v->lastSize = 0.0f;
         v->age = 0.0f;
         float wind[2];
-        SmokeWind(source, m_rainWind, wind);
+        { float storm[3]; StormSmokeWind(storm); SmokeWind(source, m_rainWind, storm, wind); }
         SmokeCorner(source, wind, v->corner);
     }
     v->source = source;
@@ -681,7 +689,7 @@ void Device::UpdateSmokeDrift(double now)
             d->lastStep = 0.0f;
             d->lastSeen = now;
             float wind[2];
-            SmokeWind(d->source, m_rainWind, wind);
+            { float storm[3]; StormSmokeWind(storm); SmokeWind(d->source, m_rainWind, storm, wind); }
             SmokeCorner(d->source, wind, d->corner);
             taken[i] = true;
             static uint32_t logged = 0;
@@ -897,6 +905,18 @@ float Device::SandFogThrough(const float eye[3], const float p[3]) const
         return std::exp(-h0 / H) * mean * through;
     };
     return std::exp(-sigma * ((1.0f - air.upper) * layer(air.height) + air.upper * layer(air.upperHeight)));
+}
+
+// A storm's own wind on the smoke (SmokeWind): along the shared wind, as hard as the storm (rain or sand, RVK_WindStorm),
+// surging and slackening with its gusts - out: x z push (world / s), how much more than a calm wind it may blow.
+void Device::StormSmokeWind(float out[3]) const
+{
+    const float k = std::clamp(m_storm * std::max(m_windStormScale, 0.0f), 0.0f, 1.5f);
+    const double t = m_windTime;
+    const float gust = 0.65f + 0.35f * float(std::sin(t * 1.3) * std::sin(t * 0.37 + 1.0)) + 0.25f * float(std::sin(t * 2.9 + 2.0));
+    out[0] = m_windDir[0] * 3.0f * k * gust;
+    out[1] = m_windDir[1] * 3.0f * k * gust;
+    out[2] = 3.5f * k;
 }
 
 void Device::RenderSmoke(VkCommandBuffer cmd)
@@ -1144,7 +1164,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
             SandWind(m_windDir, m_windStrength, m_windTime, wind);
             SandCorner(s, n, corner);
         } else {
-            SmokeWind(s, m_rainWind, wind);
+            { float storm[3]; StormSmokeWind(storm); SmokeWind(s, m_rainWind, storm, wind); }
             SmokeCorner(s, wind, corner);
         }
         // (The last step's box: where it was and, the sand's box following the zoom, how big - this step's read from it

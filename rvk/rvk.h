@@ -364,7 +364,8 @@ public:
     void SetRainWet(float s) { m_rainWet = s; }                    // RVK_RainWet (x)
     void SetStormBolt(float s) { m_stormBolt = s; }                // RVK_StormBolt (x; 0: the game's bolts)
     void SetWetNow(float wet, float puddles) { m_wetness = wet; m_puddles = puddles; }   // (tests: soaked already)
-    float StormOvercast() const;                                   // how much a thunderstorm hides the sun (rain.cpp)
+    float StormOvercast() const;
+    void StormSmokeWind(float out[3]) const;                       // a storm's own wind on the smoke (smoke.cpp)                                   // how much a thunderstorm hides the sun (rain.cpp)
     void StormHue(float rgb[3]) const;                             // a colour turned the storm's dark yellow-green (rain.cpp)
     // A thunderstorm's green cast (RVK_StormGreen x how hard it rains): per channel, about unit brightness (rain.cpp).
     void StormGreen(float out[3]) const;

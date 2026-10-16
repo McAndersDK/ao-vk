@@ -301,7 +301,15 @@ void main()
         v = texture(velIn, back).xyz;
         float temperature = texelFetch(densIn, id, 0).g;
         v.y += P.d.x * temperature * dt;                                 // buoyancy
-        v.xz += (P.d.zw - v.xz) * (1.0 - exp(-0.4 * dt));                // dragged along by the wind
+        // Dragged along by the wind - in a storm (a wind past a calm one's 0.8: rvk smoke.cpp StormSmokeWind) faster,
+        // and torn: gusty eddies a couple of units wide shoving it about.
+        float tear = clamp((length(P.d.zw) - 0.8) / 3.5, 0.0, 1.0);
+        v.xz += (P.d.zw - v.xz) * (1.0 - exp(-(0.4 + 1.6 * tear) * dt));
+        if (tear > 0.0) {
+            vec3 q = uvw * P.a.w / 2.0 + vec3(float(P.e.w) * 0.015);
+            vec3 e = vec3(TileNoise(q, 4096), TileNoise(q + vec3(1009.0, 0.0, 0.0), 4096), TileNoise(q + vec3(0.0, 0.0, 2003.0), 4096));
+            v += tear * 4.0 * dt * (2.0 * e - 1.0) * vec3(1.0, 0.5, 1.0);
+        }
         vec3 d = (uvw - P.b.xyz) / max(P.b.w, 1e-4);
         float inSource = exp(-dot(d, d));
         v.y = mix(v.y, max(v.y, P.c.z), inSource);                       // the source pushes up
