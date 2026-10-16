@@ -30,6 +30,8 @@ layout(set = 0, binding = 0, std140) uniform LayerFrame {
                         // (world y)
     vec4 deck;          // the low deck (stratus: the game's flat sheets and dull overcast): x how much (0..1), y its
                         // base, z its top (world y); w: the game's sheets' faint shadow (RVK_CloudSheet)
+    vec4 scud;          // a thunderstorm's scud: xy the low deck's own drift (racing ahead of the layer), z how much
+                        // (0..1: torn into ragged fragments)
 } L;
 layout(set = 0, binding = 1) uniform sampler2D weatherMap;
 layout(set = 0, binding = 2) uniform sampler3D shapeNoise;
@@ -164,9 +166,15 @@ float DeckDensity(vec3 p)
     float h = (r - L.deck.y) / max(L.deck.z - L.deck.y, 1.0);
     if (h <= 0.0 || h >= 1.0)
         return 0.0;
-    vec2 q = p.xz + L.wind.xz;
+    vec2 q = p.xz + L.wind.xz + L.scud.xy;
     float broad = clamp((textureLod(shapeNoise, vec3(q / 14000.0, 0.47), 0.0).r - 0.54) / 0.26, 0.0, 1.0);
     float cover = smoothstep(1.0 - L.deck.x, 1.25 - L.deck.x * 0.6, broad * 0.5 + 0.5 * L.deck.x);
+    // Scud (a thunderstorm): the deck torn into ragged fragments a few hundred units across, gaps between them.
+    if (L.scud.z > 0.0) {
+        float rag = textureLod(shapeNoise, vec3(q / 1800.0, 0.21 + h * 0.2), 0.0).r * 0.7 +
+                    textureLod(shapeNoise, vec3(q / 600.0 + 0.3, 0.63), 0.0).g * 0.3;
+        cover *= mix(1.0, smoothstep(0.5, 0.66, rag), L.scud.z);
+    }
     if (cover <= 0.0)
         return 0.0;
     vec2 along = normalize(L.wind.xz + vec2(1e-3, 0.0)), across = vec2(-along.y, along.x);

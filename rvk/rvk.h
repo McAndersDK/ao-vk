@@ -2158,6 +2158,7 @@ private:
     float m_cloudWispy = 0.0f;                   // the game's wispy puffs' share (eased; logged)
     float m_cloudDeck = 0.0f;                    // the low deck's amount (eased)
     float m_cloudDrift[3] = {};                  // the clouds' drift (world x, z) and evolution (UpdateCloudDrift)
+    float m_scudDrift[2] = {};                   // a thunderstorm's scud: the low deck racing ahead of the layer (x, z)
     float m_cloudWindDir[2] = {0.8f, 0.6f};
     double m_cloudDriftClock = -1.0;
     void UpdateCloudDrift();

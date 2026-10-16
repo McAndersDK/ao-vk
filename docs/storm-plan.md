@@ -111,4 +111,5 @@ Each phase playable on its own; demo scenes for each (the grass bench with a sto
    eye keeps to the lower 1300 (type 0.95), beyond it storm cells (type 1) fill the full height with an anvil spreading
    at the top (cloud_weather.frag W.storm.y, cloud_layer.frag Profile). Seen from under the deck in the band over the
    horizon. Unverified in game (the demo shows no sky).
-5. Scud.
+5. Scud (storms77): in a thunderstorm the low deck sinks lower, races along 2.5x the layer's wind (m_scudDrift,
+   added up) and is torn into ragged fragments a few hundred units across (cloud_layer.frag DeckDensity, L.scud).

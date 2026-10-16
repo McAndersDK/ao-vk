@@ -101,7 +101,7 @@ struct WeatherFrame {
 struct LayerFrame {
     d3d::Matrix invViewProj;
     float eye[4], layer[4], weather[4], shape[4], wind[4], tint[4], ambient[4], haze[4], view[4], sub[4], horizon[4],
-        shadowArea[4], deck[4];
+        shadowArea[4], deck[4], scud[4];
 };
 
 struct ResolveFrame {
@@ -1257,6 +1257,11 @@ void Device::UpdateCloudDrift()
     m_cloudDrift[0] -= m_cloudWindDir[0] / dl * m_cloudWindSpeed * dt;
     m_cloudDrift[1] -= m_cloudWindDir[1] / dl * m_cloudWindSpeed * dt;
     m_cloudDrift[2] += 1.5f * dt;
+    // Scud: in a thunderstorm the low deck races along under the layer, three times as fast and more (the storm's
+    // gusts) - added up, so a change of pace never jumps it.
+    const float scudSpeed = m_cloudWindSpeed * 2.5f * std::clamp(m_rain, 0.0f, 1.0f);
+    m_scudDrift[0] = std::fmod(m_scudDrift[0] - m_cloudWindDir[0] / dl * scudSpeed * dt, 200000.0f);
+    m_scudDrift[1] = std::fmod(m_scudDrift[1] - m_cloudWindDir[1] / dl * scudSpeed * dt, 200000.0f);
 }
 
 // RVK_CloudLayer: the weather map round the camera - the game's sky's cloudiness as a drifting field (fixed in the
@@ -1555,11 +1560,16 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
         std::memcpy(lf.shadowArea, shadowArea, sizeof(lf.shadowArea));
     static const float deckOverride = getenv("RANDYVK_CLOUD_DECK") ? float(atof(getenv("RANDYVK_CLOUD_DECK"))) : -1.0f;
     lf.deck[0] = std::clamp((deckOverride >= 0.0f ? deckOverride : m_cloudDeck) * m_cloudParams.low, 0.0f, 1.0f);
-    lf.deck[1] = m_cloudBase - 0.55f * m_cloudParams.height;   // (between the ground and the layer's base)
+    // (Between the ground and the layer's base; a thunderstorm's lower - its scud, near over the land.)
+    const float scud = smoothstep01(0.1f, 0.7f, std::clamp(m_rain, 0.0f, 1.0f));
+    lf.deck[1] = m_cloudBase - (0.55f + 0.15f * scud) * m_cloudParams.height;
     lf.deck[2] = lf.deck[1] + kDeckThickness;
     // The game's sheets' faint shadow (the shadow map), while it draws them.
     lf.deck[3] = CloudSheetsOn() && !m_cloudPuffs.empty() ? 0.25f * std::min(m_cloudParams.sheet, 1.0f) * m_skySheets
                                                           : 0.0f;
+    lf.scud[0] = m_scudDrift[0];
+    lf.scud[1] = m_scudDrift[1];
+    lf.scud[2] = scud;                           // (cloud_layer.frag DeckDensity: torn into ragged fragments)
     void* cpu = nullptr;
     const VkDeviceSize offset = Allocate(sizeof(LayerFrame), 256, &cpu);
     std::memcpy(cpu, &lf, sizeof(lf));
