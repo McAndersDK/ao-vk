@@ -137,6 +137,16 @@ float Density(vec3 p, bool detail)
     return d * w.b;
 }
 
+// Lightning (rvk rain.cpp Lightning): the cloud round a strike lit from inside - by how far across from it (the
+// strike under the storm, the flash in its cloud above), bluish white.
+vec3 FlashInCloud(vec3 p)
+{
+    if (FL.flash.w <= 0.0)
+        return vec3(0.0);
+    vec2 off = p.xz - FL.flashWorld.xz;
+    return vec3(0.8, 0.85, 1.0) * (FL.flash.w * 1.2 / (1.0 + dot(off, off) / (1500.0 * 1500.0)));
+}
+
 float HG(float c, float g) { return (1.0 - g * g) / (4.0 * kPi * pow(1.0 + g * g - 2.0 * g * c, 1.5)); }
 
 // The low deck (stratus): a thin, nearly even sheet below the layer where the game's sky is flat sheets and overcast -
@@ -191,6 +201,7 @@ vec4 Deck(vec3 eye, vec3 dir, float jitter)
                   mix(1.0, 0.7, MoonShare()) + sun) * L.tint.rgb * L.tint.w;
         const vec3 luma = vec3(0.3, 0.59, 0.11);   // (contrast, as the layer: RVK_CloudShade)
         S *= clamp(pow(max(dot(S, luma) / max(dot(L.tint.rgb, luma) * L.tint.w, 1e-3), 1e-3), L.horizon.y - 1.0), 0.15, 3.0);
+        S += FlashInCloud(p) * L.tint.rgb;
         float st = exp(-d * sigma * dt);
         light += transmit * (1.0 - st) * S;
         transmit *= st;
@@ -446,6 +457,7 @@ void main()
         const vec3 luma = vec3(0.3, 0.59, 0.11);
         float middle = max(dot(L.tint.rgb, luma) * L.tint.w, 1e-3);
         S *= clamp(pow(max(dot(S, luma) / middle, 1e-3), (L.horizon.y - 1.0) / nightSky), 0.15, 3.0);
+        S += FlashInCloud(p) * L.tint.rgb;       // (lightning in the cloud)
         float stepT = exp(-d * sigma * dt);
         light += transmit * (1.0 - stepT) * S;
         depthSum += transmit * (1.0 - stepT) * tHere;

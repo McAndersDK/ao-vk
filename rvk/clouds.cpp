@@ -1646,6 +1646,11 @@ Texture* Device::ReusedCloudLayer(VkCommandBuffer cmd, bool skipCovered, const f
     rf.sub[1] = o[1];
     rf.sub[2] = valid ? 1.0f : 0.0f;
     rf.sub[3] = 0.4f;
+    {   // (During a lightning flash the fresh pixels as they are: its strokes last a few frames, not smeared over more.)
+        float flash[4], view[4], proj[4], world[4];
+        Lightning(flash, view, proj, world);
+        if (flash[3] > 0.05f) rf.sub[3] = 1.0f;
+    }
     const uint32_t cur = m_cloudHistoryIndex ^ 1u, prev = m_cloudHistoryIndex;
     void* cpu = nullptr;
     const VkDeviceSize offset = Allocate(sizeof(ResolveFrame), 256, &cpu);
