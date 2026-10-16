@@ -23,43 +23,16 @@ void main()
     ivec2 q = (hp - sub) / 2;                                // (the fresh pixel of this 2x2 block)
     ivec2 last = ivec2(R.size.zw) - 1;
     bool fresh = all(equal(hp & 1, sub));
-    // The fresh pixels round it - those marched (alpha >= 0; -1: covered, not marched, unknown): their range, their
-    // mean.
-    vec4 lo = vec4(1e9), hi = vec4(-1e9), sum = vec4(0.0);
-    float known = 0.0;
+    // The fresh pixels round it: their range, and their filtered value here.
+    vec4 lo = vec4(1e9), hi = vec4(-1e9);
     for (int y = -1; y <= 1; ++y)
         for (int x = -1; x <= 1; ++x) {
             vec4 c = texelFetch(quarter, clamp(q + ivec2(x, y), ivec2(0), last), 0);
-            if (c.a < 0.0)
-                continue;
             lo = min(lo, c);
             hi = max(hi, c);
-            sum += c;
-            known += 1.0;
         }
-    // This frame's value here: the fresh pixel's own; else the known of the four fresh ones round it, weighted as a
-    // bilinear filter would; else the mean round it; else none.
-    vec4 now = vec4(0.0);
-    bool haveNow = false;
-    vec4 own = texelFetch(quarter, clamp(q, ivec2(0), last), 0);
-    if (fresh && own.a >= 0.0) {
-        now = own;
-        haveNow = true;
-    } else {
-        vec2 at = (vec2(hp - sub) * 0.5 + 0.5) - 0.5;      // (in quarter texels)
-        ivec2 base = ivec2(floor(at));
-        vec2 f = at - vec2(base);
-        vec4 acc = vec4(0.0);
-        float wsum = 0.0;
-        for (int k = 0; k < 4; ++k) {
-            ivec2 o = ivec2(k & 1, k >> 1);
-            vec4 c = texelFetch(quarter, clamp(base + o, ivec2(0), last), 0);
-            float w = (o.x == 1 ? f.x : 1.0 - f.x) * (o.y == 1 ? f.y : 1.0 - f.y);
-            if (c.a >= 0.0) { acc += c * w; wsum += w; }
-        }
-        if (wsum > 1e-4) { now = acc / wsum; haveNow = true; }
-        else if (known > 0.0) { now = sum / known; haveNow = true; }
-    }
+    vec4 now = fresh ? texelFetch(quarter, clamp(q, ivec2(0), last), 0)
+                     : texture(quarter, (vec2(hp - sub) * 0.5 + 0.5) / R.size.zw);
     vec4 result = now;
     if (R.sub.z > 0.5) {
         // This pixel's direction, and where it was on screen last frame.
@@ -71,13 +44,10 @@ void main()
             vec2 p = clip.xy / clip.w;
             vec2 uv = vec2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
             if (all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0)))) {
-                // (Kept within what was marched round it - where nothing round it was, as it was: hidden there.)
-                vec4 before = texture(history, uv);
-                if (known > 0.0) before = clamp(before, lo, hi);
-                result = fresh && own.a >= 0.0 ? mix(before, now, R.sub.w) : before;
+                vec4 before = clamp(texture(history, uv), lo, hi);
+                result = fresh ? mix(before, now, R.sub.w) : before;
             }
         }
     }
-    // (Never unknown in the history: a covered spot holds the clouds round it, ready when it is uncovered.)
-    outClouds = max(result, vec4(0.0));
+    outClouds = result;
 }

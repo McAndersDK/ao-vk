@@ -1630,14 +1630,13 @@ Texture* Device::ReusedCloudLayer(VkCommandBuffer cmd, bool skipCovered, const f
     static const float kOrder[4][2] = {{0, 0}, {1, 1}, {1, 0}, {0, 1}};
     const float* o = kOrder[m_frameNumber % 4];
     const float sub[4] = {o[0], o[1], 2.0f, 0.0f};
-    auto begin = [&](Texture* t, uint32_t w, uint32_t h, float clearAlpha) {
+    auto begin = [&](Texture* t, uint32_t w, uint32_t h) {
         Transition(cmd, t, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
         color.imageView = t->m_view;
         color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        color.clearValue.color = {{0.0f, 0.0f, 0.0f, clearAlpha}};
         VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
         ri.renderArea = {{0, 0}, {w, h}};
         ri.layerCount = 1;
@@ -1645,10 +1644,7 @@ Texture* Device::ReusedCloudLayer(VkCommandBuffer cmd, bool skipCovered, const f
         ri.pColorAttachments = &color;
         vkCmdBeginRendering(cmd, &ri);
     };
-    // (Cleared to alpha -1: a pixel not marched - covered by what is drawn later - is unknown, not clear sky. Taken
-    // as clear sky, last frame's clouds next to a moving object were kept down to none and it had a blue outline on
-    // the side it came from - the user, strafing.)
-    begin(m_cloudQuarter, qw, qh, -1.0f);
+    begin(m_cloudQuarter, qw, qh);
     MarchCloudLayer(cmd, skipCovered, sub);
     vkCmdEndRendering(cmd);
     Transition(cmd, m_cloudQuarter, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -1677,7 +1673,7 @@ Texture* Device::ReusedCloudLayer(VkCommandBuffer cmd, bool skipCovered, const f
     void* cpu = nullptr;
     const VkDeviceSize offset = Allocate(sizeof(ResolveFrame), 256, &cpu);
     std::memcpy(cpu, &rf, sizeof(rf));
-    begin(m_cloudHistory[cur], hw, hh, 0.0f);
+    begin(m_cloudHistory[cur], hw, hh);
     VkViewport viewport{0.0f, 0.0f, float(hw), float(hh), 0.0f, 1.0f};
     VkRect2D scissor{{0, 0}, {hw, hh}};
     vkCmdSetViewport(cmd, 0, 1, &viewport);
