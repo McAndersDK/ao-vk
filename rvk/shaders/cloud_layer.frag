@@ -95,6 +95,17 @@ float Profile(float h, float type)
 // The noise's drift (main sets them): the body with the wind (and rising: shapes change), the detail faster. The
 // shadow map's: all with the wind, none rising - its shadows slide over the land as one, no edge creeping against
 // the rest (user: shadows going opposite ways).
+// The shape noise read smoothly across its texels (its texel coordinate's fraction through a smoothstep): linear
+// filtering bends at every texel, the density's steep remaps make the bends edges, and the sun's march - mostly up
+// through the cells' texel layers - turned them into horizontal stripes of light (~22 units apart: user's dump).
+vec4 ShapeSmooth(vec3 q)
+{
+    const float n = 128.0;                       // (rvk clouds.cpp kShapeSize)
+    vec3 x = q * n + 0.5, i = floor(x), f = x - i;
+    f = f * f * (3.0 - 2.0 * f);
+    return textureLod(shapeNoise, (i + f - 0.5) / n, 0.0);
+}
+
 vec3 gWind = vec3(0.0), gDetailWind = vec3(0.0);
 vec3 gPush = vec3(0.0);                          // the churn's push at the last sample (Density)
 bool gPushKept = false;                          // ... kept for the next ones (the sun's march)
@@ -131,9 +142,9 @@ float Density(vec3 p, bool detail)
         vec2 along = normalize(L.wind.xz + vec2(1e-3, 0.0));
         float a = dot(q.xz, along), c = dot(q.xz, vec2(-along.y, along.x));
         vec2 st = along * (a * mix(1.0, 0.67, storm)) + vec2(-along.y, along.x) * c;
-        n = textureLod(shapeNoise, vec3(st.x, q.y, st.y), 0.0);
+        n = ShapeSmooth(vec3(st.x, q.y, st.y));
     } else {
-        n = textureLod(shapeNoise, q, 0.0);
+        n = ShapeSmooth(q);
     }
     // The weather read a little off where the body's noise says, differently at each height: coverage's edges then
     // lean and wander instead of standing as straight walls (seen from below, walls line up into streaks).
@@ -159,7 +170,7 @@ float Density(vec3 p, bool detail)
         return d * w.b;
     // Billows: the body bumped by its own cells three times finer (cauliflower tops rather than smooth blobs) - more
     // towards the top, where cumulus heap up.
-    float billow = textureLod(shapeNoise, q * 3.1 + 0.17, 0.0).g;
+    float billow = ShapeSmooth(q * 3.1 + 0.17).g;
     // (As much as the edges' erosion: the weather's detail - storms smoother.)
     // (A storm's underside without them: they made its even bulbs.)
     float billowAmount = mix(0.15, 0.35, clamp(h * 2.0, 0.0, 1.0)) * mix(1.0, 0.35 + 0.65 * smoothstep(0.05, 0.3, hb), storm);
@@ -517,7 +528,9 @@ void main()
     // blue noise and the edge's small steps keep it smooth.)
     float growth = mix(0.012, 0.018, L.ambient.w);
     float minStep = baseThick * growth, along = (t1 - t0) / float(steps);
-    float t = t0 + jitter * clamp(t0 * growth, minStep, along);
+    // (The offset a whole clear-air step - twice the step: the march goes on twice as far through clear air, and
+    // half of one left the clouds' lit edges in soft horizontal bands - user's dump.)
+    float t = t0 + jitter * 2.0 * clamp(t0 * growth, minStep, along);
     float lightJitter = fract(blue.g + FL.taa.z);   // (the sun's steps moved too: no shells of light)
     // Adaptive steps (vertexfragment.com "volumetric cloud banding", after Horizon Zero Dawn): long steps through clear
     // air; at the first cloud a quarter of the step, three of them back (the edge lies before the sample), and small
