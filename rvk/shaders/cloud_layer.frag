@@ -77,6 +77,10 @@ float Height(vec3 p) { return (length(p - gCentre) - gInner) / gThick; }
 // way up, storm clouds nearly all of it.
 float Profile(float h, float type)
 {
+    // (A thunderstorm's layer is taller - rvk clouds.cpp - for its towers, type 1: the rest keep to the height they
+    // had, the lower 1300 units; the towers fill it all.)
+    float tall = smoothstep(0.97, 1.0, type);
+    h = h / mix(min(1300.0 / max(gThick, 1.0), 1.0), 1.0, tall);
     float stratus = smoothstep(0.0, 0.06, h) * (1.0 - smoothstep(0.12, 0.28, h));
     float cumulus = smoothstep(0.0, 0.1, h) * (1.0 - smoothstep(0.35, 0.65, h));
     float storm = smoothstep(0.0, 0.1, h) * (1.0 - smoothstep(0.7, 1.0, h));
@@ -107,6 +111,8 @@ float Density(vec3 p, bool detail)
     w = textureLod(weatherMap, uv + (n.gb - 0.5) * (500.0 * L.weather.z), 0.0);
     // (... and a little more or less with the body's noise: in 3D, so no edge of the map's runs straight up.)
     float cover = clamp(w.r + (n.a - 0.5) * 0.3, 0.0, 1.0);
+    // (A tower's anvil: spreading at its top, wider than the column below.)
+    cover = clamp(cover + 0.4 * smoothstep(0.97, 1.0, w.g) * smoothstep(0.72, 0.88, h) * (1.0 - smoothstep(0.94, 1.0, h)), 0.0, 1.0);
     if (cover < 0.01)
         return 0.0;
     float fbm = n.g * 0.625 + n.b * 0.25 + n.a * 0.125;

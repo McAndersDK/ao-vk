@@ -107,5 +107,8 @@ Each phase playable on its own; demo scenes for each (the grass bench with a sto
 3. Lightning bolts of our own (storms76, RVK_StormBolt): each strike a bolt from the cloud base to the ground
    (rain.cpp MakeBolt: midpoint displacement, 3-6 branches), drawn into the rain layer (bolt.vert/frag: a white-hot
    core, a bluish glow), its strokes as the flash, the fog between taken off; the game's VisualLightning_t left out.
-4. Cumulonimbus towers on the horizon.
+4. Cumulonimbus towers (storms77): in a thunderstorm the layer three times taller; the sealed deck within 6.5 km of the
+   eye keeps to the lower 1300 (type 0.95), beyond it storm cells (type 1) fill the full height with an anvil spreading
+   at the top (cloud_weather.frag W.storm.y, cloud_layer.frag Profile). Seen from under the deck in the band over the
+   horizon. Unverified in game (the demo shows no sky).
 5. Scud.

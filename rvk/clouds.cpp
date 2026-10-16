@@ -1345,6 +1345,7 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
     }
     wf.info[1] = m_cloudCloudy;
     wf.storm[0] = smoothstep01(0.1f, 0.7f, rain);   // (cloud_weather.frag: the storm's cover sealed)
+    wf.storm[1] = 6500.0f;                           // ... out to here; beyond, its towering cells
     wf.info[2] = m_cloudType;
     static const float typeOverride = getenv("RANDYVK_CLOUD_TYPE") ? float(atof(getenv("RANDYVK_CLOUD_TYPE"))) : -1.0f;
     if (typeOverride >= 0.0f)
@@ -1430,7 +1431,8 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     const double clock = std::fmod(m_frameClock, 3600.0);
     lf.eye[3] = float(clock);
     lf.layer[0] = m_cloudBase;
-    lf.layer[1] = m_cloudBase + kLayerThickness;
+    // (A thunderstorm's layer taller: its towers - cloud_layer.frag Profile - the rest keep to the lower 1300.)
+    lf.layer[1] = m_cloudBase + kLayerThickness * (1.0f + 2.0f * smoothstep01(0.1f, 0.7f, std::clamp(m_rain, 0.0f, 1.0f)));
     lf.layer[2] = kLayerRadius;
     lf.layer[3] = kLayerReach;
     lf.weather[0] = m_cloudWeatherArea[0];
