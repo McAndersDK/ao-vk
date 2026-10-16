@@ -2277,6 +2277,9 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
             return;
         }
     }
+    // The game's bolts (VisualLightning_t): left out while we draw our own (RVK_StormBolt; rain.cpp MakeBolt).
+    if (m_weatherParams.enable && m_stormBolt > 0.0f && std::strncmp(m_drawVisualName, "VisualLightning_t", 17) == 0)
+        return;
     ++m_frameDraw;
     // GPU profiling: which class of scene draw this is (splits the "scene" block; see ProfileSceneClass).
     m_drawSceneClass = 0;

@@ -995,6 +995,11 @@ void ThreadedDevice::SetStormFlash(bool on)
     Enqueue([this, on](const uint8_t*) { m_device.SetStormFlash(on); });
 }
 
+void ThreadedDevice::SetStormBolt(float s)
+{
+    Enqueue([this, s](const uint8_t*) { m_device.SetStormBolt(s); });
+}
+
 void ThreadedDevice::SetRainWet(float s)
 {
     Enqueue([this, s](const uint8_t*) { m_device.SetRainWet(s); });

@@ -104,6 +104,8 @@ Each phase playable on its own; demo scenes for each (the grass bench with a sto
    min); ffp_main: the world's own surfaces (CPU flag: C.vtx.w + 2) darker and reflecting (SSR reflectivity) where
    open, puddles on the level in hollows (the map's A: the ground under the mean round it) and noise - darker,
    mirror-like, rain rings. Dry under roofs and canopies. Demo: --wet W, --bare-ground.
-3. Lightning bolts of our own (next).
+3. Lightning bolts of our own (storms76, RVK_StormBolt): each strike a bolt from the cloud base to the ground
+   (rain.cpp MakeBolt: midpoint displacement, 3-6 branches), drawn into the rain layer (bolt.vert/frag: a white-hot
+   core, a bluish glow), its strokes as the flash, the fog between taken off; the game's VisualLightning_t left out.
 4. Cumulonimbus towers on the horizon.
 5. Scud.

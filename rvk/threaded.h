@@ -131,6 +131,7 @@ public:
     void SetStormGreen(float s);
     void SetStormDark(float s);
     void SetRainWet(float s);
+    void SetStormBolt(float s);
     void SetSandHaze(float amount);
     void SetSandBlow(float amount);
     void SetSandProcedural(bool on);

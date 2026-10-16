@@ -33,6 +33,36 @@ const uint32_t kSplashVertSpirv[] = {
 const uint32_t kSplashFragSpirv[] = {
 #include "splash.frag.inc"
 };
+const uint32_t kBoltVertSpirv[] = {
+#include "bolt.vert.inc"
+};
+const uint32_t kBoltFragSpirv[] = {
+#include "bolt.frag.inc"
+};
+constexpr uint32_t kBoltMaxSegments = 256;      // (bolt.vert's block)
+constexpr float kFlashLight[3] = {0.75f, 0.82f, 1.0f};   // its light on the land at a stroke's peak (x RVK_Lightning)
+constexpr double kFlashSeconds = 1.5;                    // how long a strike lights anything
+
+float StrikeHash(uint32_t seed, uint32_t salt)
+{
+    uint32_t x = seed * 0x9E3779B9u + salt * 0x85EBCA6Bu;
+    x ^= x >> 16; x *= 0x7FEB352Du; x ^= x >> 15; x *= 0x846CA68Bu; x ^= x >> 16;
+    return float(x & 0xFFFFFF) / float(0x1000000);
+}
+
+// A strike's light t seconds in (0 .. ~1): its strokes, each gone in a few frames, and the afterglow.
+float FlashEnvelope(double t, uint32_t seed)
+{
+    if (t < 0.0 || t > kFlashSeconds)
+        return 0.0f;
+    const float times[3] = {0.0f, 0.07f + 0.06f * StrikeHash(seed, 1), 0.19f + 0.12f * StrikeHash(seed, 2)};
+    const float amps[3] = {1.0f, 0.55f + 0.35f * StrikeHash(seed, 3), StrikeHash(seed, 4) > 0.4f ? 0.45f : 0.0f};
+    float f = 0.12f * std::exp(-float(t) / 0.4f);
+    for (int k = 0; k < 3; ++k)
+        if (t >= times[k])
+            f += amps[k] * std::exp(-(float(t) - times[k]) / 0.045f);
+    return std::min(f, 1.2f);
+}
 
 // The per-draw block (rain.vert / rain.frag RainFrame, std140).
 struct RainFrame {
@@ -78,12 +108,14 @@ void Device::SetWeather(const WeatherState& state)
 bool Device::CreateRainResources(std::string* error)
 {
     DestroyRainResources();
-    // One pushed set: 0 the block, 4 the frame lights, 1 the scene's depth (the splashes), 2 the cover map.
-    VkDescriptorSetLayoutBinding b[4] = {};
+    // One pushed set: 0 the block, 4 the frame lights, 1 the scene's depth (the splashes), 2 the cover map, 3 a bolt's
+    // segments.
+    VkDescriptorSetLayoutBinding b[5] = {};
     b[0].binding = 0;
     b[1].binding = 4;
     b[2].binding = 1;
     b[3].binding = 2;
+    b[4].binding = 3;
     for (auto& x : b) {
         x.descriptorCount = 1;
         x.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -93,7 +125,7 @@ bool Device::CreateRainResources(std::string* error)
     b[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     VkDescriptorSetLayoutCreateInfo sl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     sl.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-    sl.bindingCount = 4;
+    sl.bindingCount = 5;
     sl.pBindings = b;
     if (!Check(vkCreateDescriptorSetLayout(m_device, &sl, nullptr, &m_rainSetLayout), "vkCreateDescriptorSetLayout", error))
         return false;
@@ -181,6 +213,7 @@ bool Device::CreateRainResources(std::string* error)
     };
     return make(kRainVertSpirv, sizeof(kRainVertSpirv), kRainFragSpirv, sizeof(kRainFragSpirv), true, &m_rainPipeline) &&
            make(kRainVertSpirv, sizeof(kRainVertSpirv), kRainFragSpirv, sizeof(kRainFragSpirv), true, &m_rainNearPipeline, 1) &&
+           make(kBoltVertSpirv, sizeof(kBoltVertSpirv), kBoltFragSpirv, sizeof(kBoltFragSpirv), true, &m_boltPipeline, 1) &&
            make(kSplashVertSpirv, sizeof(kSplashVertSpirv), kSplashFragSpirv, sizeof(kSplashFragSpirv), false,
                 &m_splashPipeline);
 }
@@ -190,6 +223,7 @@ void Device::DestroyRainResources()
     if (m_rainPipeline) { vkDestroyPipeline(m_device, m_rainPipeline, nullptr); m_rainPipeline = VK_NULL_HANDLE; }
     if (m_splashPipeline) { vkDestroyPipeline(m_device, m_splashPipeline, nullptr); m_splashPipeline = VK_NULL_HANDLE; }
     if (m_rainNearPipeline) { vkDestroyPipeline(m_device, m_rainNearPipeline, nullptr); m_rainNearPipeline = VK_NULL_HANDLE; }
+    if (m_boltPipeline) { vkDestroyPipeline(m_device, m_boltPipeline, nullptr); m_boltPipeline = VK_NULL_HANDLE; }
     if (m_rainLayout) { vkDestroyPipelineLayout(m_device, m_rainLayout, nullptr); m_rainLayout = VK_NULL_HANDLE; }
     if (m_rainSetLayout) { vkDestroyDescriptorSetLayout(m_device, m_rainSetLayout, nullptr); m_rainSetLayout = VK_NULL_HANDLE; }
 }
@@ -429,6 +463,33 @@ void Device::RenderRain(VkCommandBuffer cmd)
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rainNearPipeline);
             vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rainLayout, 0, 3, writes);
             vkCmdDraw(cmd, drops * 6, 1, 0, 0);
+            // Our lightning bolt (RVK_StormBolt): its strokes as the flash's, the fog between it and the eye taken off.
+            const double since = m_frameClock - m_flashStart;
+            const uint32_t segs = uint32_t(m_boltSegs.size() / 8);
+            if (m_boltPipeline && m_stormBolt > 0.0f && segs && since >= 0.0 && since < 0.6) {
+                const float bright = FlashEnvelope(since, m_flashSeed) * (1.0f - std::clamp(float(since - 0.35) / 0.25f, 0.0f, 1.0f));
+                float mid[3] = {0.5f * (m_boltSegs[0] + m_boltSegs[(segs - 1) * 8 + 4]), 0.5f * (m_boltSegs[1] + m_boltSegs[(segs - 1) * 8 + 5]),
+                                0.5f * (m_boltSegs[2] + m_boltSegs[(segs - 1) * 8 + 6])};
+                const float through = SandFogOn() ? SandFogThrough(m_frameEye, mid) : 1.0f;
+                if (bright > 0.01f) {
+                    const size_t blockSize = sizeof(float) * (4 + 8 * kBoltMaxSegments);
+                    void* bcpu = nullptr;
+                    const VkDeviceSize boltOffset = Allocate(blockSize, 256, &bcpu);
+                    float* bf = static_cast<float*>(bcpu);
+                    std::memset(bf, 0, blockSize);
+                    bf[0] = float(std::min(segs, kBoltMaxSegments));
+                    bf[1] = 6.0f * bright * std::clamp(m_stormBolt, 0.0f, 3.0f) * std::max(through, 0.15f);
+                    std::memcpy(bf + 4, m_boltSegs.data(), sizeof(float) * 8 * std::min(segs, kBoltMaxSegments));
+                    VkDescriptorBufferInfo boltInfo{f.ring, boltOffset, blockSize};
+                    VkWriteDescriptorSet bw = writes[0];
+                    bw.dstBinding = 3;
+                    bw.pBufferInfo = &boltInfo;
+                    VkWriteDescriptorSet boltWrites[4] = {writes[0], writes[1], writes[2], bw};
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_boltPipeline);
+                    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rainLayout, 0, 4, boltWrites);
+                    vkCmdDraw(cmd, std::min(segs, kBoltMaxSegments) * 6, 1, 0, 0);
+                }
+            }
             vkCmdEndRendering(cmd);
             m_rainNearFrame = m_frameNumber;
         }
@@ -483,37 +544,66 @@ void Device::RenderRain(VkCommandBuffer cmd)
 // with it, left out with the new weather - Draw) - tell when and where; each strike lights the land by its surfaces'
 // colour and the clouds round it (tonemap.frag) with a flash of our own: a stroke, one or two return strokes a tenth of
 // a second apart, a short afterglow - not the glow's frame-to-frame flicker.
-namespace {
-constexpr float kFlashLight[3] = {0.75f, 0.82f, 1.0f};   // its light on the land at a stroke's peak (x RVK_Lightning)
-constexpr double kFlashSeconds = 1.5;                    // how long a strike lights anything
-
-float StrikeHash(uint32_t seed, uint32_t salt)
-{
-    uint32_t x = seed * 0x9E3779B9u + salt * 0x85EBCA6Bu;
-    x ^= x >> 16; x *= 0x7FEB352Du; x ^= x >> 15; x *= 0x846CA68Bu; x ^= x >> 16;
-    return float(x & 0xFFFFFF) / float(0x1000000);
-}
-
-// A strike's light t seconds in (0 .. ~1): its strokes, each gone in a few frames, and the afterglow.
-float FlashEnvelope(double t, uint32_t seed)
-{
-    if (t < 0.0 || t > kFlashSeconds)
-        return 0.0f;
-    const float times[3] = {0.0f, 0.07f + 0.06f * StrikeHash(seed, 1), 0.19f + 0.12f * StrikeHash(seed, 2)};
-    const float amps[3] = {1.0f, 0.55f + 0.35f * StrikeHash(seed, 3), StrikeHash(seed, 4) > 0.4f ? 0.45f : 0.0f};
-    float f = 0.12f * std::exp(-float(t) / 0.4f);
-    for (int k = 0; k < 3; ++k)
-        if (t >= times[k])
-            f += amps[k] * std::exp(-(float(t) - times[k]) / 0.045f);
-    return std::min(f, 1.2f);
-}
-}  // namespace
 
 void Device::TriggerLightning(const float pos[3])
 {
     m_flashStart = m_frameClock;
     std::memcpy(m_flashPos, pos, sizeof(m_flashPos));
     m_flashSeed = ++m_flashCount * 2654435761u;
+    // Its bolt: from the cloud base over the strike down to the ground under it (the terrain known there, else the
+    // ground under the eye).
+    float ground = m_frameEye[1] - 2.0f, y;
+    if (GroundAt(pos[0], pos[2], &y, nullptr, nullptr)) ground = y;
+    else if (CoarseTerrainAt(pos[0], pos[2]) > -1e8f) ground = CoarseTerrainAt(pos[0], pos[2]);
+    const float base = std::max(m_cloudBase > 1.0f ? m_cloudBase : m_frameEye[1] + 400.0f, ground + 120.0f);
+    const float top[3] = {pos[0] + (StrikeHash(m_flashSeed, 21) - 0.5f) * 60.0f, base, pos[2] + (StrikeHash(m_flashSeed, 22) - 0.5f) * 60.0f};
+    const float bottom[3] = {pos[0], ground, pos[2]};
+    MakeBolt(top, bottom, m_flashSeed);
+}
+
+// A bolt's segments (m_boltSegs): the channel split again and again with its middle pushed aside (less each time: a
+// jagged line at every scale), a few branches off it going down and out, dimmer and thinner.
+void Device::MakeBolt(const float top[3], const float bottom[3], uint32_t seed)
+{
+    m_boltSegs.clear();
+    struct P { float x, y, z; };
+    uint32_t salt = 100;
+    auto rnd = [&]() { return StrikeHash(seed, salt++) - 0.5f; };
+    auto channel = [&](P a, P b, int levels, float jag, float width, float bright) {
+        std::vector<P> pts{a, b};
+        float len = std::sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y) + (b.z - a.z) * (b.z - a.z));
+        float amount = len * jag;
+        for (int l = 0; l < levels; ++l) {
+            std::vector<P> next;
+            next.reserve(pts.size() * 2);
+            for (size_t i = 0; i + 1 < pts.size(); ++i) {
+                const P& p = pts[i];
+                const P& q = pts[i + 1];
+                next.push_back(p);
+                next.push_back({0.5f * (p.x + q.x) + rnd() * amount, 0.5f * (p.y + q.y) + rnd() * amount * 0.4f,
+                                0.5f * (p.z + q.z) + rnd() * amount});
+            }
+            next.push_back(pts.back());
+            pts.swap(next);
+            amount *= 0.55f;
+        }
+        for (size_t i = 0; i + 1 < pts.size() && m_boltSegs.size() / 8 < kBoltMaxSegments; ++i) {
+            const float t = float(i) / float(pts.size() - 1);
+            const float seg[8] = {pts[i].x, pts[i].y, pts[i].z, width, pts[i + 1].x, pts[i + 1].y, pts[i + 1].z,
+                                  bright * (1.0f - 0.35f * t)};
+            m_boltSegs.insert(m_boltSegs.end(), seg, seg + 8);
+        }
+        return pts;
+    };
+    const std::vector<P> main = channel({top[0], top[1], top[2]}, {bottom[0], bottom[1], bottom[2]}, 7, 0.18f, 0.6f, 1.0f);
+    const int branches = 3 + int(StrikeHash(seed, 31) * 4.0f);
+    for (int k = 0; k < branches; ++k) {
+        const P from = main[size_t((0.1f + 0.6f * StrikeHash(seed, 40 + uint32_t(k))) * float(main.size() - 1))];
+        const float drop = (from.y - bottom[1]) * (0.2f + 0.3f * StrikeHash(seed, 50 + uint32_t(k)));
+        const float ang = 6.2831853f * StrikeHash(seed, 60 + uint32_t(k));
+        const P to = {from.x + std::cos(ang) * drop * 0.8f, from.y - drop, from.z + std::sin(ang) * drop * 0.8f};
+        channel(from, to, 5, 0.22f, 0.3f, 0.45f);
+    }
 }
 
 // Once a frame (BeginFrame): the game's glow seen last frame - a new strike where it flares up.

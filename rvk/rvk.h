@@ -362,6 +362,7 @@ public:
     void SetStormGreen(float s) { m_stormGreen = s; }              // RVK_StormGreen (0..1)
     void SetStormDark(float s) { m_stormDark = s; }                // RVK_StormDark (x)
     void SetRainWet(float s) { m_rainWet = s; }                    // RVK_RainWet (x)
+    void SetStormBolt(float s) { m_stormBolt = s; }                // RVK_StormBolt (x; 0: the game's bolts)
     void SetWetNow(float wet, float puddles) { m_wetness = wet; m_puddles = puddles; }   // (tests: soaked already)
     float StormOvercast() const;                                   // how much a thunderstorm hides the sun (rain.cpp)
     void StormHue(float rgb[3]) const;                             // a colour turned the storm's dark yellow-green (rain.cpp)
@@ -2042,6 +2043,10 @@ private:
     VkPipeline m_rainPipeline = VK_NULL_HANDLE;
     VkPipeline m_splashPipeline = VK_NULL_HANDLE;
     VkPipeline m_rainNearPipeline = VK_NULL_HANDLE;   // the streaks again, into m_rainNear alone
+    VkPipeline m_boltPipeline = VK_NULL_HANDLE;  // our lightning bolts, into m_rainNear (bolt.vert/frag)
+    std::vector<float> m_boltSegs;               // the last strike's bolt: per segment a (xyz, width), b (xyz, brightness)
+    float m_stormBolt = 1.0f;                    // RVK_StormBolt: our own bolts (the game's left out), x; 0: the game's
+    void MakeBolt(const float top[3], const float bottom[3], uint32_t seed);
     Texture* m_rainNear = nullptr;               // RGBA16F, full size: the rain drawn this frame (premultiplied) - the
                                                  // tone mapping keeps it in front of the storm's fog and the haze
     uint64_t m_rainNearFrame = ~0ull;            // (the frame it was drawn in)
