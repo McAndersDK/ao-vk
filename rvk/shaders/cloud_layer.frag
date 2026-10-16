@@ -351,11 +351,28 @@ void main()
     // The half-size pixel marched (one of each 2x2 when reused over frames).
     vec2 hp = L.sub.z > 1.5 ? floor(gl_FragCoord.xy) * 2.0 + L.sub.xy + 0.5 : gl_FragCoord.xy;
     // The four scene pixels under this one: none of them sky - an opaque surface is drawn there later.
+    // Reused over frames, this pixel stands for its whole 2x2 (the others filtered from it): skipped only when no sky
+    // is near that block - its 4 x 4 scene pixels and 2 round them, every other one. (Its own four alone: beside a
+    // thin pole its pixel fell on the pole while the rest of the block was sky - no cloud filtered into that sky, a
+    // light stepped outline down the pole's side; the user's dump.)
     if (L.weather.w > 0.5) {
-        ivec2 at = ivec2(hp) * 2, last = textureSize(sceneDepth, 0) - 1;
+        ivec2 last = textureSize(sceneDepth, 0) - 1;
         bool open = false;
-        for (int k = 0; k < 4; ++k)
-            open = open || texelFetch(sceneDepth, min(at + ivec2(k & 1, k >> 1), last), 0).r == L.wind.w;
+        if (L.sub.z > 1.5) {
+            ivec2 block = ivec2(floor(gl_FragCoord.xy)) * 4;
+            for (int k = 0; k < 16 && !open; ++k) {
+                ivec2 o = ivec2(k & 3, k >> 2) * 2 - 2;
+                open = texelFetch(sceneDepth, clamp(block + o, ivec2(0), last), 0).r == L.wind.w;
+            }
+            for (int k = 0; k < 16 && !open; ++k) {
+                ivec2 o = ivec2(k & 3, k >> 2) * 2 - 1;
+                open = texelFetch(sceneDepth, clamp(block + o, ivec2(0), last), 0).r == L.wind.w;
+            }
+        } else {
+            ivec2 at = ivec2(hp) * 2;
+            for (int k = 0; k < 4; ++k)
+                open = open || texelFetch(sceneDepth, min(at + ivec2(k & 1, k >> 1), last), 0).r == L.wind.w;
+        }
         if (!open)
             discard;
     }
