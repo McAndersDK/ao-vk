@@ -1668,7 +1668,9 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
         lf.morph[0] = m_cloudMorphPhase;
         lf.morph[1] = std::min(morph, 1.0f) * (0.12f + 0.18f * StormSky());
         lf.morph[2] = m_cloudBoil;
-        lf.morph[3] = 0.0f;
+        // (The rain veils under a storm: some with its sky alone, all while it rains - any rain: the game's is ~0.1.)
+        const float rainy = smoothstep01(0.0f, 0.05f, std::clamp(m_rain, 0.0f, 1.0f));
+        lf.morph[3] = m_weatherParams.enable ? StormSky() * (0.3f + 0.7f * rainy) * std::clamp(m_rainVeils, 0.0f, 3.0f) : 0.0f;
     }
     void* cpu = nullptr;
     const VkDeviceSize offset = Allocate(sizeof(LayerFrame), 256, &cpu);

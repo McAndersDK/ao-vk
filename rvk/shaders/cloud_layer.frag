@@ -33,7 +33,7 @@ layout(set = 0, binding = 0, std140) uniform LayerFrame {
     vec4 scud;          // a thunderstorm's scud: xy the low deck's own drift (racing ahead of the layer), z how much
                         // (0..1: torn into ragged fragments)
     vec4 morph;         // the churn (rvk clouds.cpp UpdateCloudDrift): x its field's phase (tiles, wrapping), y how far
-                        // it pushes the cells (body tiles), z the detail's extra rise (world)
+                        // it pushes the cells (body tiles), z the detail's extra rise (world); w: the rain veils (Veils)
 } L;
 layout(set = 0, binding = 1) uniform sampler2D weatherMap;
 layout(set = 0, binding = 2) uniform sampler3D shapeNoise;
@@ -263,6 +263,49 @@ vec4 Deck(vec3 eye, vec3 dir, float jitter)
 }
 
 
+// Rain veils (user: volumetric fog and veils in the distance under a storm): grey shafts hanging from the deck's
+// heaviest masses down to the land, far off only (near by, the rain is the particle rain) - a few steps along the ray
+// below the base. Premultiplied, in front of the clouds. L.morph.w: how much (the storm sky, more while it rains).
+vec4 gVeil = vec4(0.0);
+vec4 Veils(vec3 eye, vec3 dir, float jitter)
+{
+    if (L.morph.w <= 0.0 || dir.y <= -0.02)
+        return vec4(0.0);
+    float base = L.layer.x;
+    float tBase = dir.y > 1e-3 ? (base - eye.y) / dir.y : 1e9;
+    float t0 = 2500.0, t1 = min(tBase, L.layer.w);
+    if (t1 <= t0)
+        return vec4(0.0);
+    const int kSteps = 5;
+    float dt = (t1 - t0) / float(kSteps), transmit = 1.0;
+    float sigma = 0.0006 * L.morph.w;
+    for (int i = 0; i < kSteps; ++i) {
+        vec3 p = eye + dir * (t0 + (float(i) + jitter) * dt);
+        vec2 uv = (p.xz - L.weather.xy) * L.weather.z;
+        if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
+            continue;
+        float heavy = smoothstep(0.86, 0.98, textureLod(weatherMap, uv, 0.0).r);
+        if (heavy <= 0.0)
+            continue;
+        // (Shafts: the noise all but still up the height - columns - drifting with the clouds: broad soft ones and
+        // finer streaks in them.)
+        vec2 q = (p.xz + gWind.xz) / 4000.0;
+        float broad = textureLod(shapeNoise, vec3(q.x, 0.37 + p.y / 60000.0, q.y), 0.0).g;
+        float streak = textureLod(shapeNoise, vec3(q.x * 4.3, 0.61 + p.y / 30000.0, q.y * 4.3), 0.0).b;
+        float shaft = smoothstep(0.35, 0.8, broad) * (0.55 + 0.45 * streak);
+        float up = clamp((p.y - eye.y) / max(base - eye.y, 1.0), 0.0, 1.0);
+        transmit *= exp(-heavy * shaft * (1.0 - 0.5 * up) * sigma * dt);
+    }
+    float a = 1.0 - transmit;
+    if (a <= 0.001)
+        return vec4(0.0);
+    // (Darker than the air round them, a little bluer: the rain's grey curtain against the haze.)
+    vec3 colour = mix(L.haze.rgb, L.ambient.rgb * L.tint.rgb * L.tint.w, 0.4) * vec3(0.55, 0.58, 0.64);
+    return vec4(colour * a, a);
+}
+
+vec4 Veiled(vec4 c) { return gVeil + (1.0 - gVeil.a) * c; }
+
 #ifdef RVK_CLOUD_SUNRAY
 // How much sunlight the clouds let through to the eye (rvk/clouds.cpp MakeCloudSunRay): 16 rays from the eye towards
 // the sun (spread over ~2 degrees round it: a patch of sky, not one point), each marched through the layer and the
@@ -426,6 +469,7 @@ void main()
     vec2 blue = texelFetch(blueNoise, ivec2(hp) & 63, 0).rg;
     float jitter = fract(blue.r + FL.taa.z);
     vec4 deck = Deck(eye, dir, jitter);          // (below the layer: in front of it, looking up)
+    gVeil = Veils(eye, dir, jitter);             // (the storm's rain veils far off: in front of both)
     vec2 si = Sphere(eye, dir, gCentre, gInner), so = Sphere(eye, dir, gCentre, outer);
     float r0 = length(eye - gCentre);
     float t0, t1;
@@ -436,13 +480,13 @@ void main()
         t0 = 0.0;
         t1 = si.y > 0.0 && si.x > 0.0 ? si.x : so.y;
     } else {                                     // above it
-        if (so.y < 0.0 || so.x > so.y) { outScene = deck; return; }
+        if (so.y < 0.0 || so.x > so.y) { outScene = Veiled(deck); return; }
         t0 = max(so.x, 0.0);
         t1 = si.x > 0.0 && si.y > si.x ? si.x : so.y;
     }
     t1 = min(t1, L.layer.w);
     if (t1 <= t0) {
-        outScene = deck;
+        outScene = Veiled(deck);
         return;
     }
     // Steps growing with the distance (short near the eye: the near clouds' detail; long far off), at most L.view.z.
@@ -575,11 +619,11 @@ void main()
     // show - user. What is left under 4% is none.)
     float alpha = 1.0 - max(transmit - 0.04, 0.0) / 0.96;
     if (alpha <= 0.0) {
-        outScene = deck;
+        outScene = Veiled(deck);
         return;
     }
     // The air: by where along the ray the cloud is.
     vec4 layer = Aerial(light, alpha, depthSum / max(weightSum, 1e-6), dir);
-    outScene = deck + (1.0 - deck.a) * layer;
+    outScene = Veiled(deck + (1.0 - deck.a) * layer);
 }
 #endif

@@ -129,6 +129,7 @@ public:
     void SetLightning(float s);
     void SetRainFog(float s);
     void SetStormGreen(float s);
+    void SetRainVeils(float s);
     void SetStormDark(float s);
     void SetRainWet(float s);
     void SetStormBolt(float s);

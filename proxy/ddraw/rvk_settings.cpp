@@ -149,6 +149,7 @@ Setting g_settings[] = {
     {"RVK_RainWet",    "Rain: the ground soaked - darker and reflecting - and puddles gathering in hollows; dry under roofs and trees (x; 0: none)", "Experimental", Float, 0, 1.5f, 0.05f, 1, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_StormDark",  "Thunderstorms: the land darker as the storm hides the sun - its shadows gone (x; 0: lit as the game lights it)", "Experimental", Float, 0, 1.5f, 0.05f, 1, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_StormGreen", "Thunderstorms: their clouds and mist cast green, as the game's storm air (0: grey)", "Experimental", Float, 0, 1, 0.05f, 0.6f, nullptr, 0, "RVK_WeatherOn"},
+    {"RVK_RainVeils",  "Thunderstorms: grey rain veils under the far clouds, x (0: none)", "Experimental", Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_RainFog",    "Thunderstorms: the rain's mist - the distance grey, rain shafts hanging under the storm, lit by lightning (x; 0: none; with RVK_SandFog)", "Experimental", Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_Lightning",  "Lightning: each of the game's strikes lights the land and the clouds round it with a flash (x; 0: none)", "Experimental", Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_StormFlash", "The game's lightning glow: the sky flashing over the clouds in storms - it flickers (off: left out; the bolts stay)", "Experimental", Bool, 0, 1, 1, 0, nullptr, 0, "RVK_WeatherOn"},
@@ -351,7 +352,7 @@ const char* const kHidden[] = {
     // weather
     "RVK_RainSpeed", "RVK_RainLength", "RVK_RainLean", "RVK_RainSplash", "RVK_RainBright", "RVK_WindStorm",
     "RVK_StormTint", "RVK_StrikeRate", "RVK_StormDebris", "RVK_StormBolt", "RVK_RainWet", "RVK_StormDark",
-    "RVK_StormGreen", "RVK_RainFog", "RVK_Lightning", "RVK_StormFlash", "RVK_SandHaze", "RVK_SandAsh",
+    "RVK_StormGreen", "RVK_RainVeils", "RVK_RainFog", "RVK_Lightning", "RVK_StormFlash", "RVK_SandHaze", "RVK_SandAsh",
     "RVK_SandRes", "RVK_SandProc", "RVK_SandContrast", "RVK_SandClear", "RVK_SandGusts", "RVK_SandFog",
     "RVK_SandSun", "RVK_SandTint", "RVK_SandBlow",
     // smoke
@@ -561,6 +562,7 @@ void ApplyOne(const Setting& s, rvk::ThreadedDevice* d)
     else if (is("RVK_Lightning")) d->SetLightning(V(n));
     else if (is("RVK_RainFog")) d->SetRainFog(V(n));
     else if (is("RVK_StormGreen")) d->SetStormGreen(V(n));
+    else if (is("RVK_RainVeils")) d->SetRainVeils(V(n));
     else if (is("RVK_StormDark")) d->SetStormDark(V(n));
     else if (is("RVK_RainWet")) d->SetRainWet(V(n));
     else if (is("RVK_StormBolt")) d->SetStormBolt(V(n));

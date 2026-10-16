@@ -1015,6 +1015,11 @@ void ThreadedDevice::SetStormDark(float s)
     Enqueue([this, s](const uint8_t*) { m_device.SetStormDark(s); });
 }
 
+void ThreadedDevice::SetRainVeils(float s)
+{
+    Enqueue([this, s](const uint8_t*) { m_device.SetRainVeils(s); });
+}
+
 void ThreadedDevice::SetStormGreen(float s)
 {
     Enqueue([this, s](const uint8_t*) { m_device.SetStormGreen(s); });
