@@ -343,7 +343,8 @@ void Device::RenderRain(VkCommandBuffer cmd)
     // How hard it rains: forced, or the game's weather while it hands it over (over without a hand-off for half a
     // second), eased in and out over a few seconds as rain comes and goes.
     const double now = m_frameClock;
-    const float dt = m_rainLastClock < 0.0 ? 0.0f : float(std::clamp(now - m_rainLastClock, 0.0, 0.25));
+    const bool first = m_rainLastClock < 0.0;    // (a forced storm there from the start: no easing in - the demo)
+    const float dt = first ? 0.0f : float(std::clamp(now - m_rainLastClock, 0.0, 0.25));
     m_rainLastClock = now;
     float target = 0.0f, skyTarget = 0.0f;
     if (P.enable && !m_indoors) {
@@ -374,6 +375,10 @@ void Device::RenderRain(VkCommandBuffer cmd)
         m_rain = 0.0f;
     // (The sky rolls in over some seconds - not dark at a strike's flash - and clears slower than the rain stops.)
     m_stormSky += (skyTarget - m_stormSky) * (1.0f - std::exp(-dt / (skyTarget > m_stormSky ? 12.0f : 60.0f)));
+    if (first && (P.force > 0.0f || P.stormForce > 0.0f)) {
+        m_rain = target;
+        m_stormSky = skyTarget;
+    }
     if (skyTarget == 0.0f && m_stormSky < 0.003f)
         m_stormSky = 0.0f;
     const bool fromGame = now - m_weatherGameTime < 0.5;

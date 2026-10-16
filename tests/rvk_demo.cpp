@@ -1118,6 +1118,7 @@ void RunPbrTest(D& dev, int frames, const std::string& shot)
 }
 
 float g_cameraYaw = 0.0f;  // --camera-yaw: the shadow test's camera turns this much a frame (motion blur)
+float g_cameraPitch = -1000.0f;   // --camera-pitch DEG: the shadow test's camera looks this far up (the sky: clouds)
 bool g_sunView = false;    // --sun-view: the shadow test's camera low, looking into the sun
 float g_movingCube = 0.0f; // --moving-cube: the shadow test's big right cube moves this far a frame along x
 float g_deformCube = 0.0f; // --deform-cube: its top vertices move this far a frame along x (like CPU skinning)
@@ -2692,6 +2693,11 @@ void RunShadowTest(D& dev, int frames, const std::string& shot, int cacheTest, i
         } else if (g_sunView) {
             // --sun-view: low, looking towards the sun past the cubes (volumetric light shafts).
             dev.SetTransform(View, LookAtLH({11.0f, 1.5f, 11.0f}, {2.0f, 5.0f, 3.5f}, {0, 1, 0}));
+        } else if (g_cameraPitch > -999.0f) {
+            // --camera-pitch d: from the clouds' eye (DrawDemoPuffs) d degrees up, towards +z.
+            const float p = g_cameraPitch * kPi / 180.0f;
+            dev.SetTransform(View, LookAtLH({0, 9, -14}, {0, 9 + std::sin(p), -14 + std::cos(p)}, {0, 1, 0}));
+            dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.5f, 200.0f));
         } else if (g_cameraYaw != 0.0f) {
             // --camera-yaw r: the camera turns r radians a frame around the scene (motion blur test).
             float a = g_cameraYaw * float(frame), ex = 16.6f * std::sin(a), ez = 2.0f - 16.6f * std::cos(a);
@@ -3976,6 +3982,7 @@ int main(int argc, char** argv)
         else if (a == "--deform-cube" && i + 1 < argc) g_deformCube = float(std::atof(argv[++i]));
         else if (a == "--moving-cube" && i + 1 < argc) g_movingCube = float(std::atof(argv[++i]));
         else if (a == "--camera-yaw" && i + 1 < argc) g_cameraYaw = float(std::atof(argv[++i]));
+        else if (a == "--camera-pitch" && i + 1 < argc) g_cameraPitch = float(std::atof(argv[++i]));
         else if (a == "--aniso" && i + 1 < argc) anisotropy = uint32_t(std::atoi(argv[++i]));
         else if (a == "--bump" && i + 1 < argc) bump = float(std::atof(argv[++i]));
         else if (a == "--normal-map-test") normalMapTest = true;
