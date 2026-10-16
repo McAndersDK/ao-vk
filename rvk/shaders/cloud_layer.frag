@@ -429,8 +429,13 @@ void main()
     float transmit = 1.0;
     vec3 light = vec3(0.0);
     float depthSum = 0.0, weightSum = 0.0;      // (where the cloud is along the ray: its haze)
-    float minStep = gThick * 0.012, along = (t1 - t0) / float(steps);
+    // (Step lengths by the layer's usual thickness, not a thunderstorm's three times taller: its steps three times as
+    // long left its cloud in terraces - user's dump.)
+    float baseThick = min(gThick, 1300.0);
+    float minStep = baseThick * 0.012, along = (t1 - t0) / float(steps);
     float t = t0 + jitter * clamp(t0 * 0.012, minStep, along);
+    float lightJitter = fract(jitter * 1.6180339 + 0.37);   // (the sun's steps moved too: no shells of light)
+    bool clearBefore = false;
     for (int i = 0; i < steps && transmit > 0.01 && t < t1; ++i) {
         float dt = clamp(t * 0.012, minStep, max(along, minStep));
         vec3 p = eye + dir * t;
@@ -438,15 +443,24 @@ void main()
         float d = Density(p, true);
         if (d <= 0.001) {
             t += dt;                             // (clear air: on twice as far)
+            clearBefore = true;
             continue;
+        }
+        if (clearBefore) {
+            // Into the cloud after a long step through clear air: it may begin a step back - look there (its edge
+            // otherwise stepped, the same for a whole patch of sky).
+            clearBefore = false;
+            vec3 pb = p - dir * dt;
+            float db = Density(pb, true);
+            if (db > 0.001) { p = pb; d = db; t -= dt; }
         }
         float tHere = t - dt;
         // The sun through the cloud: a few steps towards it, longer each (far off, fewer and longer).
         float od = 0.0;
         bool far = tHere > 8000.0;
         int lightSteps = far ? 2 : int(L.view.w);
-        float ls = gThick * (far ? 0.1 : 0.045), grow = far ? 2.2 : 1.5;
-        vec3 lp = p;
+        float ls = baseThick * (far ? 0.1 : 0.045), grow = far ? 2.2 : 1.5;
+        vec3 lp = p + sunL * (ls * (lightJitter - 0.5));
         for (int k = 0; k < lightSteps; ++k) {
             lp += sunL * ls;
             od += Density(lp, false) * ls;

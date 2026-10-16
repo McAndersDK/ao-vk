@@ -684,7 +684,7 @@ public:
         float cover = 0.0f;                      // RVK_CloudCover: the layer's coverage, more (+) or less (-)
         float height = 900.0f;                   // RVK_CloudHeight: the layer's base above the eye's ground (world)
         float shade = 1.6f;                      // RVK_CloudShade: contrast (light and shade; 1 = as lit)
-        float low = 1.0f;                        // RVK_CloudLow: the low deck (stratus), x (0: none)
+        float low = 0.0f;                        // RVK_CloudLow: the low deck (stratus), x (0: none - user)
         float sheet = 1.0f;                      // RVK_CloudSheet: the game's flat sheets behind the layer, x (0: none)
     };
     void SetCloudParams(const CloudParams& params);
