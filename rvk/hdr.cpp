@@ -538,6 +538,50 @@ void Device::EndScene()
     m_constantsDirty = true;
     if (m_inFrame)
         BeginRenderingOn(m_target);
+    if (m_inFrame && m_target == m_ldrMain)
+        DrawHeldLabels();
+    m_heldLabels.clear();                        // (the scene ended elsewhere: not drawn this frame)
+}
+
+// The name labels held back during the scene (Draw), onto the final picture: each drawn as the game drew it - its
+// state put back for the draw, the game's current state after.
+void Device::DrawHeldLabels()
+{
+    if (m_heldLabels.empty())
+        return;
+    std::vector<HeldLabel> labels;
+    labels.swap(m_heldLabels);
+    const auto rs = m_rs;
+    const auto tss = m_tss;
+    const auto textures = m_textures;
+    const d3d::Matrix world = m_world, view = m_view, proj = m_proj;
+    const auto texMatrix = m_texMatrix;
+    const d3d::Viewport viewport = m_viewport;
+    m_drawingHeldLabels = true;
+    for (const HeldLabel& l : labels) {
+        if (!l.textures[0])
+            continue;                            // (its text freed since: nothing to draw)
+        m_rs = l.rs;
+        m_tss = l.tss;
+        m_textures = l.textures;
+        m_world = l.world;
+        m_view = l.view;
+        m_proj = l.proj;
+        m_texMatrix = l.texMatrix;
+        m_viewport = l.viewport;
+        m_constantsDirty = true;
+        Draw(l.primitive, l.fvf, l.vertices.data(), l.vertexCount, nullptr, 0);
+    }
+    m_drawingHeldLabels = false;
+    m_rs = rs;
+    m_tss = tss;
+    m_textures = textures;
+    m_world = world;
+    m_view = view;
+    m_proj = proj;
+    m_texMatrix = texMatrix;
+    m_viewport = viewport;
+    m_constantsDirty = true;
 }
 
 // The depth buffer, written by the scene, readable by the post passes (BeginRenderingOn makes it an attachment again).

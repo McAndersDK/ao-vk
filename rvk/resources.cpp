@@ -555,6 +555,9 @@ void Device::DestroyTexture(Texture* texture)
         return;
     for (auto& t : m_textures)
         if (t == texture) t = nullptr;
+    for (auto& l : m_heldLabels)                 // (a label held back for after the post passes)
+        for (auto& t : l.textures)
+            if (t == texture) t = nullptr;
     if (m_target == texture)
         SetRenderTarget(nullptr);
     ForgetCasterTexture(texture);

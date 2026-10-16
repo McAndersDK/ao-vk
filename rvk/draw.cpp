@@ -2369,6 +2369,14 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
         (m_drawIsLabel || (IsInterfaceDraw(fvf) && (m_target == m_main || m_target == m_uiLayer) &&
                            !(m_scenePhase && m_target == m_scene))))
         return;
+    // A name label in the scene: held back, drawn after the post passes (DrawHeldLabels).
+    if (m_drawIsLabel && m_scenePhase && m_target == m_scene && vertices && !m_drawingHeldLabels) {
+        const uint32_t stride = FvfStride(fvf);
+        const auto* v = static_cast<const uint8_t*>(vertices);
+        m_heldLabels.push_back({primitive, fvf, vertexCount, std::vector<uint8_t>(v, v + size_t(stride) * vertexCount), m_rs,
+                                m_tss, m_textures, m_world, m_view, m_proj, m_texMatrix, m_viewport});
+        return;
+    }
     if (m_dumpFile && !m_external) {
         DumpDraw(primitive, fvf, m_drawGpu ? nullptr : vertices, vertexCount, indices, indexCount);
         // (Its vertex colours, averaged - what a draw-by-draw comparison of frames can't see otherwise: a colour

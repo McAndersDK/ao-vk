@@ -1048,6 +1048,22 @@ private:
     bool WorldCamera() const;
     bool m_drawIsLabel = false;                  // the current draw is a name label (IsLabel)
     bool IsLabel(uint32_t primitive, uint32_t fvf, uint32_t vertexCount) const;
+    // Name labels drawn during the scene are held back - their vertices and the state they were drawn with - and
+    // drawn after the post passes onto the final 8-bit picture (DrawHeldLabels, from EndScene), as the game draws
+    // them: flat, no depth of field, motion blur, fog, bloom, tone mapping or TAA; still behind what stands in front.
+    struct HeldLabel {
+        uint32_t primitive, fvf, vertexCount;
+        std::vector<uint8_t> vertices;
+        std::array<uint32_t, d3d::RS_COUNT> rs;
+        std::array<std::array<uint32_t, d3d::TSS_COUNT>, 2> tss;
+        std::array<Texture*, 2> textures;
+        d3d::Matrix world, view, proj;
+        std::array<d3d::Matrix, 2> texMatrix;
+        d3d::Viewport viewport;
+    };
+    std::vector<HeldLabel> m_heldLabels;
+    bool m_drawingHeldLabels = false;
+    void DrawHeldLabels();
     uint32_t m_midFrameFlushes = 0;
     bool m_shadows = false;
     float m_shadowStrength = 0.65f, m_shadowRange = 400.0f;
