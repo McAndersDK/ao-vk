@@ -22,7 +22,7 @@ using namespace rvk::d3d;
 namespace {
 
 constexpr uint32_t kTile = 320, kCols = 3, kRows = 3;
-constexpr uint32_t kWidth = kTile * kCols, kHeight = kTile * kRows;
+uint32_t g_width = kTile * kCols, g_height = kTile * kRows;   // --size W H (benchmarks at a game's resolution)
 constexpr float kPi = 3.14159265f;
 
 // ---- D3D-style matrix helpers (row vectors, left-handed) ----
@@ -132,6 +132,44 @@ std::vector<uint32_t> SoftDot(uint32_t size)        // white, alpha falls off fr
         for (uint32_t x = 0; x < size; ++x) {
             float dx = (x + 0.5f) / size * 2 - 1, dy = (y + 0.5f) / size * 2 - 1;
             float a = std::fmax(0.0f, 1.0f - std::sqrt(dx * dx + dy * dy));
+            p[y * size + x] = (uint32_t(a * 255) << 24) | 0xFFFFFF;
+        }
+    return p;
+}
+
+// A cloud puff's texture, as the game's single_cloud*.png: white, a cumulus silhouette in the alpha - a few round
+// lumps on a flatter base, their edges broken up.
+std::vector<uint32_t> CloudPuff(uint32_t size, uint32_t seed)
+{
+    auto hash = [](int x, int y, uint32_t s) {
+        uint32_t h = uint32_t(x) * 73856093u ^ uint32_t(y) * 19349663u ^ s * 83492791u;
+        h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+        return float(h & 0xFFFF) / 65535.0f;
+    };
+    auto value = [&](float x, float y, uint32_t s) {
+        int ix = int(std::floor(x)), iy = int(std::floor(y));
+        float fx = x - ix, fy = y - iy;
+        fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+        float a = hash(ix, iy, s), b = hash(ix + 1, iy, s), c = hash(ix, iy + 1, s), d = hash(ix + 1, iy + 1, s);
+        return (a + (b - a) * fx) + ((c + (d - c) * fx) - (a + (b - a) * fx)) * fy;
+    };
+    struct Lump { float x, y, r; };
+    Lump lumps[5];
+    for (int i = 0; i < 5; ++i)
+        lumps[i] = {-0.55f + 0.27f * i + 0.1f * (hash(i, 1, seed) - 0.5f), -0.1f + 0.25f * hash(i, 2, seed),
+                    0.22f + 0.18f * hash(i, 3, seed) * (i == 1 || i == 2 ? 1.6f : 1.0f)};
+    std::vector<uint32_t> p(size * size);
+    for (uint32_t y = 0; y < size; ++y)
+        for (uint32_t x = 0; x < size; ++x) {
+            float u = (x + 0.5f) / size * 2 - 1, v = 1 - (y + 0.5f) / size * 2;   // v up
+            float cover = 0.0f;
+            for (const Lump& l : lumps) {
+                float d = std::sqrt((u - l.x) * (u - l.x) + (v - l.y) * (v - l.y) * 1.3f) / l.r;
+                cover = std::max(cover, 1.0f - d);
+            }
+            cover = std::min(cover, (v + 0.45f) * 3.0f);                        // a flat base
+            float n = value(u * 6 + 11, v * 6 + 7, seed) * 0.6f + value(u * 14, v * 14, seed + 1) * 0.4f;
+            float a = std::clamp((cover + (n - 0.5f) * 0.35f) * 3.0f, 0.0f, 1.0f);
             p[y * size + x] = (uint32_t(a * 255) << 24) | 0xFFFFFF;
         }
     return p;
@@ -644,11 +682,11 @@ double Benchmark(D& dev, int frames)
         LARGE_INTEGER r0, r1;
         QueryPerformanceCounter(&r0);
         dev.BeginFrame();
-        dev.SetViewport({0, 0, kWidth, kHeight, 0, 1});
+        dev.SetViewport({0, 0, g_width, g_height, 0, 1});
         dev.Clear(CLEAR_TARGET | CLEAR_ZBUFFER, 0xFF102030, 1.0f);
         dev.SetRenderState(RS_LIGHTING, 1);
         dev.SetTransform(View, LookAtLH({0, 2, -10}, {0, 0, 0}, {0, 1, 0}));
-        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(kWidth) / kHeight, 0.1f, 100.0f));
+        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.1f, 100.0f));
         for (int i = 0; i < 4; ++i) {
             l.position = {float(i) * 3 - 4, 2, -2};
             dev.SetLight(i, l);
@@ -998,7 +1036,7 @@ void RunPbrTest(D& dev, int frames, const std::string& shot)
             dev.SetPbr(pbr);
         }
         dev.BeginFrame();
-        dev.SetViewport({0, 0, kWidth, kHeight, 0.0f, 1.0f});
+        dev.SetViewport({0, 0, g_width, g_height, 0.0f, 1.0f});
         dev.Clear(CLEAR_TARGET | CLEAR_ZBUFFER, 0xFF8098B8, 1.0f);
         dev.SetRenderState(RS_ZENABLE, 1);
         dev.SetRenderState(RS_ZWRITEENABLE, 1);
@@ -1044,7 +1082,7 @@ void RunPbrTest(D& dev, int frames, const std::string& shot)
         dev.SetTextureStageState(0, TSS_ADDRESS, TADDRESS_WRAP);
         dev.SetTextureStageState(1, TSS_COLOROP, TOP_DISABLE);
         dev.SetTransform(View, LookAtLH({0, 0.3f, -6.2f}, {0, -0.3f, 0}, {0, 1, 0}));
-        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(kWidth) / kHeight, 0.1f, 300.0f));
+        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.1f, 300.0f));
         Material plain{{1, 1, 1, 1}, {1, 1, 1, 1}, {0, 0, 0, 1}, {0, 0, 0, 0}, 0.0f};
         Material glossy{{1, 1, 1, 1}, {1, 1, 1, 1}, {0.6f, 0.6f, 0.6f, 1}, {0, 0, 0, 0}, 20.0f};
         dev.SetMaterial(plain);
@@ -1080,6 +1118,7 @@ void RunPbrTest(D& dev, int frames, const std::string& shot)
 }
 
 float g_cameraYaw = 0.0f;  // --camera-yaw: the shadow test's camera turns this much a frame (motion blur)
+float g_cameraPitch = -1000.0f;   // --camera-pitch DEG: the shadow test's camera looks this far up (the sky: clouds)
 bool g_sunView = false;    // --sun-view: the shadow test's camera low, looking into the sun
 float g_movingCube = 0.0f; // --moving-cube: the shadow test's big right cube moves this far a frame along x
 float g_deformCube = 0.0f; // --deform-cube: its top vertices move this far a frame along x (like CPU skinning)
@@ -1103,15 +1142,32 @@ float g_grassBenchYaw = 0.0f;  // --grass-bench-yaw R: the bench's camera turned
 bool g_grassBenchWalker = false;  // --grass-bench-walker: a "character" walking through the grass ahead of the camera
 bool g_grassBenchCross = false;   // --grass-bench-cross: ... crossing the view from left to right over the run (with
                                   // --grass-bench-still: the trail it leaves lies across the screenshot)
+bool g_grassBenchLamp = false;    // --grass-bench-lamp: a lamp just over the grass ahead (point light shadows)
 bool g_grassBenchNight = false;   // --grass-bench-night: a dim lightmap and ambient, a faint bluish moon
 int g_grassBenchLoading = 0;      // --grass-bench-loading N: the ground's texture a plain green stand-in until frame N
 bool g_grassBenchLoadingNull = false;   // --grass-bench-loading-null: ... drawn untextured instead
 bool g_grassBenchPlatform = false;  // --grass-bench-platform: a flat slab lying on the ground ahead (no grass under it)
 bool g_grassBenchStorm = false;   // --grass-bench-storm: AO's sandstorm tint (a depth-writing ZFUNC ALWAYS sprite)
+bool g_bareGround = false;        // --bare-ground: the grass bench's ground sandy, no grass (the wet ground, puddles)
+bool g_sandStorm = false;         // --sand-storm: the grass bench in a desert sandstorm (sandy ground, the game's tint,
+                                  // the new weather without rain: our haze and blowing sand)
+float g_sandBlow = 1.0f;          // --sand-blow X: RVK_SandBlow
+uint32_t g_sandRes = 0;           // --sand-res N: RVK_SandRes
+float g_windStorm = 1.0f;         // --wind-storm X: RVK_WindStorm
+float g_sandForce = 0.0f;         // --sand-force X: RVK_SandForce
+float g_rainSpeed = 15.0f, g_rainLength = 0.45f;   // --rain-speed S, --rain-length L: RVK_RainSpeed, RVK_RainLength
+float g_wetNow = -1.0f;           // --wet W: the ground soaked (and its puddles) this much from the start
+float g_stormForce = 0.0f;        // --storm F: RVK_StormForce (a thunderstorm: rain, wind, our own strikes)
+float g_strikeRate = 6.0f;        // --strike-rate R: RVK_StrikeRate (strikes a minute)
+int g_lightningAt = -1;           // --lightning-at N: a strike ahead of the camera at frame N (the grass bench)
+bool g_sandAsh = false;           // --sand-ash: RVK_SandAsh
 bool g_grassBenchStill = false;   // --grass-bench-still: the camera stays where it starts (to watch the wind)
 bool g_terrainPbr = false;        // --terrain-pbr: the bench's ground texture gets a PBR material (a glossy path through
                                   // rough grass), per-pixel lighting, no grass field: the ground's PBR (MAT_BASE) path
 int g_grassBenchFilm = 0;         // --grass-bench-film N: ~60 frames a second, a screenshot every N (film_NNN.bmp)
+float g_grassBenchRise = 0.0f;    // --grass-bench-rise H: the camera H units higher
+int g_grassBenchZoomAt = 0;        // --grass-bench-zoom F H: from frame F the camera H units higher instead
+float g_grassBenchZoomRise = 0.0f;
 float g_grassBenchPitch = -1.0f;  // --grass-bench-pitch R: the camera looking R radians down, raised to match (top-down)
 bool g_grassFieldTex = true;   // --grass-field-any: over every ground, not only where the ground texture is green
 bool g_grassFieldTan = false;  // --grass-field-tan: leave the terrain's tan ground (a filter that must reject it)
@@ -1135,6 +1191,90 @@ void AddCube(std::vector<VtxMesh>& v, std::vector<uint16_t>& idx, float cx, floa
     }
 }
 
+// Sand shelter (--sand-obstacles): a wall, a tree (a trunk, a see-through crown) and a boulder ahead of the bench's
+// camera, as placed objects (a pack written here and loaded as the game's: statels.cpp, sand_map.cpp) and drawn as
+// grey boxes; --sand-wind X Z: the storm's wind that way (the game's weather wind, each frame).
+bool g_sandObstacles = false;
+bool g_sandArch = false;
+float g_sandGusts = 1.0f;            // --sand-gusts S: RVK_SandGusts
+float g_sandFog = 1.0f;              // RVK_SandFog (--sand-haze: 0, the flat haze; --sand-fog: on, as by default)
+float g_sandClear = 6.0f;            // --sand-clear D: RVK_SandClear
+float g_sandContrast = 2.0f;         // --sand-contrast K: RVK_SandContrast             // --sand-arch: an arch in place of the wall
+bool g_sandSim = true;               // the sand simulated (RVK_SandProc 0); --sand-proc: procedural
+bool g_sandWindSet = false;
+float g_sandWind[2] = {1.0f, 0.0f};
+struct SandBox { float lo[3], hi[3]; bool seeThrough; };
+
+void AddBox(std::vector<VtxMesh>& v, std::vector<uint16_t>& idx, const float lo[3], const float hi[3], uint32_t colour)
+{
+    struct Face { int axis; float sign; } faces[6] = {{0, -1}, {0, 1}, {1, -1}, {1, 1}, {2, -1}, {2, 1}};
+    for (const Face& f : faces) {
+        const uint16_t base = uint16_t(v.size());
+        const int a = (f.axis + 1) % 3, b = (f.axis + 2) % 3;
+        for (int k = 0; k < 4; ++k) {
+            float p[3], n[3] = {0, 0, 0};
+            p[f.axis] = f.sign < 0 ? lo[f.axis] : hi[f.axis];
+            p[a] = (k == 1 || k == 2) ? hi[a] : lo[a];
+            p[b] = k >= 2 ? hi[b] : lo[b];
+            n[f.axis] = f.sign;
+            v.push_back({p[0], p[1], p[2], n[0], n[1], n[2], colour, 0, 0});
+        }
+        const uint16_t q[6] = {0, 1, 2, 0, 2, 3};
+        for (uint16_t i : q) idx.push_back(uint16_t(base + i));
+    }
+}
+
+// The boxes as a statel pack (statels.cpp's format, version 2): a mesh of one piece each, placed at the origin.
+bool WriteSandPack(const char* path, const std::vector<SandBox>& boxes)
+{
+    std::vector<uint8_t> out;
+    auto put = [&](const void* p, size_t n) { const uint8_t* b = static_cast<const uint8_t*>(p); out.insert(out.end(), b, b + n); };
+    auto u32 = [&](uint32_t v) { put(&v, 4); };
+    auto f32 = [&](float v) { put(&v, 4); };
+    const uint32_t n = uint32_t(boxes.size());
+    put("AOSTATEL", 8);
+    u32(2); u32(999);
+    u32(n); u32(n); u32(n); u32(1); u32(n * 8); u32(n * 36); u32(64);
+    u32(1010004); u32(1); uint16_t wh[2] = {8, 8}; put(wh, 4); u32(0);                   // the see-through mask
+    for (uint32_t i = 0; i < n; ++i) {                                                     // meshes
+        u32(i); u32(i); u32(1);
+        for (int k = 0; k < 3; ++k) f32(boxes[i].lo[k]);
+        for (int k = 0; k < 3; ++k) f32(boxes[i].hi[k]);
+    }
+    for (uint32_t i = 0; i < n; ++i) {                                                     // pieces
+        for (int r = 0; r < 16; ++r) f32(r % 5 == 0 ? 1.0f : 0.0f);
+        u32(i * 8); u32(8); u32(i * 36); u32(36);
+        int32_t tex = boxes[i].seeThrough ? 0 : -1;
+        put(&tex, 4);
+        f32(0.5f);
+        for (int k = 0; k < 3; ++k) f32(boxes[i].lo[k]);
+        for (int k = 0; k < 3; ++k) f32(boxes[i].hi[k]);
+    }
+    for (uint32_t i = 0; i < n; ++i) {                                                     // statels
+        for (int r = 0; r < 12; ++r) f32(r < 9 && r % 4 == 0 ? 1.0f : 0.0f);
+        int16_t ypr[3] = {0, 0, 0};
+        put(ypr, 6);
+        uint16_t mesh = uint16_t(i);
+        put(&mesh, 2);
+        f32(1.0f); u32(0); u32(i);
+    }
+    for (const SandBox& b : boxes)                                                         // vertices
+        for (int c = 0; c < 8; ++c) {
+            f32(c & 1 ? b.hi[0] : b.lo[0]); f32(c & 2 ? b.hi[1] : b.lo[1]); f32(c & 4 ? b.hi[2] : b.lo[2]);
+            f32(0.5f); f32(0.5f);
+        }
+    static const uint16_t kTris[36] = {0, 1, 3, 0, 3, 2, 4, 6, 7, 4, 7, 5, 0, 4, 5, 0, 5, 1,
+                                       2, 3, 7, 2, 7, 6, 0, 2, 6, 0, 6, 4, 1, 5, 7, 1, 7, 3};
+    for (uint32_t i = 0; i < n; ++i) put(kTris, sizeof(kTris));                           // indices
+    while (out.size() % 4) out.push_back(0);
+    for (int k = 0; k < 64; ++k) out.push_back(uint8_t(((k ^ (k >> 3)) & 1) ? 255 : 0));   // texels (half leaves)
+    FILE* f = std::fopen(path, "wb");
+    if (!f) return false;
+    std::fwrite(out.data(), 1, out.size(), f);
+    std::fclose(f);
+    return true;
+}
+
 // Ground grass benchmark (--grass-bench): a big hilly terrain drawn like AnarchyGround_t - world-space chunks of
 // non-indexed triangles, an unlit base pass with a green texture and a multiplying light pass with a lightmap - under
 // RVK_GrassOn, the camera walking and turning so tiles keep coming into range. Prints the frame time (mean and worst).
@@ -1144,7 +1284,8 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
     std::vector<uint32_t> grassPixels(64 * 64);
     for (int y = 0; y < 64; ++y)
         for (int x = 0; x < 64; ++x)
-            grassPixels[y * 64 + x] = (x >= 26 && x < 38) ? 0xFF8A6A4A : ((x / 4 + y / 4) & 1 ? 0xFF3C6A2A : 0xFF2E5320);
+            grassPixels[y * 64 + x] = g_sandStorm || g_bareGround ? ((x / 4 + y / 4) & 1 ? 0xFFC8A46E : 0xFFBE9862)
+                                    : (x >= 26 && x < 38) ? 0xFF8A6A4A : ((x / 4 + y / 4) & 1 ? 0xFF3C6A2A : 0xFF2E5320);
     // (Loading: a game draws ground whose texture isn't in yet with a stand-in, then uploads the picture.)
     const std::vector<uint32_t> standIn(64 * 64, 0xFF3C6A2A);
     Texture* grassGround = dev.CreateTexture(64, 64, g_grassBenchLoading > 0 ? standIn.data() : grassPixels.data());
@@ -1187,6 +1328,11 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
     int counted = 0, worstFrame = 0;
     std::vector<double> times;
     dev.SetGrassField(!g_terrainPbr, g_grassFieldDist, 5.0f, 0.5f, true);   // the game's default density
+    if (g_grassBenchLamp) {    // the lamp's cube shadow map (the grass casts into it): per-pixel lights, overridden
+        dev.SetPixelLighting(true);
+        dev.SetLightOverride(true);
+        dev.SetPointShadows(4);
+    }
     if (g_terrainPbr) {
         std::vector<uint32_t> orm(64 * 64);
         for (int y = 0; y < 64; ++y)
@@ -1199,10 +1345,35 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
         pbr.debug = g_pbrDebug;
         dev.SetPbr(pbr);
     }
+    std::vector<SandBox> sandBoxes;
+    std::vector<VtxMesh> sandVerts;
+    std::vector<uint16_t> sandIdx;
+    if (g_sandObstacles) {
+        auto box = [&](float x, float z, float w, float d, float lo, float hi, bool seeThrough) {
+            const float g = height(x, z);
+            sandBoxes.push_back({{x - w / 2, g + lo, z - d / 2}, {x + w / 2, g + hi, z + d / 2}, seeThrough});
+        };
+        if (g_sandArch) {                                          // an arch across the view: its legs, its lintel
+            box(-48.0f, -5.5f, 2.0f, 5.0f, -1.0f, 6.0f, false);
+            box(-48.0f, 5.5f, 2.0f, 5.0f, -1.0f, 6.0f, false);
+            box(-48.0f, 0.0f, 2.0f, 6.0f, 3.5f, 6.0f, false);
+        } else {
+            box(-48.0f, 0.0f, 1.0f, 16.0f, -1.0f, 4.0f, false);    // a wall across the view, 12 units ahead
+        }
+        box(-53.0f, 5.0f, 0.8f, 0.8f, -1.0f, 8.0f, false);         // a tree's trunk
+        box(-53.0f, 5.0f, 6.0f, 6.0f, 5.0f, 11.0f, true);          // ... its crown
+        box(-55.0f, -6.0f, 3.0f, 3.0f, -1.0f, 2.5f, false);        // a boulder
+        WriteSandPack("sand-obstacles.bin", sandBoxes);
+        dev.LoadStatels("sand-obstacles.bin", 999);
+        for (const SandBox& b : sandBoxes)
+            if (!b.seeThrough) AddBox(sandVerts, sandIdx, b.lo, b.hi, 0xFF9A948C);
+    }
     for (int frame = 0; frame < frames; ++frame) {
-        if (frame == frames - 1)
+        if (frame == frames - 1) {
             dev.RequestScreenshot(shot);
-        else if (g_grassBenchFilm > 0 && frame >= 60 && frame % g_grassBenchFilm == 0) {
+            if (g_sandObstacles || g_sandStorm || g_sandForce > 0.0f)   // (and the sand map: sand-frame-sand.bmp)
+                dev.RequestFrameDump("sand-frame.txt");
+        } else if (g_grassBenchFilm > 0 && frame >= 60 && frame % g_grassBenchFilm == 0) {
             char name[32];
             std::snprintf(name, sizeof(name), "film_%03d.bmp", (frame - 60) / g_grassBenchFilm);
             dev.RequestScreenshot(name);
@@ -1213,18 +1384,23 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
             dev.UpdateTexture(grassGround, 0, 0, 0, 64, 64, grassPixels.data(), 64 * 4);
         Texture* const groundNow = g_grassBenchLoadingNull && frame < g_grassBenchLoading ? nullptr : grassGround;
         dev.BeginFrame();
-        dev.SetViewport({0, 0, kWidth, kHeight, 0.0f, 1.0f});
+        dev.SetViewport({0, 0, g_width, g_height, 0.0f, 1.0f});
         dev.Clear(CLEAR_TARGET | CLEAR_ZBUFFER, 0xFF6080A0, 1.0f);
         const float t = g_grassBenchStill ? 0.0f : float(frame);
         const float ex = -60.0f + 0.06f * t, ez = 10.0f * std::sin(t * 0.004f);
         const float yaw = 0.6f * std::sin(t * 0.007f) + g_grassBenchYaw;
         const float pitch = g_grassBenchPitch >= 0.0f ? std::min(g_grassBenchPitch, 1.5f) : 0.197f;
-        const float ey = height(ex, ez) + 1.0f + 6.0f * std::sin(pitch);
+        const float rise = g_grassBenchZoomAt > 0 && frame >= g_grassBenchZoomAt ? g_grassBenchZoomRise : g_grassBenchRise;
+        const float ey = height(ex, ez) + 1.0f + 6.0f * std::sin(pitch) + rise;
         const float fwd = 6.0f * std::cos(pitch);
         dev.SetTransform(View, LookAtLH({ex, ey, ez}, {ex + fwd * std::cos(yaw), ey - 6.0f * std::sin(pitch), ez + fwd * std::sin(yaw)},
                                         {0, 1, 0}));
-        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(kWidth) / kHeight, 0.3f, 300.0f));
+        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.3f, 300.0f));
         dev.SetTransform(World, Identity());
+        if (frame == g_lightningAt) {
+            const float strike[3] = {ex + 120.0f * std::cos(yaw + 0.3f), ey + 20.0f, ez + 120.0f * std::sin(yaw + 0.3f)};
+            dev.TriggerLightning(strike);
+        }
         dev.SetRenderState(RS_ZENABLE, 1);
         dev.SetRenderState(RS_ZWRITEENABLE, 1);
         dev.SetRenderState(RS_ZFUNC, CMP_LESSEQUAL);
@@ -1236,10 +1412,28 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
         sun.type = LIGHT_DIRECTIONAL;
         sun.diffuse = {0.9f, 0.85f, 0.75f, 1};
         sun.direction = {0.55f, -0.7f, 0.45f};
-        if (g_grassBenchNight)
-            sun.diffuse = {0.12f, 0.14f, 0.22f, 1};
+        if (g_grassBenchNight) {
+            // As the game's nights: its light from the sun under the ground, pointing up, dim blue; a sky seen (the
+            // moon: opposite the sun, night.cpp).
+            sun.diffuse = {0.13f, 0.22f, 0.30f, 1};
+            sun.direction = {-0.5f, 0.59f, 0.63f};
+            dev.SetDrawVisual(uint32_t(VisualKind::Sky), "sky");
+            dev.SetDrawVisual(0, nullptr);
+        }
         dev.SetLight(0, sun);
         dev.LightEnable(0, true);
+        if (g_grassBenchLamp) {    // a warm lamp just over the grass, 3 units ahead, a little left (its shadows in view)
+            const float lx = ex + 3.0f * std::cos(yaw) + 0.8f * std::sin(yaw), lz = ez + 3.0f * std::sin(yaw) - 0.8f * std::cos(yaw);
+            Light lamp{};
+            lamp.type = LIGHT_POINT;
+            lamp.diffuse = {1.6f, 1.1f, 0.6f, 1};
+            lamp.position = {lx, height(lx, lz) + 0.6f, lz};
+            lamp.range = 8;
+            lamp.attenuation0 = 0.3f;
+            lamp.attenuation1 = 0.2f;
+            dev.SetLight(1, lamp);
+            dev.LightEnable(1, true);
+        }
         dev.SetTextureStageState(0, TSS_COLORARG1, TA_TEXTURE);
         dev.SetTextureStageState(0, TSS_COLORARG2, TA_DIFFUSE);
         dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG1);
@@ -1321,6 +1515,20 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
             dev.SetRenderState(RS_ZWRITEENABLE, 1);
             dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
         }
+        if (g_sandWindSet) {      // (the game's weather wind)
+            Device::WeatherState w;
+            w.wind[0] = g_sandWind[0];
+            w.wind[2] = g_sandWind[1];
+            dev.SetWeather(w);
+        }
+        if (!sandVerts.empty()) {
+            dev.SetTexture(0, nullptr);
+            dev.SetTextureStageState(0, TSS_COLOROP, TOP_SELECTARG2);
+            dev.SetRenderState(RS_LIGHTING, 1);
+            dev.DrawIndexedPrimitive(TriangleList, kFvfMesh, sandVerts.data(), uint32_t(sandVerts.size()), sandIdx.data(),
+                                     uint32_t(sandIdx.size()));
+            dev.SetTextureStageState(0, TSS_COLOROP, TOP_MODULATE);
+        }
         if (g_grassBenchStorm) {   // AO's sandstorm tint: a screen-sized blended sprite 5 units ahead, writing depth, ZFUNC ALWAYS
             const float fx = std::cos(yaw), fz = std::sin(yaw), rx = -fz, rz = fx;
             const float cx = ex + 5.0f * fx, cy = ey - 0.5f, cz = ez + 5.0f * fz;
@@ -1332,7 +1540,11 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
             dev.SetRenderState(RS_DESTBLEND, BLEND_INVSRCALPHA);
             dev.SetRenderState(RS_ZWRITEENABLE, 1);
             dev.SetRenderState(RS_ZFUNC, CMP_ALWAYS);
-            dev.SetTexture(0, nullptr);
+            static Texture* tintTex = [&] {      // (the game's: an 8 x 8 white texture under the vertex colour)
+                std::vector<uint32_t> white(64, 0xFFFFFFFFu);
+                return dev.CreateTexture(8, 8, white.data());
+            }();
+            dev.SetTexture(0, tintTex);
             dev.SetTextureStageState(0, TSS_COLOROP, TOP_SELECTARG2);
             dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG2);   // (the vertex colour's alpha)
             dev.SetTextureStageState(0, TSS_ALPHAARG2, TA_DIFFUSE);
@@ -1361,6 +1573,460 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
                 sum / std::max(counted, 1), p99, worst, worstFrame);
 }
 
+// City benchmark (--city-bench, docs/render-batching-plan.md P0): shaped like a frame of West Bank's city in the game
+// (frame dump and log of 2026-10-14: ~3,400-3,600 draws, the render thread the limit). Through ThreadedDevice, the
+// statics by mesh handle (RegisterMesh / DrawMesh, as the proxy's): ~2,000 objects of 1-2 pieces drawn from 160 small
+// mesh kinds (FVF 0x112, ~37 vertices; a few kinds make most draws, as the game's), 85% of them blended
+// SRCALPHA/INVSRCALPHA with depth writes (the opaque fast path, as the game draws its statics), 170 fence pieces with
+// holes (the foliage path: two-pass edges), 40 additive panes at the end; 160 ground chunks (216 indices into one of 4
+// static vertex buffers) in two passes (AnarchyGround_t: base, then the multiplying light pass) with the ground grass; a sun with shadows and 7
+// point lights; the camera circling slowly.
+// The clock is fixed (1/60 s a frame), so a run of N frames ends on the same picture (--shot; --dump: its draws).
+// After --city-warm frames a profile window opens; at the end the render thread's sections are logged ("city bench:"
+// lines, stderr) and the calling thread's frame printed.
+int g_cityWarm = 60;              // --city-warm N: frames before the measured window
+bool g_cityNoGrass = false;       // --city-no-grass: without the ground grass (on by default, as in the game)
+bool g_cityNoCull = false;        // --city-no-cull: every object drawn every frame (the game draws what is in view)
+std::string g_cityStatels;        // --city-statels PACK: playfield 790's placed objects (their shadows), the scene moved
+                                  // to West Bank's city (1380, 0, 2950) where they stand
+
+namespace city {
+struct Vtx { float x, y, z, nx, ny, nz, u, v; };   // FVF 0x112, the game's statics
+constexpr uint32_t kFvf = FVF_XYZ | FVF_NORMAL | (1 << 8);
+
+// A box without its bottom (5 quads: 20 vertices, 30 indices - the game's most drawn static), each side face split
+// into s x s quads; its base on y = 0.
+void AddBox(std::vector<Vtx>& v, std::vector<uint16_t>& idx, float w, float h, float d, int s)
+{
+    struct Face { Vector o, u, w, n; };
+    const Face faces[5] = {{{-w, 0, -d}, {2 * w, 0, 0}, {0, h, 0}, {0, 0, -1}}, {{w, 0, d}, {-2 * w, 0, 0}, {0, h, 0}, {0, 0, 1}},
+                           {{w, 0, -d}, {0, 0, 2 * d}, {0, h, 0}, {1, 0, 0}}, {{-w, 0, d}, {0, 0, -2 * d}, {0, h, 0}, {-1, 0, 0}},
+                           {{-w, h, -d}, {2 * w, 0, 0}, {0, 0, 2 * d}, {0, 1, 0}}};
+    for (int f = 0; f < 5; ++f) {
+        const Face& F = faces[f];
+        const int n = f == 4 ? 1 : s;
+        const uint16_t base = uint16_t(v.size());
+        for (int j = 0; j <= n; ++j)
+            for (int i = 0; i <= n; ++i) {
+                const float a = float(i) / n, b = float(j) / n;
+                v.push_back({F.o.x + a * F.u.x + b * F.w.x, F.o.y + a * F.u.y + b * F.w.y, F.o.z + a * F.u.z + b * F.w.z,
+                             F.n.x, F.n.y, F.n.z, a * 2, b * 2});
+            }
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) {
+                const uint16_t q = uint16_t(base + j * (n + 1) + i);
+                const uint16_t t[6] = {q, uint16_t(q + n + 1), uint16_t(q + 1), uint16_t(q + 1), uint16_t(q + n + 1),
+                                       uint16_t(q + n + 2)};
+                idx.insert(idx.end(), t, t + 6);
+            }
+    }
+}
+
+// A cylinder (k sides, capped), its base on y = 0.
+void AddCylinder(std::vector<Vtx>& v, std::vector<uint16_t>& idx, float r, float h, int k)
+{
+    const uint16_t base = uint16_t(v.size());
+    for (int i = 0; i <= k; ++i) {
+        const float a = 2 * kPi * i / k, c = std::cos(a), s = std::sin(a);
+        v.push_back({r * c, 0, r * s, c, 0, s, float(i) / k, 0});
+        v.push_back({r * c, h, r * s, c, 0, s, float(i) / k, 1});
+    }
+    for (int i = 0; i < k; ++i) {
+        const uint16_t q = uint16_t(base + 2 * i);
+        const uint16_t t[6] = {q, uint16_t(q + 1), uint16_t(q + 2), uint16_t(q + 2), uint16_t(q + 1), uint16_t(q + 3)};
+        idx.insert(idx.end(), t, t + 6);
+    }
+    const uint16_t centre = uint16_t(v.size());
+    v.push_back({0, h, 0, 0, 1, 0, 0.5f, 0.5f});
+    for (int i = 0; i <= k; ++i) {
+        const float a = 2 * kPi * i / k;
+        v.push_back({r * std::cos(a), h, r * std::sin(a), 0, 1, 0, 0.5f + 0.5f * std::cos(a), 0.5f + 0.5f * std::sin(a)});
+    }
+    for (int i = 0; i < k; ++i) {
+        const uint16_t t[3] = {centre, uint16_t(centre + 2 + i), uint16_t(centre + 1 + i)};
+        idx.insert(idx.end(), t, t + 3);
+    }
+}
+
+// Upright panels w wide, h high in the x-y plane: s columns (a fence); with `cross`, a second one turned 90 degrees.
+void AddPanel(std::vector<Vtx>& v, std::vector<uint16_t>& idx, float w, float h, int s, bool cross = false)
+{
+    for (int p = 0; p < (cross ? 2 : 1); ++p) {
+        const uint16_t base = uint16_t(v.size());
+        for (int i = 0; i <= s; ++i) {
+            const float t = -w + 2 * w * i / s;
+            if (p == 0) {
+                v.push_back({t, 0, 0, 0, 0, -1, float(i), 1});
+                v.push_back({t, h, 0, 0, 0, -1, float(i), 0});
+            } else {
+                v.push_back({0, 0, t, -1, 0, 0, float(i), 1});
+                v.push_back({0, h, t, -1, 0, 0, float(i), 0});
+            }
+        }
+        for (int i = 0; i < s; ++i) {
+            const uint16_t q = uint16_t(base + 2 * i);
+            const uint16_t t[6] = {q, uint16_t(q + 1), uint16_t(q + 2), uint16_t(q + 2), uint16_t(q + 1), uint16_t(q + 3)};
+            idx.insert(idx.end(), t, t + 6);
+        }
+    }
+}
+
+uint32_t Hash(uint32_t x)
+{
+    x ^= x >> 16; x *= 0x7FEB352Du; x ^= x >> 15; x *= 0x846CA68Bu; x ^= x >> 16;
+    return x;
+}
+float Rand(uint32_t seed, uint32_t salt) { return float(Hash(seed * 0x9E3779B9u + salt) & 0xFFFFFF) / float(0x1000000); }
+
+struct Piece { uint32_t mesh; Texture* tex; bool emissive; };
+struct Object {
+    float x, z, yaw;
+    Piece piece[2];
+    uint32_t pieces;
+    enum Kind { Blended, Solid, Holes, Additive } kind;   // Blended: SRCALPHA/INVSRCALPHA writing depth (most)
+    uint32_t visual;
+};
+}  // namespace city
+
+template <typename D>
+void RunCityBench(D& dev, int frames, const std::string& shot, const std::string& dump)
+{
+    using namespace city;
+    Device::SetFixedClock(1.0 / 60.0);
+    // Textures: 60 opaque, 4 with holes (fences), 2 for the additive panes.
+    std::vector<Texture*> opaque, holes, glow;
+    for (uint32_t i = 0; i < 60; ++i) {
+        const uint32_t a = 0xFF000000u | (0x40 + 3 * i) << 16 | (0x38 + 11 * (i % 9)) << 8 | (0x30 + 13 * (i % 7));
+        auto px = Checker(64, 2 + i % 7, a, 0xFF000000u | ((a & 0xFEFEFE) >> 1));
+        opaque.push_back(dev.CreateTexture(64, 64, px.data()));
+    }
+    for (uint32_t i = 0; i < 4; ++i) {
+        auto px = Checker(64, 4 + 2 * i, 0xFF706048u + 0x080808u * i, 0x00000000);
+        holes.push_back(dev.CreateTexture(64, 64, px.data()));
+    }
+    for (uint32_t i = 0; i < 2; ++i) {
+        std::vector<uint32_t> px(64 * 64, i ? 0x80F0C060u : 0x8060C0F0u);
+        glow.push_back(dev.CreateTexture(64, 64, px.data()));
+    }
+    // Meshes, registered once (ids from 1, as the proxy hands them out).
+    uint32_t nextId = 1;
+    size_t vertexBytes = 0;
+    auto add = [&](const std::vector<Vtx>& v, const std::vector<uint16_t>& idx) {
+        auto vs = std::make_shared<std::vector<uint8_t>>(reinterpret_cast<const uint8_t*>(v.data()),
+                                                         reinterpret_cast<const uint8_t*>(v.data() + v.size()));
+        auto is = std::make_shared<std::vector<uint8_t>>(reinterpret_cast<const uint8_t*>(idx.data()),
+                                                         reinterpret_cast<const uint8_t*>(idx.data() + idx.size()));
+        vertexBytes += vs->size();
+        const uint32_t id = nextId++;
+        dev.RegisterMesh(id, TriangleList, kFvf, ThreadedDevice::SharedVertices(vs), 0, uint32_t(v.size()),
+                         ThreadedDevice::SharedVertices(is), uint32_t(idx.size()));
+        return id;
+    };
+    // 160 static kinds, the first ones drawn most (weight 1 / (k + 1)^1.1: kind 0 ~ a fifth of the pieces).
+    constexpr uint32_t kKinds = 160;
+    std::vector<uint32_t> kinds;
+    std::vector<float> cumulative;
+    float total = 0.0f;
+    for (uint32_t k = 0; k < kKinds; ++k) {
+        std::vector<Vtx> v;
+        std::vector<uint16_t> idx;
+        const float w = 0.4f + 2.6f * Rand(k, 1), h = 0.5f + 5.0f * Rand(k, 2), d = 0.4f + 2.6f * Rand(k, 3);
+        switch (k < 4 ? 0 : Hash(k) % 10) {
+        case 4: AddPanel(v, idx, w, h, 1); break;                    // 4 / 6
+        case 5: AddPanel(v, idx, w, h, 1, true); break;              // 8 / 12
+        case 6: AddBox(v, idx, w, h, d, 2); break;                   // 40 / 102
+        case 7: AddCylinder(v, idx, 0.5f * w, h, 8); break;          // 28 / 72
+        case 8: AddBox(v, idx, w, h, d, 3); break;                   // 68 / 222
+        default: AddBox(v, idx, w, h, d, 1); break;                  // 20 / 30
+        }
+        kinds.push_back(add(v, idx));
+        total += 1.0f / std::pow(float(k + 1), 1.1f);
+        cumulative.push_back(total);
+    }
+    auto pickKind = [&](uint32_t seed) {
+        const float r = Rand(seed, 77) * total;
+        return uint32_t(std::lower_bound(cumulative.begin(), cumulative.end(), r) - cumulative.begin());
+    };
+    std::vector<uint32_t> fenceKinds, paneKinds;
+    for (uint32_t k = 0; k < 8; ++k) {
+        std::vector<Vtx> v;
+        std::vector<uint16_t> idx;
+        AddPanel(v, idx, 2.0f + k * 0.25f, 1.2f + 0.1f * k, 4 + k);
+        fenceKinds.push_back(add(v, idx));
+    }
+    for (uint32_t k = 0; k < 4; ++k) {
+        std::vector<Vtx> v;
+        std::vector<uint16_t> idx;
+        AddPanel(v, idx, 1.0f + 0.3f * k, 2.0f + 0.4f * k, 1);
+        paneKinds.push_back(add(v, idx));
+    }
+    std::vector<Object> objects;
+    constexpr int kLotsX = 25, kLotsZ = 24;
+    constexpr float kLot = 12.0f;
+    uint32_t visual = 0x10000;
+    auto lotCentre = [&](uint32_t lot, float& cx, float& cz) {
+        cx = (float(lot % kLotsX) - kLotsX / 2.0f + 0.5f) * kLot;
+        cz = (float(lot / kLotsX) - kLotsZ / 2.0f + 0.5f) * kLot;
+    };
+    // (Culled to the view as the game does, ~40% are drawn: ~3,500 draws, as the game's frame.)
+    for (uint32_t i = 0; i < 4800; ++i) {        // statics: 1 or 2 pieces (~1.47 a static, as the game's 3,029 / 2,067)
+        float cx, cz;
+        lotCentre(i % (kLotsX * kLotsZ), cx, cz);
+        Object o{};
+        o.x = cx + (Rand(i, 10) - 0.5f) * kLot * 0.8f;
+        o.z = cz + (Rand(i, 11) - 0.5f) * kLot * 0.8f;
+        o.yaw = Rand(i, 12) * 2 * kPi;
+        o.pieces = Rand(i, 13) < 0.47f ? 2 : 1;
+        for (uint32_t p = 0; p < o.pieces; ++p) {
+            const uint32_t k = pickKind(i * 2 + p);
+            o.piece[p] = {kinds[k], opaque[(k * 7 + p) % opaque.size()], k % 53 == 7};   // (texture, material: the kind's)
+        }
+        o.kind = Rand(i, 14) < 0.85f ? Object::Blended : Object::Solid;
+        o.visual = visual++;
+        objects.push_back(o);
+    }
+    for (uint32_t i = 0; i < 200; ++i) {         // fences on 200 lots: ~170 pieces with holes in view (the game's foliage)
+        float cx, cz;
+        lotCentre(Hash(i + 500) % (kLotsX * kLotsZ), cx, cz);
+        for (int s = 0; s < 2; ++s) {
+            Object o{};
+            o.x = s ? cx - kLot * 0.45f : cx;
+            o.z = s ? cz : cz - kLot * 0.45f;
+            o.yaw = s ? kPi * 0.5f : 0.0f;
+            o.pieces = 1;
+            o.piece[0] = {fenceKinds[(i + 3 * s) % 8], holes[(i + s) % 4], false};
+            o.kind = Object::Holes;
+            o.visual = visual++;
+            objects.push_back(o);
+        }
+    }
+    std::vector<Object> panes;                   // additive, no depth writes, after the rest (the game's effects)
+    for (uint32_t i = 0; i < 95; ++i) {
+        float cx, cz;
+        lotCentre(Hash(i + 999) % (kLotsX * kLotsZ), cx, cz);
+        Object o{};
+        o.x = cx + 4.5f;
+        o.z = cz + 4.5f;
+        o.yaw = Rand(i, 30) * kPi;
+        o.pieces = 1;
+        o.piece[0] = {paneKinds[i % 4], glow[i % 2], false};
+        o.kind = Object::Additive;
+        o.visual = visual++;
+        panes.push_back(o);
+    }
+    // The ground: 16 x 10 chunks, base pass + multiplying light pass.
+    std::vector<uint32_t> groundPixels(64 * 64), lightmapPixels(64 * 64);
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x) {
+            groundPixels[y * 64 + x] = ((x / 4 + y / 4) & 1) ? 0xFF3C6A2A : 0xFF2E5320;
+            const uint32_t l = uint32_t(170 + 50 * std::sin(x * 0.2f) * std::cos(y * 0.15f));
+            lightmapPixels[y * 64 + x] = 0xFF000000u | l << 16 | l << 8 | l;
+        }
+    Texture* groundTex = dev.CreateTexture(64, 64, groundPixels.data());
+    Texture* lightmap = dev.CreateTexture(64, 64, lightmapPixels.data());
+    struct VtxTerrain { float x, y, z, nx, ny, nz, u0, v0, u1, v1; };
+    const uint32_t kFvfTerrain = FVF_XYZ | FVF_NORMAL | (2 << 8);
+    // As the game's: big static vertex buffers (a quadrant each here), every chunk drawn with its own few indices.
+    constexpr int kChunksX = 16, kChunksZ = 10, kChunkCells = 6, kQuads = 2;
+    constexpr float kChunkX = 20.0f, kChunkZ = 30.0f;
+    constexpr int kQuadChunksX = kChunksX / kQuads, kQuadChunksZ = kChunksZ / kQuads;
+    constexpr int kGridX = kQuadChunksX * kChunkCells + 1, kGridZ = kQuadChunksZ * kChunkCells + 1;
+    struct Chunk { int quadrant; std::vector<uint16_t> indices; };
+    std::vector<ThreadedDevice::SharedVertices> groundBuffers;
+    std::vector<Chunk> chunks;
+    for (int qz = 0; qz < kQuads; ++qz)
+        for (int qx = 0; qx < kQuads; ++qx) {
+            std::vector<VtxTerrain> v;
+            const float x0 = -kChunkX * kChunksX / 2 + qx * kQuadChunksX * kChunkX;
+            const float z0 = -kChunkZ * kChunksZ / 2 + qz * kQuadChunksZ * kChunkZ;
+            for (int j = 0; j < kGridZ; ++j)
+                for (int i = 0; i < kGridX; ++i) {
+                    const float x = x0 + kChunkX * i / kChunkCells, z = z0 + kChunkZ * j / kChunkCells;
+                    v.push_back({x, 0.0f, z, 0, 1, 0, x / 4, z / 4, float(i % kChunkCells) / kChunkCells,
+                                 float(j % kChunkCells) / kChunkCells});
+                }
+            groundBuffers.push_back(std::make_shared<std::vector<uint8_t>>(
+                reinterpret_cast<const uint8_t*>(v.data()), reinterpret_cast<const uint8_t*>(v.data() + v.size())));
+            for (int cz = 0; cz < kQuadChunksZ; ++cz)
+                for (int cx = 0; cx < kQuadChunksX; ++cx) {
+                    Chunk c{qz * kQuads + qx, {}};
+                    for (int j = cz * kChunkCells; j < (cz + 1) * kChunkCells; ++j)
+                        for (int i = cx * kChunkCells; i < (cx + 1) * kChunkCells; ++i) {
+                            const uint16_t q = uint16_t(j * kGridX + i);
+                            const uint16_t t[6] = {q, uint16_t(q + kGridX), uint16_t(q + 1), uint16_t(q + 1),
+                                                   uint16_t(q + kGridX), uint16_t(q + kGridX + 1)};
+                            c.indices.insert(c.indices.end(), t, t + 6);
+                        }
+                    chunks.push_back(std::move(c));
+                }
+        }
+    const uint32_t groundVertices = uint32_t(kGridX * kGridZ);
+    if (g_grassFieldOn && !g_cityNoGrass)
+        dev.SetGrassField(true, g_grassFieldDist, 5.0f, 0.5f, true);
+    // (--city-statels: everything moved to the placed objects' city; its ground buffers too.)
+    const float ox = g_cityStatels.empty() ? 0.0f : 1380.0f, oz = g_cityStatels.empty() ? 0.0f : 2950.0f;
+    if (!g_cityStatels.empty()) {
+        dev.SetStatelMode(2);
+        dev.LoadStatels(g_cityStatels.c_str(), 790);
+        for (auto& b : groundBuffers) {
+            auto moved = std::make_shared<std::vector<uint8_t>>(*b);
+            auto* v = reinterpret_cast<VtxTerrain*>(moved->data());
+            for (size_t i = 0; i < moved->size() / sizeof(VtxTerrain); ++i) { v[i].x += ox; v[i].z += oz; }
+            b = moved;
+        }
+        for (Object& o : objects) { o.x += ox; o.z += oz; }
+        for (Object& o : panes) { o.x += ox; o.z += oz; }
+    }
+    std::printf("city bench: %u meshes (%.2f MB of vertices), %zu objects + %zu panes, %zu ground chunks, %d frames "
+                "(window from %d)\n", nextId - 1, double(vertexBytes) / 1048576.0, objects.size(), panes.size(),
+                chunks.size(), frames, g_cityWarm);
+
+    LARGE_INTEGER freq, t0, t1;
+    QueryPerformanceFrequency(&freq);
+    double frameSum = 0.0, recordSum = 0.0;
+    int counted = 0;
+    uint32_t drawsPerFrame = 0;
+    QueryPerformanceCounter(&t0);
+    for (int frame = 0; frame < frames; ++frame) {
+        if (frame == g_cityWarm) dev.ProfileWindow(true, "");
+        if (frame == frames - 1 && !shot.empty()) dev.RequestScreenshot(shot);
+        if (frame == frames - 1 && !dump.empty()) dev.RequestFrameDump(dump);
+        LARGE_INTEGER r0, r1;
+        QueryPerformanceCounter(&r0);
+        uint32_t draws = 0;
+        dev.BeginFrame();
+        dev.SetViewport({0, 0, g_width, g_height, 0.0f, 1.0f});
+        dev.Clear(CLEAR_TARGET | CLEAR_ZBUFFER, 0xFF6080A0, 1.0f);
+        const float a = 0.6f + 0.0015f * float(frame);
+        const Vector eye{ox + 70.0f * std::sin(a), 14.0f, oz - 70.0f * std::cos(a)};
+        dev.SetTransform(View, LookAtLH(eye, {eye.x - 40.0f * std::sin(a), 2.0f, eye.z + 40.0f * std::cos(a)}, {0, 1, 0}));
+        // What the game would draw: in front of the camera, within its view sideways (a margin for big things).
+        const float fx = -std::sin(a), fz = std::cos(a), tanHalf = std::tan(kPi / 6) * float(g_width) / float(g_height);
+        auto inView = [&](const Object& o) {
+            if (g_cityNoCull) return true;
+            const float dx = o.x - eye.x, dz = o.z - eye.z;
+            const float depth = dx * fx + dz * fz, side = dx * fz - dz * fx;
+            return depth > -6.0f && std::fabs(side) < std::max(depth, 0.0f) * tanHalf + 8.0f;
+        };
+        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.5f, 300.0f));
+        dev.SetTransform(World, Identity());
+        dev.SetRenderState(RS_ZENABLE, 1);
+        dev.SetRenderState(RS_ZWRITEENABLE, 1);
+        dev.SetRenderState(RS_ZFUNC, CMP_LESSEQUAL);
+        dev.SetRenderState(RS_CULLMODE, CULL_NONE);
+        dev.SetRenderState(RS_ALPHATESTENABLE, 0);
+        dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
+        Light sun{};
+        sun.type = LIGHT_DIRECTIONAL;
+        sun.diffuse = {0.9f, 0.85f, 0.75f, 1};
+        sun.direction = {0.55f, -0.7f, 0.45f};
+        dev.SetLight(0, sun);
+        dev.LightEnable(0, true);
+        for (uint32_t i = 1; i < 8; ++i) {       // street lamps
+            Light l{};
+            l.type = LIGHT_POINT;
+            l.diffuse = {1.0f, 0.85f, 0.6f, 1};
+            l.position = {ox + (Rand(i, 40) - 0.5f) * 120.0f, 3.0f, oz + (Rand(i, 41) - 0.5f) * 120.0f};
+            l.range = 20.0f;
+            l.attenuation0 = 1.0f;
+            l.attenuation1 = 0.1f;
+            dev.SetLight(i, l);
+            dev.LightEnable(i, true);
+        }
+        dev.SetTextureStageState(0, TSS_COLORARG1, TA_TEXTURE);
+        dev.SetTextureStageState(0, TSS_COLORARG2, TA_DIFFUSE);
+        dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG1);
+        dev.SetTextureStageState(0, TSS_ALPHAARG1, TA_TEXTURE);
+        for (const auto& c : chunks) {           // the ground
+            dev.SetRenderState(RS_LIGHTING, 0);
+            dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
+            dev.SetRenderState(RS_ZFUNC, CMP_LESSEQUAL);
+            dev.SetTexture(0, groundTex);
+            dev.SetTextureStageState(0, TSS_TEXCOORDINDEX, 0);
+            dev.SetTextureStageState(0, TSS_COLOROP, TOP_SELECTARG1);
+            dev.DrawIndexedPrimitiveShared(TriangleList, kFvfTerrain, groundBuffers[c.quadrant], 0, groundVertices,
+                                           c.indices.data(), uint32_t(c.indices.size()));
+            dev.SetRenderState(RS_LIGHTING, 1);
+            dev.SetRenderState(RS_AMBIENT, 0xFF515151);
+            dev.SetRenderState(RS_ALPHABLENDENABLE, 1);
+            dev.SetRenderState(RS_SRCBLEND, BLEND_ZERO);
+            dev.SetRenderState(RS_DESTBLEND, BLEND_SRCCOLOR);
+            dev.SetRenderState(RS_ZFUNC, CMP_EQUAL);
+            dev.SetTexture(0, lightmap);
+            dev.SetTextureStageState(0, TSS_TEXCOORDINDEX, 1);
+            dev.SetTextureStageState(0, TSS_COLOROP, TOP_ADD);
+            dev.DrawIndexedPrimitiveShared(TriangleList, kFvfTerrain, groundBuffers[c.quadrant], 0, groundVertices,
+                                           c.indices.data(), uint32_t(c.indices.size()));
+            draws += 2;
+        }
+        dev.SetTextureStageState(0, TSS_TEXCOORDINDEX, 0);
+        dev.SetRenderState(RS_ZFUNC, CMP_LESSEQUAL);
+        dev.SetRenderState(RS_LIGHTING, 1);
+        dev.SetRenderState(RS_AMBIENT, 0xFF616161);
+        dev.SetRenderState(RS_DIFFUSEMATERIALSOURCE, MCS_MATERIAL);
+        dev.SetTextureStageState(0, TSS_COLOROP, TOP_MODULATE);
+        const Material plain{{1, 1, 1, 1}, {1, 1, 1, 1}, {0, 0, 0, 0}, {0, 0, 0, 0}, 0.0f};
+        const Material glowing{{1, 1, 1, 1}, {1, 1, 1, 1}, {0, 0, 0, 0}, {1, 1, 1, 1}, 0.0f};
+        auto drawObject = [&](const Object& o) {
+            dev.SetDrawVisual(uint32_t(VisualKind::Static), "RTriMesh_t", 0, o.visual);
+            dev.SetTransform(World, Mul(RotateY(o.yaw), Translate(o.x, 0.0f, o.z)));
+            for (uint32_t p = 0; p < o.pieces; ++p) {
+                // As the game's pieces: their state set again for each (the hand-off drops repeats).
+                dev.SetMaterial(o.piece[p].emissive ? glowing : plain);
+                dev.SetTexture(0, o.piece[p].tex);
+                switch (o.kind) {
+                case Object::Solid:
+                    dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
+                    dev.SetRenderState(RS_ZWRITEENABLE, 1);
+                    break;
+                case Object::Blended:
+                case Object::Holes:
+                    dev.SetRenderState(RS_ALPHABLENDENABLE, 1);
+                    dev.SetRenderState(RS_SRCBLEND, BLEND_SRCALPHA);
+                    dev.SetRenderState(RS_DESTBLEND, BLEND_INVSRCALPHA);
+                    dev.SetRenderState(RS_ZWRITEENABLE, 1);
+                    break;
+                case Object::Additive:
+                    dev.SetRenderState(RS_ALPHABLENDENABLE, 1);
+                    dev.SetRenderState(RS_SRCBLEND, BLEND_SRCALPHA);
+                    dev.SetRenderState(RS_DESTBLEND, BLEND_ONE);
+                    dev.SetRenderState(RS_ZWRITEENABLE, 0);
+                    break;
+                }
+                dev.DrawMesh(o.piece[p].mesh);
+                ++draws;
+            }
+        };
+        for (const Object& o : objects) if (inView(o)) drawObject(o);
+        for (const Object& o : panes) if (inView(o)) drawObject(o);
+        dev.SetRenderState(RS_ZWRITEENABLE, 1);
+        dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
+        dev.SetDrawVisual(0, nullptr);
+        QueryPerformanceCounter(&r1);
+        dev.EndFrame();
+        QueryPerformanceCounter(&t1);
+        if (frame >= g_cityWarm) {
+            frameSum += double(t1.QuadPart - t0.QuadPart) * 1000.0 / double(freq.QuadPart);
+            recordSum += double(r1.QuadPart - r0.QuadPart) * 1000.0 / double(freq.QuadPart);
+            ++counted;
+        }
+        t0 = t1;
+        drawsPerFrame = draws;
+    }
+    dev.ProfileWindow(false, "city bench: ");
+    dev.Sync();
+    for (uint32_t id = 1; id < nextId; ++id) dev.ReleaseMesh(id);
+    for (Texture* t : opaque) dev.DestroyTexture(t);
+    for (Texture* t : holes) dev.DestroyTexture(t);
+    for (Texture* t : glow) dev.DestroyTexture(t);
+    dev.DestroyTexture(groundTex);
+    dev.DestroyTexture(lightmap);
+    dev.Sync();
+    std::printf("city bench: %u draws a frame; calling thread: frame %.3f ms (%.1f fps), recording %.3f ms (avg of %d frames)\n",
+                drawsPerFrame, frameSum / std::max(counted, 1), 1000.0 * std::max(counted, 1) / std::max(frameSum, 1e-9),
+                recordSum / std::max(counted, 1), counted);
+}
+
 // Water test scenes (--water-lake, --water-coast): terrain drawn like AnarchyGround_t (base pass, then the light pass
 // that gives the water its sun and ambient), a few lit props standing in and over the water, the game's fog, and the
 // water handed over as the proxy does with the game's VisualLiquid_t mesh - a few huge flat triangles (DrawWater).
@@ -1369,7 +2035,8 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
 int g_waterScene = 0;             // 1 = --water-lake, 2 = --water-coast
 float g_waterStyle = 0.5f;        // --water-style S (0 = enhanced AO, 1 = realistic)
 float g_waterYaw = 0.0f;          // --water-yaw R: the camera turned R radians from the scene's default
-float g_waterPitch = -1.0f;       // --water-pitch R: looking R radians down (default per scene)
+float g_waterTurn = 0.0f;         // --water-turn R: ... and R more each frame (turning)
+float g_waterPitch = -10.0f;      // --water-pitch R: looking R radians down (negative: up; default per scene)
 float g_waterHeight = -1.0f;      // --water-height H: the eye this high above the water (default per scene)
 float g_waterWaves = 1.0f;        // --water-waves W
 int g_waterQuality = 2;           // --water-quality 1..3
@@ -1387,10 +2054,162 @@ bool g_waterPool = false;         // --water-pool: the lake's water only a 6 x 6
 bool g_waterWall = false;         // --water-wall: a steep sheet of the water mesh standing in the lake (a fall)
 bool g_waterShelf = false;        // --water-shelf: the mesh terraced - the surface with a lower shore shelf in front
                                   // (as Anarchy Online hangs its aprons), which used to render as a "mountain of water"
+std::string g_meshIds;             // --mesh-ids FILE: ao-assets' mesh-ids.bin (the mesh ids' table)
+std::vector<std::string> g_meshPieces;   // --mesh-piece FILE: a piece dumped from rdb.db (fvf, count, stride, texture
+                                  //  offset, index count; vertices; indices), drawn as a static object (a mesh id test)
+bool g_clouds = false;            // --clouds: cloud puffs in the sky, as the game's (VisualSingleCloud_t)
+bool g_cloudsGame = false;
+float g_cloudCover = 0.0f;        // --cloud-cover X: RVK_CloudCover
+float g_sunDir[3] = {}, g_sunColour[3] = {};   // --sun-dir X Y Z, --sun-colour R G B: the water scenes' sun
+bool g_sunDirSet = false, g_sunColourSet = false;
+float g_cloudThick = 1.0f;        // --cloud-thick X: RVK_CloudThick
+float g_cloudShade = 1.6f;        // --cloud-shade X: RVK_CloudShade
+float g_cloudHeight = 900.0f;     // --cloud-height X: RVK_CloudHeight
+float g_cloudLow = 0.0f;          // --cloud-low X: RVK_CloudLow (the renderer's default: none)
+int g_cloudQual = 1;              // --cloud-qual N: RVK_CloudQual (0 low .. 3 ultra)
+float g_cloudSheet = 1.0f;        // --cloud-sheet X: RVK_CloudSheet
+float g_cloudShadow = 0.6f;       // --cloud-shadow X: RVK_CloudShadow
+float g_cloudNight = 0.8f;        // --cloud-night X: RVK_CloudNight
+float g_skyVary = 0.0f;           // --sky-vary X: RVK_SkyVary (off: the demo's skies as they were)
+uint32_t g_skyZone = 0;      // --sky-zone PF: the sky leans by that playfield's climate (sky.cpp)
+double g_skyTime = -1.0;          // --sky-time T: the sky weather's clock (seconds)
+float g_moonLight = 1.0f;         // --moon-light X: RVK_MoonLight
+float g_nightDark = 1.0f;         // --night-dark X: RVK_NightDark
+bool g_atmos = true;              // --atmos 0|1: RVK_Atmos
+int g_textureFlood = 0;                         // --texture-flood: textures alive before the shadow test's label
+float g_mist = 1.0f;              // --mist X: RVK_Mist
+bool g_cloudLayer = true;         // --cloud-puffs: RVK_CloudLayer off (a volume per puff)
+bool g_cloudsHalf = true;         // --clouds-full: RVK_CloudHalf off        // --clouds-game: ... drawn as the game draws them (RVK_CloudsOn off)
+bool g_fixedClock = false;        // --fixed-clock MS: the renderer's clock steps MS a frame (no sleeping: benchmarks)
 bool g_waterWalker = false;       // --water-walker: a "character" standing in the lake with its feet under the surface,
                                   // bobbing along: the surface ripples around it (RVK_WaterSwim)
 bool g_waterJump = false;         // --water-jump: the walker jumps out of the water and lands (RVK_WakeSplash)
 float g_waterSwim = 1.0f;         // --water-swim S: strength of those ripples (RVK_WaterSwim)
+std::string g_waterMesh;          // --water-mesh FILE: the water mesh from a dump of the game's (count, index count, the
+                                  // vertices as Device::WaterVertex, the 16-bit indices), the part within 150 units of
+                                  // --water-mesh-at X Y Z moved to the lake's far side (that point to 0 0 60)
+float g_waterMeshAt[3] = {2040.0f, 29.5f, 2340.0f};
+float g_waterEye[3] = {0, 0, 0};  // --water-eye X Y Z (the dump's coordinates): the camera there, looking at
+bool g_waterEyeSet = false;       // --water-mesh-at
+bool g_smoke = false;             // --smoke: a smoke source on the ground in front of the camera (the new smoke on)
+bool g_smokeWalker = false;       // --smoke-walker: a "character" walking to and fro through the smoke
+bool g_smokeGame = false;         // --smoke-game: the source as the game's barrel smoke hands it over (small, no push
+                                  // of its own, 6 s, the game's wind)
+float g_smokeDensity = 1.0f;      // --smoke-density X (RVK_SmokeThick)
+float g_smokeWindScale = 1.0f;    // --smoke-wind X: the game's wind x X
+float g_smokeWisps = 1.0f;        // --smoke-wisps X (RVK_SmokeWisps)
+bool g_smokeHalf = true;          // --smoke-full: RVK_SmokeHalf off
+float g_smokeWobble = 0.0f;       // --smoke-wobble A: the source jumps about by up to A each frame (the game's moves with
+                                  //  its newest sprites)
+bool g_smokeTwo = false;          // --smoke-two: a second, bigger source
+int g_smokeMany = 0;              // --smoke-many N: N more sources round the scene (the simulation's budget under load)
+float g_smokeBudget = -1.0f;      // --smoke-budget MS: RVK_SmokeBudget (default: the setting's)
+float g_smokeRes = 0.0f;          // --smoke-res R: RVK_SmokeRes
+uint32_t g_smokeQual = 0;         // --smoke-qual Q: RVK_SmokeQual
+float g_smokeOpaque = 1.0f;       // --smoke-opaque X (RVK_SmokeOpaque)
+float g_rainForce = 0.0f;         // --rain F: rain this hard (0..1; RVK_RainForce), the new weather on
+bool g_waterLamp = false;         // --water-lamp: a warm point light by the camera, as a character's lamp (with
+                                  // --light-override, so the frame's lights carry it)
+
+// --clouds: the puffs' textures (two shapes) and their sheet: 10 x 10 bulging towards the viewer (+z here, turned to
+// face the camera), 2 x 1 across.
+template <typename D>
+void MakeDemoPuffs(D& dev, Texture** puffTex, std::vector<VtxMesh>& puffMesh, std::vector<uint16_t>& puffIdx)
+{
+    for (int k = 0; k < 2; ++k) {
+        auto px = CloudPuff(256, 7u + uint32_t(k) * 31u);
+        puffTex[k] = dev.CreateTexture(256, 256, px.data());
+    }
+    for (int j = 0; j < 10; ++j)
+        for (int i = 0; i < 10; ++i) {
+            const float u = i / 9.0f, v = j / 9.0f, x = u * 2 - 1, y = v * 2 - 1;
+            puffMesh.push_back({x, y * 0.5f, -0.25f * (1 - x * x) * (1 - y * y), 0, 0, -1, 0xFFFFFFFF, u, 1 - v});
+        }
+    for (int j = 0; j < 9; ++j)
+        for (int i = 0; i < 9; ++i) {
+            const uint16_t a = uint16_t(j * 10 + i);
+            puffIdx.insert(puffIdx.end(), {a, uint16_t(a + 1), uint16_t(a + 11), a, uint16_t(a + 11), uint16_t(a + 10)});
+        }
+}
+
+// --clouds: the sky's puffs (as the game: drawn first, the sky, then the scene), each a sheet turned to the camera,
+// around `yaw` (the view's direction); `scale` shrinks the sky for small scenes.
+template <typename D>
+void DrawDemoPuffs(D& dev, Vector eye, float yaw, Texture* const* puffTex, const std::vector<VtxMesh>& puffMesh,
+                   const std::vector<uint16_t>& puffIdx, float scale)
+{
+    // (The game's sun sprites, as stand-ins: four round fans of 32 triangles round a hub, two a sun - one the light's
+    // way, one 14 degrees to its side; where the renderer draws its suns, sun.cpp.)
+    dev.SetDrawVisual(uint32_t(VisualKind::Sky), "VisualSunRays_t");
+    dev.SetTransform(World, Translate(eye.x, eye.y, eye.z));
+    {
+        auto Normalize = [](Vector v) {
+            const float n = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+            return Vector{v.x / n, v.y / n, v.z / n};
+        };
+        const float* l = g_sunDirSet ? g_sunDir : nullptr;
+        const Vector to = Normalize(l ? Vector{-l[0], -l[1], -l[2]} : Vector{-0.35f, 0.55f, -0.75f});
+        const Vector side = Normalize(Vector{-to.z, 0.0f, to.x});
+        const Vector up = Vector{side.y * to.z - side.z * to.y, side.z * to.x - side.x * to.z, side.x * to.y - side.y * to.x};
+        const float c14 = std::cos(0.244f), s14 = std::sin(0.244f);
+        const Vector to2 = Normalize(Vector{to.x * c14 + side.x * s14, to.y * c14 + side.y * s14, to.z * c14 + side.z * s14});
+        struct Fan { Vector dir; float size; uint32_t colour; };
+        // (as the game's, logged 2026-10-13: an orange and a blue sprite a sun, of very different sizes)
+        const Fan fans[] = {{to, 180.0f, 0xFF639CFFu}, {to, 540.0f, 0xFFFF9C38u}, {to2, 90.0f, 0xFFFF9C38u},
+                            {to2, 270.0f, 0xFF639CFFu}};
+        std::vector<VtxDiffuseTex> fan(33);
+        std::vector<uint16_t> fanIdx;
+        for (uint16_t i = 0; i < 32; ++i) fanIdx.insert(fanIdx.end(), {0, uint16_t(1 + i), uint16_t(1 + (i + 1) % 32)});
+        int f = 0;
+        for (const Fan& fn : fans) {
+            const Vector c{fn.dir.x * 1000.0f, fn.dir.y * 1000.0f, fn.dir.z * 1000.0f};
+            fan[0] = VtxDiffuseTex{c.x, c.y, c.z, fn.colour, 0.5f, 0.5f};
+            for (int i = 0; i < 32; ++i) {
+                const float a = float(i) / 32.0f * 2.0f * kPi;
+                const float r = fn.size;         // (round: the rays are in the texture)
+                const float x = std::cos(a) * r, y = std::sin(a) * r;
+                fan[1 + i] = VtxDiffuseTex{c.x + side.x * x + up.x * y, c.y + side.y * x + up.y * y,
+                                           c.z + side.z * x + up.z * y, fn.colour, 0.5f + 0.5f * std::cos(a),
+                                           0.5f + 0.5f * std::sin(a)};
+            }
+            dev.DrawIndexedPrimitive(TriangleList, kFvfDiffuseTex, fan.data(), 33, fanIdx.data(), uint32_t(fanIdx.size()));
+            ++f;
+        }
+    }
+    dev.SetDrawVisual(uint32_t(VisualKind::Sky), "VisualSingleCloud_t");
+    dev.SetRenderState(RS_LIGHTING, 1);
+    dev.SetRenderState(RS_ALPHABLENDENABLE, 1);
+    dev.SetRenderState(RS_SRCBLEND, BLEND_SRCALPHA);
+    dev.SetRenderState(RS_DESTBLEND, BLEND_INVSRCALPHA);
+    dev.SetRenderState(RS_ZWRITEENABLE, 0);
+    dev.SetTextureStageState(0, TSS_COLOROP, TOP_MODULATE);
+    dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_MODULATE);
+    dev.SetTextureStageState(0, TSS_ALPHAARG2, TA_DIFFUSE);
+    Material cloudMat{{1, 1, 1, 1}, {1, 1, 1, 1}, {0, 0, 0, 0}, {0.72f, 0.72f, 0.75f, 1}, 0.0f};
+    dev.SetMaterial(cloudMat);
+    struct Place { float yaw, dist, height, width; };
+    const Place places[] = {{-0.55f, 520, 150, 150}, {-0.2f, 700, 210, 220}, {0.12f, 450, 120, 120},
+                            {0.45f, 620, 180, 190}, {0.75f, 400, 140, 110}, {-0.85f, 380, 110, 100},
+                            {0.3f, 900, 260, 260}, {-0.4f, 950, 300, 240}, {0.05f, 90, 200, 160},
+                            {-0.3f, 160, 230, 150}};
+    int k = 0;
+    for (const Place& pl : places) {
+        const float a = yaw + pl.yaw;
+        const float px = eye.x + std::cos(a) * pl.dist * scale, pz = eye.z + std::sin(a) * pl.dist * scale;
+        const float face = std::atan2(eye.x - px, eye.z - pz);   // its -z towards the camera
+        const float w = pl.width * scale;
+        Matrix m = Mul(Mul(Matrix{{{w, 0, 0, 0}, {0, w, 0, 0}, {0, 0, w, 0}, {0, 0, 0, 1}}}, RotateY(face + kPi)),
+                       Translate(px, eye.y + pl.height * scale, pz));
+        dev.SetTransform(World, m);
+        dev.SetTexture(0, puffTex[k++ & 1]);
+        dev.DrawIndexedPrimitive(TriangleList, kFvfMesh, puffMesh.data(), uint32_t(puffMesh.size()), puffIdx.data(),
+                                 uint32_t(puffIdx.size()));
+    }
+    dev.SetTransform(World, Identity());
+    dev.SetRenderState(RS_ZWRITEENABLE, 1);
+    dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG1);
+    dev.SetDrawVisual(0, nullptr);
+}
 
 template <typename D>
 void RunWaterScene(D& dev, int frames, const std::string& shot)
@@ -1415,6 +2234,11 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
             waterPixels[y * 64 + x] = 0xFF000000u | r << 16 | g << 8 | b;
         }
     Texture* waterTex = dev.CreateTexture(64, 64, waterPixels.data());
+    Texture* puffTex[2] = {nullptr, nullptr};
+    std::vector<VtxMesh> puffMesh;
+    std::vector<uint16_t> puffIdx;
+    if (g_clouds)
+        MakeDemoPuffs(dev, puffTex, puffMesh, puffIdx);
     struct VtxTerrain { float x, y, z, nx, ny, nz, u0, v0, u1, v1; };
     const uint32_t kFvfTerrain = FVF_XYZ | FVF_NORMAL | (2 << 8);
     auto height = [&](float x, float z) {
@@ -1498,6 +2322,47 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
     } else {
         waterIdx = {0, 1, 2, 0, 2, 3};
     }
+    if (!g_waterMesh.empty()) {
+        water.clear();
+        waterIdx.clear();
+        if (FILE* f = std::fopen(g_waterMesh.c_str(), "rb")) {
+            uint32_t n = 0, ic = 0;
+            std::vector<Device::WaterVertex> v;
+            std::vector<uint16_t> idx;
+            if (std::fread(&n, 4, 1, f) == 1 && std::fread(&ic, 4, 1, f) == 1) {
+                v.resize(n);
+                idx.resize(ic);
+                if (std::fread(v.data(), sizeof(Device::WaterVertex), n, f) != n || std::fread(idx.data(), 2, ic, f) != ic)
+                    v.clear(), idx.clear();
+            }
+            std::fclose(f);
+            const float* c = g_waterMeshAt;
+            std::vector<int32_t> remap(v.size(), -1);
+            for (size_t t = 0; t + 2 < idx.size(); t += 3) {
+                bool close = true;
+                for (int k = 0; k < 3; ++k) {
+                    const float* p = v[idx[t + k]].pos;
+                    close = close && std::hypot(p[0] - c[0], p[2] - c[2]) < 150.0f;
+                }
+                if (!close)
+                    continue;
+                for (int k = 0; k < 3; ++k) {
+                    int32_t& r = remap[idx[t + k]];
+                    if (r < 0) {
+                        r = int32_t(water.size());
+                        Device::WaterVertex w = v[idx[t + k]];
+                        w.pos[0] -= c[0]; w.pos[1] -= c[1]; w.pos[2] += 60.0f - c[2];
+                        water.push_back(w);
+                    }
+                    waterIdx.push_back(uint16_t(r));
+                }
+            }
+            std::printf("water mesh %s: %zu of %u triangles, %zu vertices\n", g_waterMesh.c_str(), waterIdx.size() / 3,
+                        ic / 3, water.size());
+        } else {
+            std::printf("water mesh %s: can't open\n", g_waterMesh.c_str());
+        }
+    }
     if (g_waterWall) {                    // upright, 8 units tall, with the rock behind it 10 units further back
         const uint16_t base = uint16_t(water.size());
         water.insert(water.end(), {{{-30, 0, 60}, tint}, {{30, 0, 60}, tint}, {{30, 8, 60}, tint}, {{-30, 8, 60}, tint}});
@@ -1521,21 +2386,26 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
         if (frame == frames - 1)
             dev.RequestScreenshot(shot);
         dev.BeginFrame();
-        dev.SetViewport({0, 0, kWidth, kHeight, 0.0f, 1.0f});
+        dev.SetViewport({0, 0, g_width, g_height, 0.0f, 1.0f});
         dev.Clear(CLEAR_TARGET | CLEAR_ZBUFFER, sky, 1.0f);
         // Standing on the shore (the eye 1.8 above the ground there, or --water-height above the water), looking out.
         const float ex = coast ? 2.0f : 0.0f, ez = g_waterZ > -1e5f ? g_waterZ : coast ? 22.0f : -25.0f;
         const float eyeY = g_waterHeight >= 0.0f ? g_waterHeight : std::max(height(ex, ez), 0.0f) + 1.8f;
-        const float pitch = g_waterPitch >= 0.0f ? g_waterPitch : (coast ? 0.1f : 0.16f);
-        const float yaw = kPi * 0.5f + g_waterYaw;           // +z
-        const Vector eye{ex, eyeY, ez};
+        const float pitch = g_waterPitch > -5.0f ? g_waterPitch : (coast ? 0.1f : 0.16f);
+        const float yaw = kPi * 0.5f + g_waterYaw + g_waterTurn * float(frame);   // +z (--water-turn: turning)
+        Vector eye{ex, eyeY, ez};
+        if (g_waterEyeSet)
+            eye = {g_waterEye[0] - g_waterMeshAt[0], g_waterEye[1] - g_waterMeshAt[1], g_waterEye[2] - g_waterMeshAt[2] + 60.0f};
         if (frame == 0)
             std::printf("water scene: eye %.2f %.2f %.2f, ground there %.2f, at z 60: %.2f, at z 150: %.2f, %zu terrain vertices\n",
                         double(ex), double(eyeY), double(ez), double(height(ex, ez)), double(height(0, 60)),
                         double(height(0, 150)), terrain.size());
-        const Vector at{eye.x + std::cos(yaw) * std::cos(pitch), eye.y - std::sin(pitch), eye.z + std::sin(yaw) * std::cos(pitch)};
+        Vector at{eye.x + std::cos(yaw) * std::cos(pitch), eye.y - std::sin(pitch), eye.z + std::sin(yaw) * std::cos(pitch)};
+        if (g_waterEyeSet)
+            at = {0.0f, 9.0f, 60.0f};                       // (the fall's middle, about)
+
         dev.SetTransform(View, LookAtLH(eye, at, {0, 1, 0}));
-        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(kWidth) / kHeight, 0.3f, 2000.0f));
+        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.3f, 2000.0f));
         dev.SetTransform(World, Identity());
         dev.SetRenderState(RS_ZENABLE, 1);
         dev.SetRenderState(RS_ZWRITEENABLE, 1);
@@ -1553,12 +2423,51 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
         sun.type = LIGHT_DIRECTIONAL;
         sun.diffuse = g_waterNight ? Color{0.1f, 0.12f, 0.2f, 1} : Color{1.0f, 0.93f, 0.8f, 1};
         sun.direction = {0.35f, -0.55f, 0.75f};             // the sun ahead of the camera, low: a glint on the water
+        if (g_sunDirSet) sun.direction = {g_sunDir[0], g_sunDir[1], g_sunDir[2]};
+        if (g_sunColourSet) sun.diffuse = {g_sunColour[0], g_sunColour[1], g_sunColour[2], 1};
         dev.SetLight(0, sun);
         dev.LightEnable(0, true);
+        if (g_waterLamp) {
+            Light lamp{};
+            lamp.type = LIGHT_POINT;
+            lamp.diffuse = {1.0f, 0.8f, 0.5f, 1};
+            lamp.position = {eye.x + 0.6f, eye.y + 0.4f, eye.z + 1.0f};
+            lamp.range = 40.0f;
+            lamp.attenuation0 = 0.3f;
+            lamp.attenuation1 = 0.05f;
+            dev.SetLight(1, lamp);
+            dev.LightEnable(1, true);
+        }
         dev.SetTextureStageState(0, TSS_COLORARG1, TA_TEXTURE);
         dev.SetTextureStageState(0, TSS_COLORARG2, TA_DIFFUSE);
         dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG1);
         dev.SetTextureStageState(0, TSS_ALPHAARG1, TA_TEXTURE);
+        // --clouds: the sky's puffs first (as the game: the sky, then the scene), each a sheet turned to the camera.
+        if (g_clouds)
+            DrawDemoPuffs(dev, eye, kPi * 0.5f + g_waterYaw, puffTex, puffMesh, puffIdx, 1.0f);
+        dev.SetMaterial(mat);
+        // --mesh-piece: each a static object of its own (as the game's: one visual each), drawn at the origin.
+        for (size_t k = 0; k < g_meshPieces.size(); ++k) {
+            static std::vector<std::vector<uint8_t>> pieces;
+            if (pieces.size() < g_meshPieces.size()) {
+                pieces.resize(g_meshPieces.size());
+                for (size_t j = 0; j < g_meshPieces.size(); ++j)
+                    if (FILE* f = std::fopen(g_meshPieces[j].c_str(), "rb")) {
+                        int c;
+                        while ((c = std::fgetc(f)) != EOF) pieces[j].push_back(uint8_t(c));
+                        std::fclose(f);
+                    }
+            }
+            const std::vector<uint8_t>& d = pieces[k];
+            if (d.size() < 20) continue;
+            uint32_t head[5];
+            std::memcpy(head, d.data(), 20);
+            const uint8_t* verts = d.data() + 20;
+            const uint16_t* idx = reinterpret_cast<const uint16_t*>(verts + size_t(head[1]) * head[2]);
+            dev.SetDrawVisual(uint32_t(VisualKind::Static), "RTriMesh_t", 0, uint32_t(0x1000 + k));
+            dev.DrawIndexedPrimitive(TriangleList, head[0], verts, head[1], idx, head[4]);
+            dev.SetDrawVisual(0, nullptr);
+        }
         // The ground: base pass, then the light pass (lightmap + ambient, multiplied).
         dev.SetRenderState(RS_LIGHTING, 0);
         dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
@@ -1595,7 +2504,7 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
         // A "character" swimming (--water-walker): a tall body in the lake, its feet under the surface, bobbing along.
         // Flagged a character (SetDrawVisual), so the renderer knows where it is - and ripples the water around it.
         if (g_waterWalker) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(16));   // (the demo renders faster than the game: the
+            if (!g_fixedClock) std::this_thread::sleep_for(std::chrono::milliseconds(16));   // (the demo renders faster than the game: the
                                                                           //  water's simulation runs on real time)
             std::vector<VtxMesh> cv;
             std::vector<uint16_t> ci;
@@ -1635,6 +2544,66 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
             dev.DrawPrimitive(TriangleList, kFvfMesh, flat.data(), uint32_t(flat.size()));
         } else {
             dev.DrawWater(water.data(), uint32_t(water.size()), waterIdx.data(), uint32_t(waterIdx.size()));
+            if (g_smokeWalker) {                 // (drawn after the water: the bodies are taken from last frame's draws)
+                if (!g_fixedClock) std::this_thread::sleep_for(std::chrono::milliseconds(16));
+                std::vector<VtxMesh> cv;
+                std::vector<uint16_t> ci;
+                const float wx = -3.0f + 3.5f * std::sin(float(frame) * 0.01f);   // ~2 m/s at 60 fps
+                AddCube(cv, ci, wx, 0.0f, -11.5f, 0.3f);
+                const float ground = height(wx, -11.5f);
+                for (VtxMesh& m : cv) {
+                    m.y = ground + (m.y + 0.3f) * 3.0f;                         // 1.8 tall, on the ground
+                    if (m.y > ground + 0.2f) m.x += 0.05f * std::sin(frame * 0.7f);
+                }
+                dev.SetRenderState(RS_LIGHTING, 1);
+                dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
+                dev.SetRenderState(RS_ZWRITEENABLE, 1);
+                dev.SetTexture(0, nullptr);
+                dev.SetTextureStageState(0, TSS_COLOROP, TOP_SELECTARG2);
+                dev.SetDrawVisual(uint32_t(VisualKind::Character), "walker");
+                dev.DrawPrimitive(TriangleList, kFvfMesh, cv.data(), uint32_t(cv.size()));
+                dev.SetDrawVisual(0, nullptr);
+                dev.SetRenderState(RS_LIGHTING, 0);
+                dev.SetRenderState(RS_ALPHABLENDENABLE, 1);
+                dev.SetRenderState(RS_ZWRITEENABLE, 0);
+                dev.SetTexture(0, waterTex);
+                dev.SetTextureStageState(0, TSS_COLOROP, TOP_MODULATE);
+            }
+            if (g_smoke) {                       // (--smoke: a smouldering fire on the shore in front)
+                Device::SmokeSource src;
+                src.pos[0] = -3.0f;
+                src.pos[2] = -12.0f;
+                src.pos[1] = height(src.pos[0], src.pos[2]);
+                src.colour = 0x8A8580;
+                if (g_smokeGame) {
+                    src.radius = 0.25f; src.speed = 1.0f; src.life = 6.0f; src.size = 5.1f; src.colour = 0;
+                    src.wind[0] = 7.65f * g_smokeWindScale; src.wind[1] = 1.36f * g_smokeWindScale; src.wind[2] = -1.92f * g_smokeWindScale;
+                }
+                if (g_smokeWobble > 0.0f) {
+                    src.pos[0] += g_smokeWobble * std::sin(float(frame) * 2.1f);
+                    src.pos[2] += g_smokeWobble * std::sin(float(frame) * 1.3f + 1.0f);
+                }
+                dev.SmokeSourceFrame(1, src);
+                if (g_smokeTwo) {                // (--smoke-two: a bigger second one beside it - its own grid size)
+                    Device::SmokeSource big;
+                    big.pos[0] = 3.0f;
+                    big.pos[2] = -10.0f;
+                    big.pos[1] = height(big.pos[0], big.pos[2]);
+                    big.size = 9.0f;
+                    big.colour = 0x8A8580;
+                    dev.SmokeSourceFrame(2, big);
+                }
+                for (int k = 0; k < g_smokeMany; ++k) {   // (--smoke-many: a ring of them, near and far, some behind)
+                    Device::SmokeSource m;
+                    const float a = 0.9f + float(k) * 2.39996f, r = 12.0f + 14.0f * float(k);
+                    m.pos[0] = r * std::sin(a);
+                    m.pos[2] = -r * std::cos(a);
+                    m.pos[1] = height(m.pos[0], m.pos[2]);
+                    m.size = 6.0f + float(k % 3);
+                    m.colour = 0x302C28;
+                    dev.SmokeSourceFrame(uint64_t(10 + k), m);
+                }
+            }
         }
         dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG1);
         dev.SetRenderState(RS_ZWRITEENABLE, 1);
@@ -1686,10 +2655,26 @@ void RunShadowTest(D& dev, int frames, const std::string& shot, int cacheTest, i
     Texture* fence = dev.CreateTexture(64, 64, fencePixels.data());
     std::vector<uint32_t> blobPixels(64, 0xFFFFFFFF);
     std::vector<uint32_t> lightmapPixels(64, 0xFFC0C0C0);
-    std::vector<uint32_t> labelPixels(64 * 16, 0xFF20FF20);
-    Texture* labelTex = dev.CreateTexture(64, 16, labelPixels.data());
+    // --texture-flood N: N textures alive before the label's (a big zone has over 4,096: the label must still draw).
+    std::vector<Texture*> flood;
+    {
+        const uint32_t grey = 0xFF808080u;
+        for (int i = 0; i < g_textureFlood; ++i) flood.push_back(dev.CreateTexture(1, 1, &grey));
+    }
+    // A name as the game makes one: 128 x 32, transparent, with white strokes (text) in its middle rows.
+    std::vector<uint32_t> labelPixels(128 * 32, 0x00000000u);
+    for (uint32_t y = 10; y < 22; ++y)
+        for (uint32_t x = 8; x < 120; ++x)
+            if ((x / 3) % 3 != 0 && (y < 12 || y > 19 || (x / 3) % 3 == 1))
+                labelPixels[y * 128 + x] = 0xFFFFFFFFu;
+    Texture* labelTex = dev.CreateTexture(128, 32, labelPixels.data());
     Texture* lightmap = dev.CreateTexture(8, 8, lightmapPixels.data());
     Texture* blobTex = dev.CreateTexture(8, 8, blobPixels.data());
+    Texture* puffTex[2] = {nullptr, nullptr};
+    std::vector<VtxMesh> puffMesh;
+    std::vector<uint16_t> puffIdx;
+    if (g_clouds)
+        MakeDemoPuffs(dev, puffTex, puffMesh, puffIdx);
     for (int frame = 0; frame < frames; ++frame) {
         if (g_grassFieldOn && frame == 5)
             dev.SetGrassField(true, g_grassFieldDist, 7.0f, 0.5f, g_grassFieldTex);   // a change rebuilds the tiles
@@ -1698,28 +2683,33 @@ void RunShadowTest(D& dev, int frames, const std::string& shot, int cacheTest, i
             if (!dump.empty()) dev.RequestFrameDump(dump);     // the shadow test dumps its last frame
         }
         dev.BeginFrame();
-        dev.SetViewport({0, 0, kWidth, kHeight, 0.0f, 1.0f});
+        dev.SetViewport({0, 0, g_width, g_height, 0.0f, 1.0f});
         dev.Clear(CLEAR_TARGET | CLEAR_ZBUFFER, 0xFF6080A0, 1.0f);
         // --cache-test K: after K frames, look straight down past the big right cube (which the "game" then no
         // longer draws, as it is out of view) at the tip of its shadow, which must stay if rvk remembered it.
         bool topDown = cacheTest > 0 && frame >= cacheTest;
         if (topDown) {
             dev.SetTransform(View, LookAtLH({7.5f, 4, 6.5f}, {7.5f, 0, 6.5f}, {0, 0, 1}));
-            dev.SetTransform(Projection, PerspectiveLH(kPi / 4.5f, float(kWidth) / kHeight, 0.5f, 200.0f));
+            dev.SetTransform(Projection, PerspectiveLH(kPi / 4.5f, float(g_width) / g_height, 0.5f, 200.0f));
         } else if (g_sunView) {
             // --sun-view: low, looking towards the sun past the cubes (volumetric light shafts).
             dev.SetTransform(View, LookAtLH({11.0f, 1.5f, 11.0f}, {2.0f, 5.0f, 3.5f}, {0, 1, 0}));
+        } else if (g_cameraPitch > -999.0f) {
+            // --camera-pitch d: from the clouds' eye (DrawDemoPuffs) d degrees up, towards +z.
+            const float p = g_cameraPitch * kPi / 180.0f;
+            dev.SetTransform(View, LookAtLH({0, 9, -14}, {0, 9 + std::sin(p), -14 + std::cos(p)}, {0, 1, 0}));
+            dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.5f, 200.0f));
         } else if (g_cameraYaw != 0.0f) {
             // --camera-yaw r: the camera turns r radians a frame around the scene (motion blur test).
             float a = g_cameraYaw * float(frame), ex = 16.6f * std::sin(a), ez = 2.0f - 16.6f * std::cos(a);
             dev.SetTransform(View, LookAtLH({ex, 9, ez}, {0, 0, 2}, {0, 1, 0}));
-            dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(kWidth) / kHeight, 0.5f, 200.0f));
+            dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.5f, 200.0f));
         } else {
             if (g_grassWalk >= -10.0f)
                 dev.SetTransform(View, LookAtLH({0, 3.0f, -8.5f}, {0, 0.3f, -3.5f}, {0, 1, 0}));
             else
                 dev.SetTransform(View, LookAtLH({0, 9, -14}, {0, 0, 2}, {0, 1, 0}));
-            dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(kWidth) / kHeight, 0.5f, 200.0f));
+            dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.5f, 200.0f));
         }
         dev.SetTransform(World, Identity());
         dev.SetRenderState(RS_ZENABLE, 1);
@@ -1738,6 +2728,12 @@ void RunShadowTest(D& dev, int frames, const std::string& shot, int cacheTest, i
         sun.direction = {0.55f, -0.7f, 0.45f};
         dev.SetLight(0, sun);
         dev.LightEnable(0, true);
+        if (g_clouds) {                          // (--clouds: the sky's puffs, the sky shrunk to the scene)
+            DrawDemoPuffs(dev, Vector{0, 9, -14}, kPi * 0.5f, puffTex, puffMesh, puffIdx, 0.03f);
+            dev.SetMaterial(mat);
+            dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
+            dev.SetTextureStageState(0, TSS_COLOROP, TOP_MODULATE);
+        }
         if (g_walkerLight && g_grassWalk >= -10.0f) {   // the character's own light, as the game's (range ~6)
             Light own{};
             own.type = LIGHT_POINT;
@@ -1984,7 +2980,7 @@ void RunShadowTest(D& dev, int frames, const std::string& shot, int cacheTest, i
             dev.SetRenderState(RS_SRCBLEND, BLEND_SRCALPHA);
             dev.SetRenderState(RS_DESTBLEND, BLEND_INVSRCALPHA);
             dev.SetTexture(0, labelTex);
-            dev.SetTextureStageState(0, TSS_COLOROP, TOP_SELECTARG1);
+            dev.SetTextureStageState(0, TSS_COLOROP, TOP_MODULATE);   // (as the game: texture x diffuse)
             VtxDiffuseTex label[4] = {{5.5f, 2.6f, -2, 0xFFFFFFFF, 0, 1}, {5.5f, 3.4f, -2, 0xFFFFFFFF, 0, 0},
                                       {8.5f, 2.6f, -2, 0xFFFFFFFF, 1, 1}, {8.5f, 3.4f, -2, 0xFFFFFFFF, 1, 0}};
             dev.DrawPrimitive(TriangleStrip, kFvfDiffuseTex, label, 4);
@@ -1995,18 +2991,18 @@ void RunShadowTest(D& dev, int frames, const std::string& shot, int cacheTest, i
             Matrix saveView = LookAtLH({0, 9, -14}, {0, 0, 2}, {0, 1, 0});
             dev.SetTransform(View, LookAtLH({0, 0, -6}, {0, 0, 0}, {0, 1, 0}));
             dev.SetTransform(Projection, PerspectiveLH(kPi / 4, 1.0f, 0.5f, 50.0f));   // a window's own projection
-            dev.SetViewport({kWidth - 200, 20, 180, 180, 0.0f, 1.0f});
+            dev.SetViewport({g_width - 200, 20, 180, 180, 0.0f, 1.0f});
             std::vector<VtxMesh> pv;
             std::vector<uint16_t> pi;
             AddCube(pv, pi, 0, 0, 0, 1.5f);
             dev.DrawIndexedPrimitive(TriangleList, kFvfMesh, pv.data(), uint32_t(pv.size()), pi.data(), uint32_t(pi.size()));
-            dev.SetViewport({0, 0, kWidth, kHeight, 0.0f, 1.0f});
+            dev.SetViewport({0, 0, g_width, g_height, 0.0f, 1.0f});
             if (!topDown) {
                 dev.SetTransform(View, saveView);
-                dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(kWidth) / kHeight, 0.5f, 200.0f));
+                dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.5f, 200.0f));
             } else {
                 dev.SetTransform(View, LookAtLH({7.5f, 4, 6.5f}, {7.5f, 0, 6.5f}, {0, 0, 1}));
-                dev.SetTransform(Projection, PerspectiveLH(kPi / 4.5f, float(kWidth) / kHeight, 0.5f, 200.0f));
+                dev.SetTransform(Projection, PerspectiveLH(kPi / 4.5f, float(g_width) / g_height, 0.5f, 200.0f));
             }
         }
         // Anarchy Online's blob shadow (GfxVisualSimpleShadow_c, 8 segments) under the small cube: rvk hides it
@@ -2049,6 +3045,7 @@ void RunShadowTest(D& dev, int frames, const std::string& shot, int cacheTest, i
     dev.DestroyTexture(blobTex);
     dev.DestroyTexture(lightmap);
     dev.DestroyTexture(labelTex);
+    for (Texture* t : flood) dev.DestroyTexture(t);
 }
 
 bool g_slabTest = false;   // --point-shadow-slab
@@ -2061,6 +3058,69 @@ Matrix Offset()
     Matrix m = Identity();
     m.m[3][0] = g_off[0]; m.m[3][1] = g_off[1]; m.m[3][2] = g_off[2];
     return m;
+}
+
+// Placed objects' shadows (--statel-test PACK PLAYFIELD X Y Z [--statel-mode M]): a playfield's pack (ao-assets
+// statels) loaded as in the game, the camera above (X, Y, Z), a flat lit ground at Y and one cube of the "game's"
+// (shadows need a caster drawn) - the placed objects' shadows fall on the ground though nothing draws them.
+// Mode 2 (the default here: the demo draws none of them to confirm the placement), 0 for the scene without them.
+std::string g_statelPack;
+uint32_t g_statelPlayfield = 0, g_statelMode = 2;
+float g_statelAt[3] = {};
+
+template <typename D>
+void RunStatelTest(D& dev, int frames, const std::string& shot, const std::string& dump)
+{
+    auto groundPixels = Checker(64, 8, 0xFFC8C0B0, 0xFFA09888);
+    Texture* ground = dev.CreateTexture(64, 64, groundPixels.data());
+    dev.SetStatelMode(g_statelMode);
+    dev.LoadStatels(g_statelPack.c_str(), g_statelPlayfield);
+    const float x = g_statelAt[0], y = g_statelAt[1], z = g_statelAt[2];
+    std::vector<VtxMesh> cube;
+    std::vector<uint16_t> cubeIdx;
+    AddCube(cube, cubeIdx, x - 6.0f, y + 0.5f, z - 6.0f, 0.5f);
+    for (int frame = 0; frame < frames; ++frame) {
+        if (frame == frames - 1) {
+            dev.RequestScreenshot(shot);
+            if (!dump.empty()) dev.RequestFrameDump(dump);
+        }
+        dev.BeginFrame();
+        dev.SetViewport({0, 0, g_width, g_height, 0.0f, 1.0f});
+        dev.Clear(CLEAR_TARGET | CLEAR_ZBUFFER, 0xFF6080A0, 1.0f);
+        dev.SetTransform(View, LookAtLH({x - 22.0f, y + 16.0f, z - 22.0f}, {x, y, z}, {0, 1, 0}));
+        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.5f, 600.0f));
+        dev.SetTransform(World, Identity());
+        dev.SetRenderState(RS_ZENABLE, 1);
+        dev.SetRenderState(RS_ZWRITEENABLE, 1);
+        dev.SetRenderState(RS_ZFUNC, CMP_LESSEQUAL);
+        dev.SetRenderState(RS_CULLMODE, CULL_NONE);
+        dev.SetRenderState(RS_ALPHABLENDENABLE, 0);
+        dev.SetRenderState(RS_ALPHATESTENABLE, 0);
+        dev.SetRenderState(RS_AMBIENT, 0xFF505050);
+        dev.SetRenderState(RS_DIFFUSEMATERIALSOURCE, MCS_MATERIAL);
+        Material mat{{1, 1, 1, 1}, {1, 1, 1, 1}, {0, 0, 0, 0}, {0, 0, 0, 0}, 0.0f};
+        dev.SetMaterial(mat);
+        Light sun{};
+        sun.type = LIGHT_DIRECTIONAL;
+        sun.diffuse = {0.9f, 0.85f, 0.75f, 1};
+        sun.direction = {0.55f, -0.7f, 0.45f};
+        dev.SetLight(0, sun);
+        dev.LightEnable(0, true);
+        dev.SetTextureStageState(0, TSS_COLOROP, TOP_MODULATE);
+        dev.SetTextureStageState(0, TSS_COLORARG1, TA_TEXTURE);
+        dev.SetTextureStageState(0, TSS_COLORARG2, TA_DIFFUSE);
+        dev.SetTextureStageState(0, TSS_ALPHAOP, TOP_SELECTARG1);
+        dev.SetTextureStageState(0, TSS_ALPHAARG1, TA_TEXTURE);
+        dev.SetTexture(0, ground);
+        dev.SetRenderState(RS_LIGHTING, 1);
+        const float r = 120.0f;
+        VtxMesh q[4] = {{x - r, y, z - r, 0, 1, 0, 0xFFFFFFFF, 0, 0}, {x + r, y, z - r, 0, 1, 0, 0xFFFFFFFF, 60, 0},
+                        {x + r, y, z + r, 0, 1, 0, 0xFFFFFFFF, 60, 60}, {x - r, y, z + r, 0, 1, 0, 0xFFFFFFFF, 0, 60}};
+        dev.DrawPrimitive(TriangleFan, kFvfMesh, q, 4);
+        dev.DrawIndexedPrimitive(TriangleList, kFvfMesh, cube.data(), uint32_t(cube.size()), cubeIdx.data(),
+                                 uint32_t(cubeIdx.size()));
+        dev.EndFrame();
+    }
 }
 
 // Point light shadow test (--point-shadow-test): night, a lamp among cubes. Left half: lit ground (per-pixel); right
@@ -2098,10 +3158,10 @@ void RunPointShadowTest(D& dev, int frames, const std::string& shot, const std::
             if (!dump.empty()) dev.RequestFrameDump(dump);
         }
         dev.BeginFrame();
-        dev.SetViewport({0, 0, kWidth, kHeight, 0.0f, 1.0f});
+        dev.SetViewport({0, 0, g_width, g_height, 0.0f, 1.0f});
         dev.Clear(CLEAR_TARGET | CLEAR_ZBUFFER, 0xFF101828, 1.0f);
         dev.SetTransform(View, LookAtLH({g_off[0], g_off[1] + 13, g_off[2] - 11}, {g_off[0], g_off[1], g_off[2] + 1.5f}, {0, 1, 0}));
-        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(kWidth) / kHeight, 0.5f, 200.0f));
+        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.5f, 200.0f));
         dev.SetTransform(World, Offset());
         dev.SetRenderState(RS_ZENABLE, 1);
         dev.SetRenderState(RS_ZWRITEENABLE, 1);
@@ -2265,6 +3325,10 @@ float g_leafCamHeight = -1.0f;     // --leaf-cam-height H: ... this high (defaul
 float g_leafCamYaw = 0.0f;         // --leaf-cam-yaw R: ... turned R radians about the row's middle
 int g_leafFilm = 0;                // --leaf-film N: ~60 frames a second, a screenshot every N frames (film_NNN.bmp)
 int g_leafForest = 0;              // --leaf-forest N: an N x N grid of the trees (12 units apart), seen from eye height
+float g_crownShade = 1.0f;         // --crown-shade X: RVK_CrownShade
+bool g_freeCam = false;            // --free-cam: the free camera on from frame 10, turning and moving ahead (Device::SetFreeCam)
+std::string g_leafArt;             // --leaf-art ATLAS.png[,NORMAL.png]: a tree type's own leaf art (ao-assets leaf-art)
+                                   // on every canopy (cut-out part) of the trees - leaves.cpp BakeOwnCanopy
 
 struct TreePart {
     uint32_t flags = 0, alphaRef = 128;
@@ -2339,6 +3403,19 @@ void RunLeafScene(D& dev, int frames, const std::string& shot, const std::string
         std::string path = g_leafTrees.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
         Tree t;
         if (!path.empty() && LoadTree(dev, path, t)) trees.push_back(std::move(t));
+        if (!trees.empty() && !g_leafArt.empty() && path.size()) {   // (on this tree's canopies)
+            size_t c = g_leafArt.find(',');
+            rvk::maps::MipChain atlas, normal;
+            rvk::maps::NormalSpread spread;
+            std::string err;
+            if (!rvk::maps::DecodeAlbedoMap(g_leafArt.substr(0, c), &atlas, &err))
+                std::printf("leaf art: %s\n", err.c_str());
+            if (c != std::string::npos && !rvk::maps::DecodeNormalMap(g_leafArt.substr(c + 1), &normal, &spread, &err))
+                std::printf("leaf art: %s\n", err.c_str());
+            for (TreePart& part : trees.back().parts)
+                if (part.flags & 3)
+                    dev.SetLeafArt(part.texture, rvk::maps::Upload(dev, atlas), rvk::maps::Upload(dev, normal));
+        }
         start = comma == std::string::npos ? g_leafTrees.size() : comma + 1;
     }
     if (trees.empty()) return;
@@ -2368,6 +3445,7 @@ void RunLeafScene(D& dev, int frames, const std::string& shot, const std::string
     auto groundPixels = Checker(64, 8, 0xFF4A6A30, 0xFF42602A);
     Texture* ground = dev.CreateTexture(64, 64, groundPixels.data());
     dev.SetLeaves(g_leafSettings);
+    dev.SetCrownShade(g_crownShade);
     for (int frame = 0; frame < frames; ++frame) {
         if (frame == frames - 1) {
             dev.RequestScreenshot(shot);
@@ -2380,13 +3458,22 @@ void RunLeafScene(D& dev, int frames, const std::string& shot, const std::string
         if (g_leafFilm > 0)
             Sleep(16);
         dev.BeginFrame();
-        dev.SetViewport({0, 0, kWidth, kHeight, 0.0f, 1.0f});
+        dev.SetViewport({0, 0, g_width, g_height, 0.0f, 1.0f});
         dev.Clear(CLEAR_TARGET | CLEAR_ZBUFFER, 0xFF8AB0D8, 1.0f);
         const float ex = mid + dist * std::sin(g_leafCamYaw), ez = -dist * std::cos(g_leafCamYaw);
         const float lookY = g_leafForest > 0 ? camY + 3.0f : tallest * 0.45f;
         const float lookZ = g_leafForest > 0 ? 30.0f : 0.0f;
         dev.SetTransform(View, LookAtLH({ex, camY, ez}, {mid, lookY, lookZ}, {0, 1, 0}));
-        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(kWidth) / kHeight, 0.5f, 500.0f));
+        if (g_freeCam && frame >= 10) {
+            Device::FreeCamInput in;
+            in.on = true;
+            in.look[0] = 0.01f;
+            in.look[1] = 0.004f;
+            in.move[2] = 1.0f;
+            in.dt = 1.0f / 60.0f;
+            dev.SetFreeCam(in);
+        }
+        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.5f, 500.0f));
         dev.SetTransform(World, Identity());
         dev.SetRenderState(RS_ZENABLE, 1);
         dev.SetRenderState(RS_ZWRITEENABLE, 1);
@@ -2519,11 +3606,11 @@ void RunParticleTest(D& dev, int frames, int frameMs, const std::string& shot, c
             dev.DrawPrimitive(TriangleList, FVF_XYZRHW | FVF_DIFFUSE, q, 3);
             dev.SetRenderTarget(nullptr);
         }
-        dev.SetViewport({0, 0, kWidth, kHeight, 0.0f, 1.0f});
+        dev.SetViewport({0, 0, g_width, g_height, 0.0f, 1.0f});
         dev.Clear(CLEAR_TARGET | CLEAR_ZBUFFER, 0xFF0C1018, 1.0f);
         Matrix view = LookAtLH({0, 2.2f, -4.5f}, {0, 0.9f, 0}, {0, 1, 0});
         dev.SetTransform(View, view);
-        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(kWidth) / kHeight, 0.1f, 100.0f));
+        dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.1f, 100.0f));
         dev.SetTransform(World, Identity());
         dev.SetRenderState(RS_LIGHTING, 0);
         dev.SetRenderState(RS_CULLMODE, CULL_NONE);
@@ -2542,8 +3629,8 @@ void RunParticleTest(D& dev, int frames, int frameMs, const std::string& shot, c
         dev.DrawIndexedPrimitive(TriangleList, FVF_XYZ | FVF_DIFFUSE, ground, 4, gi, 6);
         if (g_particleWater) {                   // pre-transformed water between the 3D draws, as VisualLiquid_t does
             struct VW { float x, y, z, rhw; uint32_t c, s; float u, v; } water[4] = {
-                {0, 700, 0.9f, 1, 0x80204060, 0, 0, 0}, {float(kWidth), 700, 0.9f, 1, 0x80204060, 0, 1, 0},
-                {0, float(kHeight), 0.9f, 1, 0x80204060, 0, 0, 1}, {float(kWidth), float(kHeight), 0.9f, 1, 0x80204060, 0, 1, 1}};
+                {0, 700, 0.9f, 1, 0x80204060, 0, 0, 0}, {float(g_width), 700, 0.9f, 1, 0x80204060, 0, 1, 0},
+                {0, float(g_height), 0.9f, 1, 0x80204060, 0, 0, 1}, {float(g_width), float(g_height), 0.9f, 1, 0x80204060, 0, 1, 1}};
             dev.SetRenderState(RS_ZWRITEENABLE, 0);
             dev.DrawIndexedPrimitive(TriangleList, FVF_XYZRHW | FVF_DIFFUSE | FVF_SPECULAR | (1u << 8), water, 4, gi, 6);
             dev.SetRenderState(RS_ZWRITEENABLE, 1);
@@ -2677,7 +3764,7 @@ int main(int argc, char** argv)
     float ptLight = 1.0f, tess = 0.0f;
     int tessLevel = 4;
     float saturation = 1.0f, contrast = 1.0f, warmth = 0.0f, nightTint = 0.0f, vignette = 0.0f;
-    bool lutSepia = false, taa = false;
+    bool lutSepia = false, taa = false, fxaa = false;
     float sharpen = 0.4f;
     bool normalMapTest = false, pbrTest = false;
     uint32_t anisotropy = 1;
@@ -2686,6 +3773,7 @@ int main(int argc, char** argv)
     uint32_t motionMode = 0;
     float knee = 0.85f;
     int bench = 0;
+    bool cityBench = false;
     int frames = 3;
     std::string shot = "rvk_demo.bmp", dump;
     for (int i = 1; i < argc; ++i) {
@@ -2699,14 +3787,49 @@ int main(int argc, char** argv)
         else if (a == "--light-override") lightOverride = true;
         else if (a == "--shadows") shadows = true;
         else if (a == "--shadow-test") shadowTest = shadows = true;
+        else if (a == "--texture-flood" && i + 1 < argc) g_textureFlood = std::atoi(argv[++i]);
+        else if (a == "--statel-test" && i + 5 < argc) {
+            g_statelPack = argv[++i];
+            g_statelPlayfield = uint32_t(std::atoi(argv[++i]));
+            for (int k = 0; k < 3; ++k) g_statelAt[k] = float(std::atof(argv[++i]));
+            shadows = true;
+        }
+        else if (a == "--statel-mode" && i + 1 < argc) g_statelMode = uint32_t(std::atoi(argv[++i]));
         else if (a == "--point-shadow-test") pointShadowTest = true;
         else if (a == "--world-offset" && i + 3 < argc) { for (int k = 0; k < 3; ++k) g_off[k] = float(std::atof(argv[++i])); }
         else if (a == "--point-shadow-slab") g_slabTest = pointShadowTest = pointShadowSun = shadows = true;
         else if (a == "--point-shadow-sun") pointShadowTest = pointShadowSun = shadows = true;
         else if (a == "--frame-ms" && i + 1 < argc) frameMs = std::atoi(argv[++i]);
+        else if (a == "--size" && i + 2 < argc) { g_width = uint32_t(std::atoi(argv[++i])); g_height = uint32_t(std::atoi(argv[++i])); }
+        else if (a == "--clouds") { g_clouds = true; hdr = true; }
+        else if (a == "--mesh-ids" && i + 1 < argc) g_meshIds = argv[++i];
+        else if (a == "--mesh-piece" && i + 1 < argc) g_meshPieces.push_back(argv[++i]);
+        else if (a == "--clouds-game") { g_clouds = g_cloudsGame = true; hdr = true; }
+        else if (a == "--clouds-full") g_cloudsHalf = false;
+        else if (a == "--cloud-puffs") g_cloudLayer = false;
+        else if (a == "--sun-dir" && i + 3 < argc) { for (float& x : g_sunDir) x = float(std::atof(argv[++i])); g_sunDirSet = true; }
+        else if (a == "--sun-colour" && i + 3 < argc) { for (float& x : g_sunColour) x = float(std::atof(argv[++i])); g_sunColourSet = true; }
+        else if (a == "--cloud-cover" && i + 1 < argc) g_cloudCover = float(std::atof(argv[++i]));
+        else if (a == "--cloud-thick" && i + 1 < argc) g_cloudThick = float(std::atof(argv[++i]));
+        else if (a == "--cloud-shade" && i + 1 < argc) g_cloudShade = float(std::atof(argv[++i]));
+        else if (a == "--cloud-height" && i + 1 < argc) g_cloudHeight = float(std::atof(argv[++i]));
+        else if (a == "--cloud-low" && i + 1 < argc) g_cloudLow = float(std::atof(argv[++i]));
+        else if (a == "--cloud-qual" && i + 1 < argc) g_cloudQual = std::atoi(argv[++i]);
+        else if (a == "--cloud-sheet" && i + 1 < argc) g_cloudSheet = float(std::atof(argv[++i]));
+        else if (a == "--cloud-shadow" && i + 1 < argc) g_cloudShadow = float(std::atof(argv[++i]));
+        else if (a == "--cloud-night" && i + 1 < argc) g_cloudNight = float(std::atof(argv[++i]));
+        else if (a == "--sky-vary" && i + 1 < argc) g_skyVary = float(std::atof(argv[++i]));
+        else if (a == "--sky-time" && i + 1 < argc) { g_skyTime = std::atof(argv[++i]); g_skyVary = 1.0f; }
+        else if (a == "--sky-zone" && i + 1 < argc) g_skyZone = uint32_t(std::atoi(argv[++i]));   // (a playfield's climate)
+        else if (a == "--fixed-clock" && i + 1 < argc) { g_fixedClock = true; Device::SetFixedClock(std::atof(argv[++i]) * 1e-3); }
         else if (a == "--cache-test" && i + 1 < argc) { cacheTest = std::atoi(argv[++i]); shadowTest = shadows = true; }
         else if (a == "--dump" && i + 1 < argc) dump = argv[++i];
         else if (a == "--bench" && i + 1 < argc) bench = std::atoi(argv[++i]);
+        else if (a == "--city-bench") { cityBench = true; hdr = shadows = g_grassFieldOn = true; }
+        else if (a == "--city-warm" && i + 1 < argc) g_cityWarm = std::atoi(argv[++i]);
+        else if (a == "--city-no-grass") g_cityNoGrass = true;
+        else if (a == "--city-no-cull") g_cityNoCull = true;
+        else if (a == "--city-statels" && i + 1 < argc) g_cityStatels = argv[++i];
         else if (a == "--game-ms" && i + 1 < argc) g_benchGameMs = std::atof(argv[++i]);
         else if (a == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
         else if (a == "--hdr") hdr = true;
@@ -2723,6 +3846,10 @@ int main(int argc, char** argv)
         else if (a == "--grass-bench") { g_grassFieldOn = g_grassBench = true; hdr = true; }
         else if (a == "--leaf-tree" && i + 1 < argc) g_leafTrees = argv[++i];
         else if (a == "--leaf-off") g_leafSettings.on = false;
+        else if (a == "--leaf-art" && i + 1 < argc) g_leafArt = argv[++i];
+        else if (a == "--leaf-no-own") g_leafSettings.own = false;
+        else if (a == "--crown-shade" && i + 1 < argc) g_crownShade = float(std::atof(argv[++i]));
+        else if (a == "--free-cam") g_freeCam = true;
         else if (a == "--leaf-shadow-off") g_leafSettings.shadows = false;
         else if (a == "--leaf-fall" && i + 1 < argc) g_leafSettings.fall = float(std::atof(argv[++i]));
         else if (a == "--leaf-density" && i + 1 < argc) g_leafSettings.density = float(std::atof(argv[++i]));
@@ -2739,6 +3866,31 @@ int main(int argc, char** argv)
         else if (a == "--water-lake") { g_waterScene = 1; hdr = true; }
         else if (a == "--water-coast") { g_waterScene = 2; hdr = true; }
         else if (a == "--water-wall") g_waterWall = true;
+        else if (a == "--water-mesh" && i + 1 < argc) g_waterMesh = argv[++i];
+        else if (a == "--water-lamp") g_waterLamp = true;
+        else if (a == "--smoke") { g_smoke = true; hdr = true; }
+        else if (a == "--smoke-walker") { g_smoke = g_smokeWalker = true; hdr = true; }
+        else if (a == "--smoke-game") { g_smoke = g_smokeGame = true; hdr = true; }
+        else if (a == "--smoke-two") g_smokeTwo = true;
+        else if (a == "--smoke-many" && i + 1 < argc) g_smokeMany = std::atoi(argv[++i]);
+        else if (a == "--smoke-budget" && i + 1 < argc) g_smokeBudget = float(std::atof(argv[++i]));
+        else if (a == "--smoke-res" && i + 1 < argc) g_smokeRes = float(std::atof(argv[++i]));
+        else if (a == "--smoke-qual" && i + 1 < argc) g_smokeQual = uint32_t(std::atoi(argv[++i]));
+        else if (a == "--smoke-opaque" && i + 1 < argc) g_smokeOpaque = float(std::atof(argv[++i]));
+        else if (a == "--smoke-wisps" && i + 1 < argc) g_smokeWisps = float(std::atof(argv[++i]));
+        else if (a == "--smoke-full") g_smokeHalf = false;
+        else if (a == "--smoke-wobble" && i + 1 < argc) g_smokeWobble = float(std::atof(argv[++i]));
+        else if (a == "--smoke-wind" && i + 1 < argc) g_smokeWindScale = float(std::atof(argv[++i]));
+        else if (a == "--smoke-density" && i + 1 < argc) g_smokeDensity = float(std::atof(argv[++i]));
+        else if (a == "--rain" && i + 1 < argc) { g_rainForce = float(std::atof(argv[++i])); hdr = true; }
+        else if (a == "--lightning-at" && i + 1 < argc) g_lightningAt = std::atoi(argv[++i]);
+        else if (a == "--rain-speed" && i + 1 < argc) g_rainSpeed = float(std::atof(argv[++i]));
+        else if (a == "--rain-length" && i + 1 < argc) g_rainLength = float(std::atof(argv[++i]));
+        else if (a == "--wet" && i + 1 < argc) g_wetNow = float(std::atof(argv[++i]));
+        else if (a == "--storm" && i + 1 < argc) { g_stormForce = float(std::atof(argv[++i])); hdr = true; }
+        else if (a == "--strike-rate" && i + 1 < argc) g_strikeRate = float(std::atof(argv[++i]));
+        else if (a == "--water-mesh-at" && i + 3 < argc) { for (float& x : g_waterMeshAt) x = float(std::atof(argv[++i])); }
+        else if (a == "--water-eye" && i + 3 < argc) { for (float& x : g_waterEye) x = float(std::atof(argv[++i])); g_waterEyeSet = true; }
         else if (a == "--water-shelf") g_waterShelf = true;
         else if (a == "--water-pool") g_waterPool = true;
         else if (a == "--water-walker") g_waterWalker = true;
@@ -2747,12 +3899,17 @@ int main(int argc, char** argv)
         else if (a == "--water-shadows") shadows = true;   // (the coast's camera then goes wrong from frame 2: not the water's)
         else if (a == "--water-style" && i + 1 < argc) g_waterStyle = float(std::atof(argv[++i]));
         else if (a == "--water-yaw" && i + 1 < argc) g_waterYaw = float(std::atof(argv[++i]));
+        else if (a == "--water-turn" && i + 1 < argc) g_waterTurn = float(std::atof(argv[++i]));
         else if (a == "--water-pitch" && i + 1 < argc) g_waterPitch = float(std::atof(argv[++i]));
         else if (a == "--water-height" && i + 1 < argc) g_waterHeight = float(std::atof(argv[++i]));
         else if (a == "--water-waves" && i + 1 < argc) g_waterWaves = float(std::atof(argv[++i]));
         else if (a == "--water-quality" && i + 1 < argc) g_waterQuality = std::atoi(argv[++i]);
         else if (a == "--water-off") g_waterOff = true;
         else if (a == "--water-night") g_waterNight = true;
+        else if (a == "--moon-light" && i + 1 < argc) g_moonLight = float(std::atof(argv[++i]));
+        else if (a == "--night-dark" && i + 1 < argc) g_nightDark = float(std::atof(argv[++i]));
+        else if (a == "--atmos" && i + 1 < argc) g_atmos = std::atoi(argv[++i]) != 0;
+        else if (a == "--mist" && i + 1 < argc) g_mist = float(std::atof(argv[++i]));
         else if (a == "--water-z" && i + 1 < argc) g_waterZ = float(std::atof(argv[++i]));
         else if (a == "--water-noshadow") shadows = false;
         else if (a == "--water-nohdr") hdr = false;
@@ -2765,9 +3922,36 @@ int main(int argc, char** argv)
         else if (a == "--grass-bench-walker") g_grassBenchWalker = true;
         else if (a == "--grass-bench-cross") { g_grassBenchCross = true; g_grassBenchWalker = true; }
         else if (a == "--grass-bench-night") g_grassBenchNight = true;
+        else if (a == "--grass-bench-lamp") g_grassBenchLamp = true;
         else if (a == "--grass-bench-still") g_grassBenchStill = true;
+        else if (a == "--grass-bench-rise" && i + 1 < argc) g_grassBenchRise = float(std::atof(argv[++i]));
+        else if (a == "--grass-bench-zoom" && i + 2 < argc) {
+            g_grassBenchZoomAt = std::atoi(argv[++i]);
+            g_grassBenchZoomRise = float(std::atof(argv[++i]));
+        }
         else if (a == "--terrain-pbr") { g_terrainPbr = g_grassBench = g_grassBenchStill = true; hdr = true; }
         else if (a == "--grass-bench-storm") g_grassBenchStorm = true;
+        else if (a == "--sand-obstacles") g_sandObstacles = true;
+        else if (a == "--sand-arch") g_sandObstacles = g_sandArch = true;
+        else if (a == "--sand-sim") g_sandSim = true;
+        else if (a == "--sand-proc") g_sandSim = false;
+        else if (a == "--sand-contrast" && i + 1 < argc) g_sandContrast = float(std::atof(argv[++i]));
+        else if (a == "--sand-clear" && i + 1 < argc) g_sandClear = float(std::atof(argv[++i]));
+        else if (a == "--sand-gusts" && i + 1 < argc) g_sandGusts = float(std::atof(argv[++i]));
+        else if (a == "--sand-fog") g_sandFog = 1.0f;
+        else if (a == "--sand-haze") g_sandFog = 0.0f;
+        else if (a == "--sand-wind" && i + 2 < argc) {
+            g_sandWind[0] = float(std::atof(argv[++i]));
+            g_sandWind[1] = float(std::atof(argv[++i]));
+            g_sandWindSet = true;
+        }
+        else if (a == "--bare-ground") g_bareGround = true;
+        else if (a == "--sand-storm") { g_grassFieldOn = g_grassBench = g_grassBenchStorm = g_sandStorm = true; hdr = true; }
+        else if (a == "--sand-blow" && i + 1 < argc) g_sandBlow = float(std::atof(argv[++i]));
+        else if (a == "--sand-res" && i + 1 < argc) g_sandRes = uint32_t(std::atoi(argv[++i]));
+        else if (a == "--wind-storm" && i + 1 < argc) g_windStorm = float(std::atof(argv[++i]));
+        else if (a == "--sand-force" && i + 1 < argc) g_sandForce = float(std::atof(argv[++i]));
+        else if (a == "--sand-ash") g_sandAsh = true;
         else if (a == "--grass-bench-platform") g_grassBenchPlatform = true;
         else if (a == "--grass-bench-loading" && i + 1 < argc) g_grassBenchLoading = std::atoi(argv[++i]);
         else if (a == "--grass-bench-loading-null") g_grassBenchLoadingNull = true;
@@ -2800,6 +3984,7 @@ int main(int argc, char** argv)
         else if (a == "--deform-cube" && i + 1 < argc) g_deformCube = float(std::atof(argv[++i]));
         else if (a == "--moving-cube" && i + 1 < argc) g_movingCube = float(std::atof(argv[++i]));
         else if (a == "--camera-yaw" && i + 1 < argc) g_cameraYaw = float(std::atof(argv[++i]));
+        else if (a == "--camera-pitch" && i + 1 < argc) g_cameraPitch = float(std::atof(argv[++i]));
         else if (a == "--aniso" && i + 1 < argc) anisotropy = uint32_t(std::atoi(argv[++i]));
         else if (a == "--bump" && i + 1 < argc) bump = float(std::atof(argv[++i]));
         else if (a == "--normal-map-test") normalMapTest = true;
@@ -2828,6 +4013,7 @@ int main(int argc, char** argv)
         else if (a == "--sway" && i + 1 < argc) sway = float(std::atof(argv[++i]));
         else if (a == "--lut-sepia") lutSepia = true;
         else if (a == "--taa") taa = true;
+        else if (a == "--fxaa") fxaa = true;
         else if (a == "--sun-view") g_sunView = true;
         else if (a == "--two-lamps") g_twoLamps = true;
         else if (a == "--lamp-wobble") g_lampWobble = true;
@@ -2866,7 +4052,7 @@ int main(int argc, char** argv)
         wc.lpszClassName = "rvk_demo";
         wc.hCursor = LoadCursorA(nullptr, (LPCSTR)IDC_ARROW);
         RegisterClassA(&wc);
-        RECT r{0, 0, LONG(kWidth), LONG(kHeight)};
+        RECT r{0, 0, LONG(g_width), LONG(g_height)};
         AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
         hwnd = CreateWindowA("rvk_demo", "rvk demo", WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT,
                              r.right - r.left, r.bottom - r.top, nullptr, nullptr, wc.hInstance, nullptr);
@@ -2874,7 +4060,7 @@ int main(int argc, char** argv)
 
     Device dev;
     std::string error;
-    if (!dev.Init(hwnd, kWidth, kHeight, &error)) {
+    if (!dev.Init(hwnd, g_width, g_height, &error)) {
         std::printf("rvk init failed: %s\n", error.c_str());
         return 1;
     }
@@ -2885,6 +4071,63 @@ int main(int argc, char** argv)
     dev.SetShadows(shadows);
     dev.SetLightHeadroom(headroom);
     dev.SetHdr(hdr);
+    if (!g_meshIds.empty())
+        dev.LoadMeshIds(g_meshIds.c_str());
+    {
+        Device::CloudParams clouds;
+        clouds.enable = g_clouds && !g_cloudsGame;
+        clouds.half = g_cloudsHalf;
+        clouds.layer = g_cloudLayer;
+        clouds.cover = g_cloudCover;
+        clouds.density = g_cloudThick;
+        clouds.shade = g_cloudShade;
+        clouds.height = g_cloudHeight;
+        clouds.low = g_cloudLow;
+        clouds.quality = uint32_t(g_cloudQual);
+        clouds.sheet = g_cloudSheet;
+        clouds.shadow = g_cloudShadow;
+        clouds.night = g_cloudNight;
+        clouds.vary = g_skyVary;
+        dev.SetSkyTime(g_skyTime);
+        dev.SetSkyPlayfield(g_skyZone);
+        dev.SetCloudParams(clouds);
+    }
+    if (g_smoke) {
+        Device::SmokeParams smoke;
+        smoke.enable = true;
+        smoke.density = g_smokeDensity;
+        smoke.detail = g_smokeWisps;
+        smoke.half = g_smokeHalf;
+        smoke.opacity = g_smokeOpaque;
+        smoke.sandCells = g_sandRes;
+        if (g_smokeBudget >= 0.0f) smoke.budget = g_smokeBudget;
+        if (g_smokeRes > 0.0f) smoke.resolution = g_smokeRes;
+        if (g_smokeQual) smoke.quality = g_smokeQual;
+        dev.SetSmokeParams(smoke);
+    } else if (g_sandRes) {
+        Device::SmokeParams smoke;
+        smoke.sandCells = g_sandRes;
+        dev.SetSmokeParams(smoke);
+    }
+    if (g_rainForce > 0.0f || g_stormForce > 0.0f || g_sandStorm || g_sandForce > 0.0f) {
+        Device::WeatherParams weather;
+        weather.enable = true;
+        weather.force = g_rainForce;
+        weather.stormForce = g_stormForce;
+        weather.strikeRate = g_strikeRate;
+        weather.speed = g_rainSpeed;
+        weather.length = g_rainLength;
+        if (g_wetNow >= 0.0f) dev.SetWetNow(g_wetNow, g_wetNow);
+        dev.SetWeatherParams(weather);
+    }
+    dev.SetSandBlow(g_sandBlow);
+    dev.SetSandProcedural(!g_sandSim);
+    dev.SetSandContrast(g_sandContrast);
+    dev.SetSandClear(g_sandClear);
+    dev.SetSandGusts(g_sandGusts);
+    dev.SetSandFog(g_sandFog);
+    dev.SetWindStorm(g_windStorm);
+    dev.SetSandForce(g_sandForce, g_sandAsh);
     dev.SetTonemap(knee, 1.0f);
     dev.SetBloom(bloom, 1.0f);
     dev.SetEffectGlow(effectGlow);
@@ -2892,6 +4135,10 @@ int main(int argc, char** argv)
     dev.SetSunSoftness(sunSoft);
     dev.SetLeafLight(leaf);
     dev.SetNightGlow(nightGlow);
+    dev.SetMoonLight(g_moonLight);
+    dev.SetNightDark(g_nightDark);
+    dev.SetAtmos(g_atmos);
+    dev.SetMist(g_mist);
     dev.SetContactShadows(contact);
     dev.SetSway(sway);
     dev.SetGrassPush(grassPush);
@@ -2906,6 +4153,7 @@ int main(int argc, char** argv)
     dev.SetPointLightIntensity(ptLight, ptLight);
     dev.SetTessellation(tess, 20.0f, uint32_t(tessLevel));
     dev.SetTaa(taa, sharpen);
+    dev.SetFxaa(fxaa);
     dev.SetGrading(saturation, contrast, warmth, 1.0f, nightTint, vignette);
     if (lutSepia) {                      // --lut-sepia: a 16^3 sepia lookup table in the day slot (the 3D LUT path)
         const uint32_t n = 16;
@@ -2951,7 +4199,7 @@ int main(int argc, char** argv)
     if (particleTest) {
         if (threaded) {
             ThreadedDevice tdev;
-            if (!tdev.Init(nullptr, kWidth, kHeight, &error)) { std::printf("init failed: %s\n", error.c_str()); return 1; }
+            if (!tdev.Init(nullptr, g_width, g_height, &error)) { std::printf("init failed: %s\n", error.c_str()); return 1; }
             tdev.SetHdr(hdr);
             tdev.SetBloom(bloom, 1.0f);
             tdev.SetHideInterface(g_hideUi);
@@ -2963,15 +4211,29 @@ int main(int argc, char** argv)
         std::printf("rendered; screenshot %s\n", shot.c_str());
         return 0;
     }
-    if (!dump.empty() && !shadowTest && g_leafTrees.empty()) dev.RequestFrameDump(dump);
+    if (!dump.empty() && !shadowTest && g_leafTrees.empty() && g_statelPack.empty()) dev.RequestFrameDump(dump);
     std::printf("GPU: %s (Vulkan %u.%u), driver %s\n", dev.Info().gpu.c_str(), VK_API_VERSION_MAJOR(dev.Info().apiVersion),
                 VK_API_VERSION_MINOR(dev.Info().apiVersion), dev.Info().driver.c_str());
 
+    if (cityBench) {
+        // The city bench (render-batching P0): always through ThreadedDevice, its settings as the main device's.
+        ThreadedDevice tdev;
+        std::string err;
+        if (!tdev.Init(nullptr, g_width, g_height, &err)) { std::printf("init failed: %s\n", err.c_str()); return 1; }
+        tdev.SetPixelLighting(pixelLighting);
+        tdev.SetHideInterface(g_hideUi);
+        tdev.SetShadows(shadows);
+        tdev.SetHdr(hdr);
+        tdev.SetBloom(bloom, 1.0f);
+        RunCityBench(tdev, frames, shot, dump);
+        std::printf("rendered; screenshot %s\n", shot.c_str());
+        return 0;
+    }
     if (bench && threaded) {
         // The benchmark through rvk::ThreadedDevice: the time measured is what stays on the calling thread.
         ThreadedDevice tdev;
         std::string err;
-        if (!tdev.Init(nullptr, kWidth, kHeight, &err)) { std::printf("init failed: %s\n", err.c_str()); return 1; }
+        if (!tdev.Init(nullptr, g_width, g_height, &err)) { std::printf("init failed: %s\n", err.c_str()); return 1; }
         double ms = Benchmark(tdev, bench);
         std::printf("bench threaded: frame %.3f ms, of which recording %.3f ms (%.2f us per draw), game work %.1f ms\n", ms,
                     g_benchRecordMs, g_benchRecordMs * 1000.0 / 2450, g_benchGameMs);
@@ -2985,15 +4247,18 @@ int main(int argc, char** argv)
     }
     if (threaded) {
         ThreadedDevice tdev;
-        if (!tdev.Init(hwnd, kWidth, kHeight, &error)) { std::printf("init failed: %s\n", error.c_str()); return 1; }
+        if (!tdev.Init(hwnd, g_width, g_height, &error)) { std::printf("init failed: %s\n", error.c_str()); return 1; }
         tdev.SetPixelLighting(pixelLighting);
         tdev.SetLightingDebug(lightingDebug);
         tdev.SetHideInterface(g_hideUi);
         tdev.SetLightOverride(lightOverride);
         tdev.SetShadows(shadows);
-        if (!dump.empty() && !shadowTest) tdev.RequestFrameDump(dump);
-        if (shadowTest) RunShadowTest(tdev, frames, shot, cacheTest, frameMs, dump);
+        if (!dump.empty() && !shadowTest && g_statelPack.empty()) tdev.RequestFrameDump(dump);
+        if (!g_statelPack.empty()) RunStatelTest(tdev, frames, shot, dump);
+        else if (shadowTest) RunShadowTest(tdev, frames, shot, cacheTest, frameMs, dump);
         else RunDemo(tdev, windowed, stress, frames, shot);
+    } else if (!g_statelPack.empty()) {
+        RunStatelTest(dev, frames, shot, dump);
     } else if (!g_leafTrees.empty()) {
         RunLeafScene(dev, frames, shot, dump);
     } else if (g_grassBench) {

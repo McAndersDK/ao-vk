@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <vector>
 
@@ -41,21 +42,49 @@ ComScope::ComScope(unsigned methodIndex)
 
 ComScope::~ComScope() { LeaveCriticalSection(&g_comLock); }
 
-void RvkLog(const char* fmt, ...)
+// randy-vk.log's path for this process (RANDYVK_LOG, else randy-vk.log in the client folder), settled at the first
+// line anything writes: every writer of the log asks here.
+const char* LogPath()
 {
-    char path[MAX_PATH] = "randy-vk.log";
-    GetEnvironmentVariableA("RANDYVK_LOG", path, sizeof(path));
-    static bool started = false;
-    if (!started) {                              // a session's first line: an old log over 8 MB moves aside
-        started = true;
+    static char path[MAX_PATH] = "randy-vk.log";
+    static const bool settled = [] {
+        GetEnvironmentVariableA("RANDYVK_LOG", path, sizeof(path));
+        // Another client running from the same folder has this log: this one writes randy-vk-2.log (-3, ...), and
+        // RANDYVK_LOG says so to the writers that read it themselves (crash reports, crash.cpp).
+        for (int n = 2; n <= 8; ++n) {
+            char full[MAX_PATH];             // (the name: the whole path, any case - a relative one is per folder)
+            if (!GetFullPathNameA(path, MAX_PATH, full, nullptr)) std::snprintf(full, sizeof(full), "%s", path);
+            std::string name = "randy-vk-log:" + std::string(full);
+            for (char& c : name) c = c == '\\' ? '/' : char(std::tolower(static_cast<unsigned char>(c)));
+            HANDLE mutex = CreateMutexA(nullptr, FALSE, name.c_str());
+            if (mutex && GetLastError() != ERROR_ALREADY_EXISTS)
+                break;                       // (kept open for the process's life: it marks the log as taken)
+            if (mutex) CloseHandle(mutex);
+            std::string next(path);
+            const size_t dot = next.find_last_of('.');
+            std::string base = dot == std::string::npos ? next : next.substr(0, dot);
+            if (n > 2) base = base.substr(0, base.find_last_of('-'));
+            next = base + "-" + std::to_string(n) + ".log";
+            std::snprintf(path, sizeof(path), "%s", next.c_str());
+            SetEnvironmentVariableA("RANDYVK_LOG", path);
+        }
+        // A session's first line: an old log over 8 MB moves aside.
         WIN32_FILE_ATTRIBUTE_DATA a;
         if (GetFileAttributesExA(path, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > (8u << 20))) {
             std::string old(path);
-            size_t dot = old.find_last_of('.');
+            const size_t dot = old.find_last_of('.');
             old = (dot == std::string::npos ? old : old.substr(0, dot)) + ".old.log";
             MoveFileExA(path, old.c_str(), MOVEFILE_REPLACE_EXISTING);
         }
-    }
+        return true;
+    }();
+    (void)settled;
+    return path;
+}
+
+void RvkLog(const char* fmt, ...)
+{
+    const char* path = LogPath();
     if (FILE* f = std::fopen(path, "a")) {
         std::fputs("randy-vk rvk: ", f);
         va_list args;
@@ -80,6 +109,12 @@ bool RvkState::EnsureDevice(uint32_t width, uint32_t height)
         return device->Resize(width, height);
     }
     rvk::SetLogSink([](const char* line) { RvkLog("rvk: %s", line); });
+    {   // the pipeline cache next to randy-vk.ini (the client folder)
+        std::string cache = rvk_settings::IniPath();
+        size_t slash = cache.find_last_of("\\/");
+        cache = (slash == std::string::npos ? std::string() : cache.substr(0, slash + 1)) + "randy-vk.cache";
+        rvk::SetPipelineCachePath(cache.c_str());
+    }
     device = new rvk::ThreadedDevice;
     ++deviceSerial;
     std::string error;
@@ -184,6 +219,10 @@ void RvkState::Present()
     device->EndFrame();
     PollMaterialMaps();       // material maps decoded in the background, uploaded between frames
     ParticleFrame();
+    WeatherFrame();
+    SmokeFrame();
+    TimeFrame();
+    StatelFrame();
     // Hotkeys (Ctrl+Shift+...). Those for options change the setting (saved, shown in the settings window).
     bool chord = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_SHIFT) & 0x8000);
     static bool down[256];
@@ -349,6 +388,11 @@ void RvkState::Present()
         device->SetHideInterface(!device->HideInterface());
         RvkLog("interface %s", device->HideInterface() ? "hidden" : "shown");
     }
+    // Ctrl+Shift+C: a free camera for debugging (not a setting; rvk_freecam.cpp) - the mouse and WASD, the game's own
+    // input held back meanwhile.
+    if (pressed('C'))
+        FreeCamToggle(window);
+    FreeCamFrame(device, window);
     // Ctrl+Shift+F11: lighting debug view (not a setting).
     if (pressed(VK_F11)) {
         device->SetLightingDebug(!device->LightingDebug());
@@ -371,22 +415,53 @@ void RvkState::Present()
         GetLocalTime(&t);
         char base[MAX_PATH];
         std::snprintf(base, sizeof(base), "%srvk-frame-%02d%02d%02d", dir, t.wHour, t.wMinute, t.wSecond);
-        device->RequestFrameDump(std::string(base) + ".txt");
+        // (Alt too: the next 60 frames' draws, <base>-NN.txt - what the game changes frame to frame.)
+        const bool burst = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+        device->RequestFrameDump(std::string(base) + ".txt", burst ? 60 : 1);
         device->RequestScreenshot(std::string(base) + ".bmp");
         RvkLog("frame dump: %s.txt / .bmp", base);
     }
     f9Down = f9;
     ProfileSweep(pressed('O'));
+    // Slow frames: averages hide stutter, so each frame's time is checked too. A frame over 50 ms gets a line with
+    // the time of day (players can match it to what they did), up to 5 per 600 frames; the 600-frame line counts
+    // them all.
+    static LARGE_INTEGER qpcFreq, qpcLast;
+    static double slowest;
+    static unsigned over33, over100, slowLogged;
+    LARGE_INTEGER qpcNow;
+    QueryPerformanceCounter(&qpcNow);
+    if (!qpcFreq.QuadPart) QueryPerformanceFrequency(&qpcFreq);
+    if (qpcLast.QuadPart) {
+        const double ms = double(qpcNow.QuadPart - qpcLast.QuadPart) * 1000.0 / double(qpcFreq.QuadPart);
+        slowest = std::max(slowest, ms);
+        over33 += ms > 33.3;
+        over100 += ms > 100.0;
+        if (ms > 50.0 && slowLogged < 5) {
+            ++slowLogged;
+            SYSTEMTIME t;
+            GetLocalTime(&t);
+            RvkLog("slow frame: %.0f ms at %02d:%02d:%02d.%03d", ms, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
+        }
+    }
+    qpcLast = qpcNow;
     // Heartbeat: shows whether frames keep coming (a frozen picture vs. a hung game).
     static unsigned frames;
     static DWORD lastTick = GetTickCount();
     if (++frames % 600 == 0) {
         DWORD now = GetTickCount();
         double frameMs = double(now - lastTick) / 600.0;
-        RvkLog("presented %u frames: %.1f fps, %.2f ms/frame, %lld draws/frame", frames, 1000.0 / std::max(frameMs, 0.001),
-               frameMs, (long long)(g_drawCalls / 600));
+        RvkLog("presented %u frames: %.1f fps, %.2f ms/frame, %lld draws/frame; slowest %.0f ms, %u over 33 ms, "
+               "%u over 100 ms", frames, 1000.0 / std::max(frameMs, 0.001), frameMs, (long long)(g_drawCalls / 600),
+               slowest, over33, over100);
+        const TextureWrites w = TakeTextureWrites();
+        RvkLog("texture writes: %.1f a frame (%.1f only the rows locked), %.0f KB and %.3f ms on the game's thread a "
+               "frame; the game's textures alive: %d", w.locks / 600.0, w.partial / 600.0,
+               double(w.bytes) / 1024.0 / 600.0, w.ms / 600.0, GameTexturesAlive());
         g_drawCalls = 0;
         lastTick = now;
+        slowest = 0;
+        over33 = over100 = slowLogged = 0;
     }
 }
 

@@ -510,7 +510,7 @@ void __fastcall ObserverAfter(void* visual, void*, void* viewport) { catrender::
 
 void Install(HMODULE orig)
 {
-    if (GetMode("Scene", Mode::Off) != Mode::On) return;
+    if (GetMode("Scene", Mode::On) != Mode::On) return;
     g_orig = orig;
     const serialize::Api& a = serialize::Get();
     if (!a.complete || !a.findData || !a.addData || !a.findObject) {

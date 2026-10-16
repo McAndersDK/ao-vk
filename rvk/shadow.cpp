@@ -8,6 +8,7 @@
 #include "internal.h"
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <climits>
@@ -66,6 +67,20 @@ int detail::BoxInClip(const float mn[3], const float mx[3], const d3d::Matrix& v
     return 0;
 }
 
+bool detail::BoxOutsideAffine(const float mn[3], const float mx[3], const d3d::Matrix& vp)
+{
+    for (int j = 0; j < 2; ++j) {
+        float c = vp.m[3][j], e = 0.0f;
+        for (int i = 0; i < 3; ++i) {
+            c += 0.5f * (mn[i] + mx[i]) * vp.m[i][j];
+            e += 0.5f * (mx[i] - mn[i]) * std::fabs(vp.m[i][j]);
+        }
+        if (c + e < -1.0f || c - e > 1.0f)
+            return true;
+    }
+    return false;
+}
+
 namespace {
 
 void Normalize(float v[3])
@@ -85,11 +100,23 @@ float Dot(const float a[3], const float b[3]) { return a[0] * b[0] + a[1] * b[1]
 
 }  // namespace
 
+namespace {
+double g_fixedClockStep = 0.0;                   // SetFixedClock: seconds a frame (0 = real time)
+uint64_t g_fixedClockTicks = 0;
+}  // namespace
+
 double Device::SwayClock()
 {
+    if (g_fixedClockStep > 0.0)
+        return 1000.0 + double(g_fixedClockTicks) * g_fixedClockStep;
     using namespace std::chrono;
     return duration<double>(steady_clock::now().time_since_epoch()).count();
 }
+
+// Tests and benchmarks: the clock (simulations, wind, sway) steps `step` seconds a frame instead of following real
+// time, so a demo can render flat out - no sleeping, the GPU stays at its clocks - and still simulate at a game's pace.
+void Device::SetFixedClock(double step) { g_fixedClockStep = step; }
+void Device::TickFixedClock() { ++g_fixedClockTicks; }
 
 // The pose of a remembered caster while out of view: its recorded sway played back and forth, starting from the
 // latest sample (backwards first), interpolated between samples. Without a recording: the last pose seen.
@@ -311,7 +338,7 @@ bool Device::CreateShadowResources(std::string* error)
         gi.pColorBlendState = &cb;
         gi.pDynamicState = &ds;
         gi.layout = m_shadowPipelineLayout;
-        ok = Check(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &gi, nullptr, &m_shadowPipelines[alphaTest]),
+        ok = Check(vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &gi, nullptr, &m_shadowPipelines[alphaTest]),
                    "shadow pipeline", error);
     }
     // A canopy's leaves (leaves.cpp): leaf_shadow.vert, cut out by shadow.frag. Not fatal.
@@ -335,7 +362,7 @@ bool Device::CreateShadowResources(std::string* error)
         gi.pColorBlendState = &cb;
         gi.pDynamicState = &ds;
         gi.layout = m_shadowPipelineLayout;
-        if (!Check(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &gi, nullptr, &m_leafShadowPipeline),
+        if (!Check(vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &gi, nullptr, &m_leafShadowPipeline),
                    "leaf shadow pipeline", &leafError))
             m_leafShadowPipeline = VK_NULL_HANDLE;
         vkDestroyShaderModule(m_device, leafVert, nullptr);
@@ -348,6 +375,7 @@ bool Device::CreateShadowResources(std::string* error)
 void Device::DestroyShadowResources()
 {
     m_casterCache.clear();                       // their arena goes with the static one (DestroyStaticGeometry)
+    ++m_casterCacheEpoch;
     for (auto& [tag, b] : m_deadBuffers) vmaDestroyBuffer(m_allocator, b.first, b.second);
     m_deadBuffers.clear();
     for (VkPipeline& p : m_shadowPipelines) if (p) { vkDestroyPipeline(m_device, p, nullptr); p = VK_NULL_HANDLE; }
@@ -432,6 +460,21 @@ void Device::RecordShadowCaster(uint32_t primitive, uint32_t fvf, uint32_t strid
 {
     if (!IsShadowCaster(primitive, fvf))
         return;
+    // (Profiling: its share of "draw: geometry + casters", sampled as the per-draw sections are.)
+    struct Timed {
+        Device* d;
+        double since;
+        ~Timed() { if (since > 0.0) d->ProfileCpuAddMs("draw: shadow casters (of geometry + casters)", (d->ProfileCpu() - since) * 16.0); }
+    } timed{this, (m_frameNumber & 15) == 0 ? ProfileCpu() : 0.0};
+    // A still piece of a placed object, which casts from the playfield's list (statels.cpp) wherever it is: not again
+    // as drawn - its key, the cache's books and a second shadow item for the same shadow cost the render thread over
+    // a city (~900 of 4000 casters, user 2026-10-14). (One that sways or carries leaves still casts as drawn: ours
+    // stands still.)
+    if (VisualKind(m_drawVisualKind) == VisualKind::Static && !(m_drawSway[3] > 0.5f) && !m_drawLeaves &&
+        DrawStatelCasting(vertexCount, indexCount)) {
+        ++m_statelCoveredThisFrame;
+        return;
+    }
     UpdateFrameEye();
     // Most casters (a whole frame's worth) share one camera, the world's: try the last match first, not the scan.
     uint32_t view = m_casterViewLast;
@@ -439,7 +482,12 @@ void Device::RecordShadowCaster(uint32_t primitive, uint32_t fvf, uint32_t strid
         return std::memcmp(&m_casterViews[v].view, &m_view, sizeof(m_view)) == 0 &&
                std::memcmp(&m_casterViews[v].proj, &m_proj, sizeof(m_proj)) == 0;
     };
-    if (view >= m_casterViews.size() || !matchesView(view)) {
+    // (The camera unchanged since the last caster this frame: its view, without comparing the matrices.)
+    const bool sameCamera = m_casterViewGen == m_cameraGen && m_casterViewFrame == m_frameNumber;
+    m_casterViewGen = m_cameraGen;
+    m_casterViewFrame = m_frameNumber;
+    if (sameCamera && view < m_casterViews.size()) {
+    } else if (view >= m_casterViews.size() || !matchesView(view)) {
         view = 0;
         while (view < m_casterViews.size() && !matchesView(view))
             ++view;
@@ -464,8 +512,41 @@ void Device::RecordShadowCaster(uint32_t primitive, uint32_t fvf, uint32_t strid
     c.world = m_world;
     c.generation = m_ringGeneration;
     ShadowCutout(fvf, &c.texture, &c.texOffset, &c.alphaRef);
-    uint64_t key = CasterKey(primitive, fvf, stride, vertices, vertexCount, indices, indexCount, c.texture, c.texOffset,
-                             c.boundsMin, c.boundsMax);
+    if (std::strncmp(m_drawVisualName, "RCATMesh", 8) == 0 && m_characterSpots.size() < 256)
+        m_characterSpots.push_back({m_world.m[3][0], m_world.m[3][1], m_world.m[3][2]});   // (a character's body)
+    // Its key and box: kept with its object (the per-object cache, objects.cpp) while CasterKey's other inputs - the
+    // cut-out's kind, whether it sways - stay; its mesh and matrix are the object.
+    ObjectEntry* const object = m_drawObject;
+    uint64_t stamp = 0;
+    if (object) {
+        const uint32_t in[6] = {c.texture ? c.texture->m_width : 0u, c.texture ? c.texture->m_height : 0u,
+                                c.texture ? uint32_t(c.texture->m_format) : ~0u, uint32_t(c.texOffset + 1),
+                                (m_drawSway[3] > 0.5f ? 1u : 0u) | (m_drawLeaves ? 2u : 0u), primitive ^ fvf << 8};
+        stamp = HashBytes(in, sizeof(in), 0xCA57E5ull) | 1u;
+    }
+    uint64_t key;
+    if (object && object->casterStamp == stamp && !m_objectVerify) {
+        key = object->casterKey;
+        std::memcpy(c.boundsMin, object->casterMin, sizeof(c.boundsMin));
+        std::memcpy(c.boundsMax, object->casterMax, sizeof(c.boundsMax));
+    } else {
+        key = CasterKey(primitive, fvf, stride, vertices, vertexCount, indices, indexCount, c.texture, c.texOffset,
+                        c.boundsMin, c.boundsMax);
+        if (object) {
+            if (object->casterStamp == stamp &&      // (RANDYVK_OBJECT_VERIFY: worked out again; must be the same)
+                (object->casterKey != key || std::memcmp(object->casterMin, c.boundsMin, sizeof(c.boundsMin)) != 0 ||
+                 std::memcmp(object->casterMax, c.boundsMax, sizeof(c.boundsMax)) != 0) &&
+                m_objectMismatches++ < 20)
+                Log("object cache: caster key %016llx kept, %016llx now (v %u i %u at %.2f %.2f %.2f)",
+                    (unsigned long long)object->casterKey, (unsigned long long)key, vertexCount, indexCount,
+                    double(m_world.m[3][0]), double(m_world.m[3][1]), double(m_world.m[3][2]));
+            if (object->casterKey != key) object->cached = nullptr;
+            object->casterStamp = stamp;
+            object->casterKey = key;
+            std::memcpy(object->casterMin, c.boundsMin, sizeof(c.boundsMin));
+            std::memcpy(object->casterMax, c.boundsMax, sizeof(c.boundsMax));
+        }
+    }
     c.key = key;
     std::memcpy(c.sway, m_drawSway, sizeof(c.sway));
     c.draw = m_frameDraw;
@@ -474,13 +555,65 @@ void Device::RecordShadowCaster(uint32_t primitive, uint32_t fvf, uint32_t strid
     c.kind = m_drawVisualKind;
     c.leafKey = m_drawLeaves ? m_drawLeafKey : 0;
     m_casters.push_back(c);
-    auto cached = m_casterCache.find(key);
-    if (cached != m_casterCache.end()) {
-        CachedCaster& e = cached->second;
+    if (VisualKind(c.kind) == VisualKind::Static) {
+        if (m_statelVerified[0] == 0 || m_statelVerified[1] == 0)
+            CheckStatelDraw(m_world, vertexCount, indexCount);   // (statels.cpp: is our placement the game's?)
+        // A piece of a placed object, which casts from the playfield's list wherever it is: not remembered (one
+        // remembered under another's key is what made the wall's shadow come and go - sun42).
+        if (DrawStatelCasting(vertexCount, indexCount)) {
+            ++m_statelCoveredThisFrame;
+            auto stale = m_casterCache.find(key);
+            if (stale != m_casterCache.end())
+                ForgetCachedCaster(stale);
+            return;
+        }
+    }
+    // Remembered: its entry kept with the object while no remembered caster went (their epoch).
+    CachedCaster* remembered = nullptr;
+    if (object && object->cached && object->cachedEpoch == m_casterCacheEpoch && !m_objectVerify) {
+        remembered = object->cached;
+    } else {
+        auto cached = m_casterCache.find(key);
+        if (cached != m_casterCache.end()) {
+            remembered = &cached->second;
+            if (object && object->cached && object->cachedEpoch == m_casterCacheEpoch && object->cached != remembered &&
+                m_objectMismatches++ < 20)
+                Log("object cache: remembered caster %016llx kept at another entry", (unsigned long long)key);
+            if (object) {
+                object->cached = remembered;
+                object->cachedEpoch = m_casterCacheEpoch;
+            }
+        }
+    }
+    if (remembered) {
+        CachedCaster& e = *remembered;
         double now = m_frameClock;               // per frame: a clock read per caster costs more than it buys
         e.lastSeen = m_frameNumber;
         e.lastSeenTime = now;
         if (std::memcmp(&e.world, &m_world, sizeof(m_world)) != 0) {
+            // Only what can sway records its sway: plants (marked) and cut-out casters (crowns, leaves, fronds - the
+            // game sways its trees by tilting their matrices). A solid caster's matrix changing is the game's
+            // rounding, or another piece taken for it: a wall's segments recorded "sway" and played it back out of
+            // view - their shadows blinked (user, 2026-10-13).
+            const bool canSway = c.texture != nullptr || c.sway[3] > 0.5f || c.leafKey != 0;
+            if (!canSway) {
+                float apart = 0.0f;
+                for (int a = 0; a < 4; ++a)
+                    for (int b = 0; b < 3; ++b)
+                        apart = std::max(apart, std::fabs(e.world.m[a][b] - m_world.m[a][b]) / (a == 3 ? 0.05f : 0.01f));
+                if (apart > 1.0f && m_cacheCollisionsLogged < 20) {   // (moved more than 5 cm / turned more than ~0.6 deg)
+                    ++m_cacheCollisionsLogged;
+                    Log("caster cache: solid %016llx changed pose while seen: at (%.2f %.2f %.2f) -> (%.2f %.2f %.2f), row 0 "
+                        "(%.3f %.3f %.3f) -> (%.3f %.3f %.3f), v %u i %u", (unsigned long long)key,
+                        double(e.world.m[3][0]), double(e.world.m[3][1]), double(e.world.m[3][2]), double(m_world.m[3][0]),
+                        double(m_world.m[3][1]), double(m_world.m[3][2]), double(e.world.m[0][0]), double(e.world.m[0][1]),
+                        double(e.world.m[0][2]), double(m_world.m[0][0]), double(m_world.m[0][1]), double(m_world.m[0][2]),
+                        c.vertexCount, c.indexCount);
+                }
+                e.world = m_world;
+                e.sway.clear();
+                return;
+            }
             e.world = m_world;                   // the latest pose: where an out-of-view playback starts
             if (e.sway.size() < kSwaySamples && now - e.lastSwaySample >= kSwayStep) {
                 e.sway.push_back(m_world);
@@ -490,11 +623,51 @@ void Device::RecordShadowCaster(uint32_t primitive, uint32_t fvf, uint32_t strid
         return;
     }
     CasterStreak& streak = m_casterStreaks[key];
-    if (streak.lastFrame + 1 == m_frameNumber) ++streak.count;
-    else if (streak.lastFrame != m_frameNumber) streak.count = 1;
+    const float* t = m_world.m[3];
+    // (A new streak has count 0: started below, even on frame 1 - its lastFrame 0 looked like last frame's, its place
+    // (0, 0, 0) like a move, and the caster was never remembered.)
+    if (streak.count && streak.lastFrame + 1 == m_frameNumber) {
+        ++streak.count;
+        const float dx = t[0] - streak.at[0], dy = t[1] - streak.at[1], dz = t[2] - streak.at[2];
+        if (dx * dx + dy * dy + dz * dz > 0.01f * 0.01f) streak.moved = true;
+    } else if (!streak.count || streak.lastFrame != m_frameNumber) {
+        streak.count = 1;
+        std::memcpy(streak.at, t, sizeof(streak.at));
+        streak.moved = false;
+        ++m_cacheStreakStarts;
+    }
     streak.lastFrame = m_frameNumber;
-    if (streak.count >= kPromoteFrames && vertices)     // (skinned on the GPU: no vertices here to keep)
-        CacheCaster(key, c, vertices, indices);
+    if (streak.count < kPromoteFrames)
+        return;
+    // Remembered only what stands still in the world: not what moved while seen (a character's gear - idle, its
+    // pieces shifted, each new key remembered at an old place and forgotten again: small shadows blinking ~0.4 s,
+    // user 2026-10-13), nor a character's own. Except what sways: the game tilts its trees' matrices round a pivot
+    // off their origin, so a swaying crown moves - refused, the trees' shadows went missing out of view (2026-10-14).
+    const bool canSway = c.texture != nullptr || c.sway[3] > 0.5f || c.leafKey != 0;
+    if ((streak.moved && !canSway) || c.owner != 0) {
+        ++m_cacheRefusedMoving;
+        return;
+    }
+    {
+        // (Small, inside a character's space: its gear.)
+        float centre[3], size = 0.0f;
+        for (int j = 0; j < 3; ++j) size = std::max(size, c.boundsMax[j] - c.boundsMin[j]);
+        const float mc[3] = {0.5f * (c.boundsMin[0] + c.boundsMax[0]), 0.5f * (c.boundsMin[1] + c.boundsMax[1]),
+                             0.5f * (c.boundsMin[2] + c.boundsMax[2])};
+        for (int j = 0; j < 3; ++j)
+            centre[j] = mc[0] * m_world.m[0][j] + mc[1] * m_world.m[1][j] + mc[2] * m_world.m[2][j] + m_world.m[3][j];
+        const float scale = std::sqrt(m_world.m[0][0] * m_world.m[0][0] + m_world.m[0][1] * m_world.m[0][1] +
+                                      m_world.m[0][2] * m_world.m[0][2]);
+        if (size * scale < 3.0f && NearCharacter(centre)) {
+            ++m_cacheRefusedMoving;
+            return;
+        }
+    }
+    if (!vertices) {
+        ++m_cacheRefusedNoVertices;
+        return;
+    }
+    CacheCaster(key, c, vertices, indices);     // (skinned on the GPU: no vertices here to keep)
 }
 
 // Alpha-tested and alpha-blended casters are cut out where texture 0 is transparent: the alpha test's reference,
@@ -510,6 +683,9 @@ void Device::ShadowCutout(uint32_t fvf, Texture** texture, int* texOffset, float
     int offset = DecodeFvf(fvf).offset[4];
     if (offset < 0)
         return;
+    if (m_textures[0]->m_opaque)
+        return;                                  // (every pixel opaque: nothing to cut out - a solid caster, which also
+                                                 // outlives its texture when the game lets that go out of view)
     *texture = m_textures[0];
     *texOffset = offset;
     float ref = alphaTest ? float(m_rs[d3d::RS_ALPHAREF] & 0xFF) / 255.0f : 0.0f;
@@ -556,13 +732,39 @@ uint64_t Device::CasterKey(uint32_t primitive, uint32_t fvf, uint32_t stride, co
     int32_t at[3] = {int32_t(std::floor(m_world.m[3][0] * 4.0f)), int32_t(std::floor(m_world.m[3][1] * 4.0f)),
                      int32_t(std::floor(m_world.m[3][2] * 4.0f))};
     key = HashBytes(at, sizeof(at), key);
-    return HashBytes(&texture, sizeof(texture), key ^ uint64_t(texOffset + 1));
+    // ... and, unless it sways, which way it is turned: its heading round the vertical (to 5 degrees), whether it is
+    // mirrored, and where its up points (to a quarter: tilts and the game's rounding stay within). A city wall of one
+    // mesh turned round one pivot was one caster to the cache - one segment remembered, the others' rotations played
+    // back as "sway" (user, 2026-10-13); with the heading alone two of its pieces turned 180 degrees about a level axis
+    // (one heading, not mirrored) were one - one remembered, the other's shadow missing whenever the game didn't draw
+    // them (2026-10-14). (Its whole rotation finely was too fine: a slightly tilting thing changed key and was never
+    // remembered.) Plants swaying by a tilting matrix barely turn and keep one key.
+    if (!(m_drawSway[3] > 0.5f) && !m_drawLeaves) {
+        const auto& w = m_world.m;
+        const float heading = std::atan2(w[0][2], w[0][0]);
+        const float det = w[0][0] * (w[1][1] * w[2][2] - w[1][2] * w[2][1]) -
+                          w[0][1] * (w[1][0] * w[2][2] - w[1][2] * w[2][0]) +
+                          w[0][2] * (w[1][0] * w[2][1] - w[1][1] * w[2][0]);
+        const float upLen = std::max(std::sqrt(w[1][0] * w[1][0] + w[1][1] * w[1][1] + w[1][2] * w[1][2]), 1e-6f);
+        const int32_t facing[5] = {int32_t(std::lround(heading * (180.0f / 3.14159265f) / 5.0f)), det < 0.0f ? 1 : 0,
+                                   int32_t(std::lround(w[1][0] / upLen * 4.0f)), int32_t(std::lround(w[1][1] / upLen * 4.0f)),
+                                   int32_t(std::lround(w[1][2] / upLen * 4.0f))};
+        key = HashBytes(facing, sizeof(facing), key ^ 0xFACEull);
+    }
+    // The cut-out texture by its kind (size, format), not which one: a flip-book (an animated glow on a character's gear
+    // changes its texture every ~0.3 s) is one caster, not one per frame of it - each was remembered, then forgotten
+    // as unseen in view: a shadow blinking steadily (user, 2026-10-13).
+    const uint32_t kind[3] = {texture ? texture->m_width : 0u, texture ? texture->m_height : 0u,
+                              texture ? uint32_t(texture->m_format) : ~0u};
+    return HashBytes(kind, sizeof(kind), key ^ uint64_t(texOffset + 1));
 }
 
 void Device::CacheCaster(uint64_t key, const ShadowCaster& c, const void* vertices, const uint16_t* indices)
 {
-    if (m_casterCache.size() >= kMaxCachedCasters)
+    if (m_casterCache.size() >= kMaxCachedCasters) {
+        ++m_cacheRefusedFull;
         return;
+    }
     CachedCaster e{};
     e.primitive = c.primitive;
     e.stride = c.stride;
@@ -596,8 +798,12 @@ void Device::CacheCaster(uint64_t key, const ShadowCaster& c, const void* vertic
         float d = std::max(std::max(e.boundsMin[j] - m_frameEye[j], 0.0f), m_frameEye[j] - e.boundsMax[j]);
         d2 += d * d;
     }
-    if (d2 > 9.0f * kCasterCacheRange * kCasterCacheRange)
+    const float keep = CasterKeepRange();
+    if (d2 > keep * keep) {
+        ++m_cacheRefusedFar;
+        m_cacheRefusedFarD = std::sqrt(d2);
         return;
+    }
     // One slot of the caster arena: the vertices (at a multiple of the stride, so the draw's vertexOffset is exact),
     // then the indices (2-aligned: firstIndex = offset / 2). Shared buffers let remembered casters batch together
     // (each in a buffer of its own was a batch, binds and an indirect call of its own, per cascade and cube face).
@@ -614,25 +820,71 @@ void Device::CacheCaster(uint64_t key, const ShadowCaster& c, const void* vertic
     if (c.indexCount)
         std::memcpy(dst + indexAt, indices, size_t(c.indexCount) * 2);
     m_casterCache.emplace(key, e);
+    AddCoverMesh(key, e, vertices, indices);
+    if (m_cacheTraceLines < 300 && m_frameNumber > 600) {   // (churn: see UpdateCasterCache)
+        ++m_cacheTraceLines;
+        Log("caster cache frame %llu: remembered %016llx box (%.1f %.1f %.1f)..(%.1f %.1f %.1f) v %u",
+            (unsigned long long)m_frameNumber, (unsigned long long)key, double(e.boundsMin[0]), double(e.boundsMin[1]),
+            double(e.boundsMin[2]), double(e.boundsMax[0]), double(e.boundsMax[1]), double(e.boundsMax[2]), e.vertexCount);
+    }
 }
 
 void Device::ForgetCachedCaster(std::unordered_map<uint64_t, CachedCaster>::iterator it)
 {
     ArenaFree(it->second.chunk, it->second.slot, it->second.slotBytes);   // reused once the GPU is done with it
+    auto cover = m_coverMeshes.find(it->first);
+    if (cover != m_coverMeshes.end()) {
+        m_coverTriangles -= cover->second.tri.size() / 9;
+        m_coverMeshes.erase(cover);
+        ++m_coverMeshGen;
+    }
     m_casterCache.erase(it);
+    ++m_casterCacheEpoch;                        // (the objects' pointers to remembered casters: ObjectEntry::cached)
 }
 
+// The game let a texture go (out of view, it unloads them): the remembered casters cut out by it are kept, solid -
+// forgotten, a city wall's remembered shadow lost piece after piece while the camera looked away (user, 2026-10-13).
 void Device::ForgetCasterTexture(Texture* texture)
 {
-    for (auto it = m_casterCache.begin(); it != m_casterCache.end();)
-        if (it->second.texture == texture) { auto next = std::next(it); ForgetCachedCaster(it); it = next; }
-        else ++it;
+    for (auto& [key, e] : m_casterCache)
+        if (e.texture == texture) {
+            e.texture = nullptr;
+            e.texOffset = -1;
+            e.alphaRef = -1.0f;
+            ++m_cacheKeptSolid;
+        }
 }
 
 // End of frame: drop streaks that were broken, and cached casters that are gone - ones in the middle of the view
 // that the game didn't draw (removed, or replaced by another level of detail) - or that are far away.
+bool Device::NearCharacter(const float c[3]) const
+{
+    for (const auto* spots : {&m_characterSpots, &m_characterSpotsPrev})
+        for (const auto& s : *spots) {
+            const float dx = c[0] - s[0], dz = c[2] - s[2], dy = c[1] - s[1];
+            if (dx * dx + dz * dz < 1.2f * 1.2f && dy > -0.5f && dy < 2.5f)
+                return true;
+        }
+    return false;
+}
+
 void Device::UpdateCasterCache()
 {
+    m_characterSpotsPrev.swap(m_characterSpots);   // (this frame's the last's; the next frame's anew)
+    m_characterSpots.clear();
+    if (m_frameNumber % 300 == 0) {
+        Log("caster cache: %zu remembered, %zu streaks; this frame %u streaks started, refused %u far (last %.0f from the "
+            "eye (%.1f %.1f %.1f)), %u full, %u without vertices, %u moving or a character's; %u kept "
+            "solid when the game let their texture go",
+            m_casterCache.size(), m_casterStreaks.size(), m_cacheStreakStarts, m_cacheRefusedFar,
+            double(m_cacheRefusedFarD), double(m_frameEye[0]), double(m_frameEye[1]), double(m_frameEye[2]),
+            m_cacheRefusedFull, m_cacheRefusedNoVertices, m_cacheRefusedMoving, m_cacheKeptSolid);
+        if (!m_statelItems.empty())
+            Log("placed objects: playfield %u, %u pieces cast, %u drawn ones not remembered (last frame); placement %s",
+                m_statelPlayfield, m_statelItemsThisFrame, m_statelCoveredLast,
+                StatelPlacementState().c_str());
+    }
+    m_cacheStreakStarts = m_cacheRefusedFar = m_cacheRefusedFull = m_cacheRefusedNoVertices = m_cacheRefusedMoving = 0;
     for (auto it = m_casterStreaks.begin(); it != m_casterStreaks.end();)
         it = it->second.lastFrame == m_frameNumber ? std::next(it) : m_casterStreaks.erase(it);
     if (!m_frameEyeValid)
@@ -646,16 +898,29 @@ void Device::UpdateCasterCache()
                 float d = std::max(std::max(e.boundsMin[j] - m_frameEye[j], 0.0f), m_frameEye[j] - e.boundsMax[j]);
                 d2 += d * d;
             }
-            // The game draws whatever reaches into the view. A box test against the view is loose near the edges
-            // (it reports boxes just off screen as partly visible), so only the box's centre on screen counts as
-            // "the game would draw it": if it then wasn't drawn, it's gone.
+            // In view and not drawn may mean gone (removed, or replaced by another level of detail) - or only left out
+            // by the game. A box test against the view is loose near the edges (it reports boxes just off screen as
+            // partly visible), so only the box's centre on screen counts as in view.
             float centre[3];
             for (int j = 0; j < 3; ++j) centre[j] = 0.5f * (e.boundsMin[j] + e.boundsMax[j]);
-            if (d2 > 16.0f * kCasterCacheRange * kCasterCacheRange) {
+            const float forget = CasterKeepRange() * (4.0f / 3.0f);
+            if (d2 > forget * forget) {
                 ++m_forgottenFar;
                 ForgetCachedCaster(it);
-            } else if (m_frameViewProjValid && BoxInClip(centre, centre, m_frameViewProj, true) == 1) {
+            } else if (m_frameViewProjValid && d2 < 20.0f * 20.0f && m_frameNumber - e.lastSeen >= 60 &&
+                       BoxInClip(centre, centre, m_frameViewProj, true) == 1) {
+                // (Gone only when near - within 20 units - and unseen in view a second: the game doesn't draw all it
+                // has in view - its occlusion culling and levels of detail leave out a wall's top a little off -
+                // and forgotten after one frame unseen, those pieces' shadows went missing, user 2026-10-13.)
                 ++m_forgottenInView;
+                if (m_cacheTraceLines < 300) {   // (churn: forgotten as unseen in view, remembered again later)
+                    ++m_cacheTraceLines;
+                    Log("caster cache frame %llu: forgot %016llx (in view, not drawn) box (%.1f %.1f %.1f)..(%.1f %.1f %.1f) "
+                        "v %u, unseen %llu frames", (unsigned long long)m_frameNumber, (unsigned long long)it->first,
+                        double(e.boundsMin[0]), double(e.boundsMin[1]), double(e.boundsMin[2]), double(e.boundsMax[0]),
+                        double(e.boundsMax[1]), double(e.boundsMax[2]), e.vertexCount,
+                        (unsigned long long)(m_frameNumber - e.lastSeen));
+                }
                 ForgetCachedCaster(it);
             }
         }
@@ -668,12 +933,16 @@ void Device::UpdateCasterCache()
 // Whether the current draw uses the world camera's projection (3D interface previews use their own).
 bool Device::WorldCamera() const
 {
-    return std::memcmp(&m_proj, &m_shadowWorldProj, sizeof(m_proj)) == 0;
+    if (m_worldCameraGen != m_cameraGen) {       // (asked several times a draw: once per camera)
+        m_worldCameraSame = std::memcmp(&m_proj, &m_shadowWorldProj, sizeof(m_proj)) == 0;
+        m_worldCameraGen = m_cameraGen;
+    }
+    return m_worldCameraSame;
 }
 
 bool Device::ShadowReceiver(uint32_t fvf) const
 {
-    if (m_drawIsLabel || !WorldCamera() || !m_shadows || !m_shadowValid || m_target != m_main || (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZ ||
+    if (m_drawIsLabel || !WorldCamera() || !m_shadows || !ShadingOn() || m_target != m_main || (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZ ||
         !m_rs[d3d::RS_ZENABLE] || VisualKind(m_drawVisualKind) == VisualKind::Sky)   // the sky: no shadows on it
         return false;
     if (!m_rs[d3d::RS_ALPHABLENDENABLE])
@@ -696,7 +965,7 @@ bool Device::IsMultiplyPass() const
 // ground = base * min(1, lightmap * shadow + ambient + lights).
 bool Device::ShadowInLightmap(uint32_t fvf) const
 {
-    return !m_drawIsLabel && WorldCamera() && m_shadows && m_shadowValid && m_target == m_main && m_rs[d3d::RS_ZENABLE] &&
+    return !m_drawIsLabel && WorldCamera() && m_shadows && ShadingOn() && m_target == m_main && m_rs[d3d::RS_ZENABLE] &&
            IsTerrain(fvf) && IsMultiplyPass();
 }
 
@@ -739,7 +1008,7 @@ bool Device::IsBlobShadow(uint32_t primitive, uint32_t fvf, const void* vertices
 // pass divides its local lights by the same shadow factor so only the (baked) sunlight ends up shadowed.
 bool Device::ShadowCompensated(uint32_t fvf) const
 {
-    return !m_drawIsLabel && WorldCamera() && m_shadows && m_shadowValid && m_target == m_main &&
+    return !m_drawIsLabel && WorldCamera() && m_shadows && ShadingOn() && m_target == m_main &&
            (fvf & d3d::FVF_POSITION_MASK) == d3d::FVF_XYZ && m_rs[d3d::RS_ZENABLE] && IsMultiplyPass() &&
            VisualKind(m_drawVisualKind) != VisualKind::Sky;
 }
@@ -760,7 +1029,7 @@ void Device::CaptureSun(const d3d::Light& l)
 }
 
 // A model-space box through a matrix: the world-space box around it.
-static void TransformBounds(const float mn[3], const float mx[3], const d3d::Matrix& m, float outMin[3], float outMax[3])
+void detail::TransformBounds(const float mn[3], const float mx[3], const d3d::Matrix& m, float outMin[3], float outMax[3])
 {
     for (int j = 0; j < 3; ++j) {
         float c = m.m[3][j], e = 0.0f;
@@ -813,11 +1082,14 @@ void Device::CollectShadowItems()
         it.kind = c.kind;
         it.leafKey = c.leafKey;
         std::memcpy(it.sway, c.sway, sizeof(it.sway));
+        it.cacheKey = c.key;
         m_shadowItems.push_back(it);
         drawOf.push_back(c.draw);
     }
     GroupShadowItems(drawOf);
     for (auto& [key, e] : m_casterCache) {
+        if (m_shadowMemory == 0)
+            break;                               // (RVK_ShadowMem off: only what the game drew this frame)
         if (e.lastSeen == m_frameNumber && std::find(staleKeys.begin(), staleKeys.end(), key) == staleKeys.end())
             continue;                            // drawn this frame: in the list above
         ShadowItem it;
@@ -842,8 +1114,15 @@ void Device::CollectShadowItems()
         it.kind = e.kind;
         it.leafKey = e.leafKey;
         std::memcpy(it.sway, e.plantSway, sizeof(it.sway));
+        it.cacheKey = key;
+        if (!e.itemKey || e.itemKeyTexture != it.texture) {   // (made again when its texture went: solid now)
+            e.itemKey = ShadowItemKey(it);
+            e.itemKeyTexture = it.texture;
+        }
+        it.key = e.itemKey;
         m_shadowItems.push_back(it);
     }
+    AddStatelShadowItems();                      // the playfield's placed objects (statels.cpp)
     // The drawn-static tally and the animated subset: the point-light pass asks "is anything animated in range?" once
     // per cube, and only animated casters (characters) can answer yes, so static casters need not be scanned.
     m_shadowItemsCount = uint32_t(m_shadowItems.size());
@@ -860,27 +1139,64 @@ void Device::CollectShadowItems()
     // texture (a descriptor push), buffers (binds) - then by batch key, so equal batches are contiguous (stable: equal
     // keys keep the game's order). Hash order alone scattered those states: a bind or push between most batches.
     m_shadowOrder.resize(m_shadowItems.size());
-    static std::vector<std::pair<uint64_t, uint64_t>> sortKeys;   // (state order, batch key) per item
-    sortKeys.resize(m_shadowItems.size());
+    // The order: by (state, batch key), equal pairs in the items' order - as a stable sort by the two keys, but by
+    // grouping: a frame's ~6,000 items have a few dozen distinct pairs, so the items are counted into the pairs, the
+    // pairs alone sorted, and the items placed (a sort of all the items was ~2.5% of the render thread over a city).
+    struct Pair { uint64_t state, key; };
+    static std::vector<Pair> pairs;              // the distinct pairs, in order of first appearance
+    static std::vector<uint32_t> pairOf, count, offset, table, sorted;
+    pairs.clear();
+    pairOf.resize(m_shadowItems.size());
+    if (table.size() < 2 * m_shadowItems.size() + 64) table.resize(std::bit_ceil(2 * m_shadowItems.size() + 64));
+    std::fill(table.begin(), table.end(), ~0u);
+    const size_t tableMask = table.size() - 1;
     for (uint32_t i = 0; i < m_shadowItems.size(); ++i) {
         ShadowItem& it = m_shadowItems[i];
-        it.key = ShadowItemKey(it);
-        m_shadowOrder[i] = i;
+        if (!it.key) it.key = ShadowItemKey(it);   // (remembered and placed ones: kept with them)
         uint64_t buffers = (uint64_t(it.buffer) * 0x9E3779B97F4A7C15ull) ^ (uint64_t(it.ibBuffer) * 0xC2B2AE3D27D4EB4Full);
         uint64_t state = uint64_t(it.texture ? 1 : 0) << 63 | uint64_t(it.indexCount != 0) << 62 |
                          uint64_t(it.primitive & 7) << 59 | uint64_t(std::min<uint32_t>(it.stride, 255)) << 51 |
                          uint64_t(uint32_t(it.texOffset + 1) & 0xFF) << 43 |
                          uint64_t((reinterpret_cast<uintptr_t>(it.texture) >> 4) & 0xFFFF) << 27 |
                          ((buffers >> 37) & 0x7FFFFFF);
-        sortKeys[i] = {state, it.key};
+        // (Its pair: found or added - the table at most half full.)
+        size_t h = size_t((state * 0x9E3779B97F4A7C15ull) ^ (it.key * 0xC2B2AE3D27D4EB4Full) ^ (it.key >> 29)) &
+                   tableMask;
+        for (;; h = (h + 1) & tableMask) {
+            const uint32_t b = table[h];
+            if (b == ~0u) {
+                table[h] = uint32_t(pairs.size());
+                pairOf[i] = uint32_t(pairs.size());
+                pairs.push_back({state, it.key});
+                break;
+            }
+            if (pairs[b].state == state && pairs[b].key == it.key) {
+                pairOf[i] = b;
+                break;
+            }
+        }
     }
-    std::stable_sort(m_shadowOrder.begin(), m_shadowOrder.end(),
-                     [](uint32_t a, uint32_t b) { return sortKeys[a] < sortKeys[b]; });
+    sorted.resize(pairs.size());
+    for (uint32_t b = 0; b < pairs.size(); ++b) sorted[b] = b;
+    std::sort(sorted.begin(), sorted.end(), [](uint32_t a, uint32_t b) {
+        return pairs[a].state != pairs[b].state ? pairs[a].state < pairs[b].state : pairs[a].key < pairs[b].key;
+    });
+    count.assign(pairs.size(), 0);
+    for (uint32_t i = 0; i < m_shadowItems.size(); ++i) ++count[pairOf[i]];
+    offset.resize(pairs.size());
+    uint32_t at = 0;
+    for (uint32_t b : sorted) {
+        offset[b] = at;
+        at += count[b];
+    }
+    for (uint32_t i = 0; i < m_shadowItems.size(); ++i) m_shadowOrder[offset[pairOf[i]]++] = i;
     m_shadowOrderBox.resize(m_shadowOrder.size() * 6);
+    m_shadowOrderCached.resize(m_shadowOrder.size());
     for (size_t k = 0; k < m_shadowOrder.size(); ++k) {
         const ShadowItem& it = m_shadowItems[m_shadowOrder[k]];
         std::memcpy(&m_shadowOrderBox[k * 6], it.boundsMin, sizeof(it.boundsMin));
         std::memcpy(&m_shadowOrderBox[k * 6 + 3], it.boundsMax, sizeof(it.boundsMax));
+        m_shadowOrderCached[k] = it.cached ? 1 : 0;
     }
 }
 
@@ -1116,10 +1432,22 @@ void Device::DrawShadowItem(VkCommandBuffer cmd, ShadowBind& bind, ShadowItem& i
                 r.origin[1] = item.world.m[3][2];
                 r.origin[2] = wind[2];
                 r.origin[3] = m_leaf.core;
+                if (set->second.art) {           // our own canopy: the cards thinned out as the sprigs come in
+                    float d2 = 0.0f;             // (none left near: CoreThin = 0.35 x this)
+                    for (int j = 0; j < 3; ++j) {
+                        float d = std::max(std::max(item.boundsMin[j] - m_frameEye[j], m_frameEye[j] - item.boundsMax[j]), 0.0f);
+                        d2 += d * d;
+                    }
+                    const float reach = std::max(m_leaf.distance, 1.0f);
+                    const float keep = std::clamp((reach - std::sqrt(d2)) / (0.5f * reach), 0.0f, 1.0f);
+                    r.origin[3] = 0.5f * keep * keep / 0.35f;   // (the core as the scene draws it: half thinned)
+                    r.alpha[3] = 1.0f;           // (its sprigs: leaf_shadow.vert, no round mask)
+                }
                 r.leafWind[0] = wind[0];
                 r.leafWind[1] = wind[1];
                 r.leafWind[2] = m_leaf.wind * wind[3];
-                r.leafWind[3] = std::max(m_grassGusts, 0.0f);
+                r.leafWind[3] = Gusts();
+                WindAxes(r.origin[0], r.origin[1], &r.alpha[1]);   // (its gusts: wind.glsl WindAxes)
             }
         }
         item.record = AppendShadowRecord(r);
@@ -1137,14 +1465,41 @@ void Device::DrawShadowItem(VkCommandBuffer cmd, ShadowBind& bind, ShadowItem& i
 void Device::RenderShadowMap(VkCommandBuffer cmd)
 {
     bool haveSun = m_sunLuminance > 0.0f && m_sunDir[1] < -0.05f;   // below the horizon / grazing: none
+    // The sun's true direction (FrameLights sunTrue), kept: frame lights written before this frame's sun is seen
+    // read it (the cloud layer's: with the shadow light's direction - the moon's, above the horizon - it took night for
+    // day and its clouds went dark).
+    if (m_sunLuminance > 0.0f) std::memcpy(m_trueSunDir, m_sunDir, sizeof(m_trueSunDir));
+    // With the sun down, the moon's light (night.cpp) - the map drawn from it. The valley mist (mist.cpp).
+    UpdateMoon();
+    UpdateMist();
+    UpdateTerrainSun(cmd);                       // (the terrain's shade from a low sun: terrain_sun.cpp)
+    // Low (under ~3 degrees, still above the horizon): no shadows (too long, too ragged), but the game's light stays
+    // the frame's sun for our effects - clouds, leaves, air - fading in from the horizon: at dawn and dusk the game
+    // lights its world in gold, and with the sun off ours stayed in the night's colours (user, 2026-10-13).
+    const bool lowSun = !haveSun && m_sunLuminance > 0.0f && m_sunDir[1] < 0.0f;
+    const float lowFade = lowSun ? std::clamp(-m_sunDir[1] / 0.02f, 0.0f, 1.0f) : 0.0f;
+    const bool moon = !haveSun && !lowSun && MoonOn();
+    const float* lightDir = haveSun || lowSun ? m_sunDir : m_moonDir;
     m_shadowValid = false;
     m_shadowItemsCount = m_shadowStaticItems = m_shadowAnimatedItems = 0;
     m_shadowDrawn = m_shadowCulled = m_shadowStaticDrawn = m_shadowAnimatedDrawn = 0;
     m_shadowCollectMs = m_shadowCullMs = m_shadowDrawMs = 0.0;
     m_animatedItems.clear();
     // The sun for effects that don't need the shadow map (light through leaves, contact shadows).
-    if (haveSun) std::memcpy(m_frameSunDir, m_sunDir, sizeof(m_sunDir));
-    for (int i = 0; i < 3; ++i) m_frameSunColor[i] = haveSun ? m_sunColor[i] : 0.0f;
+    if (haveSun || lowSun || moon) std::memcpy(m_frameSunDir, lightDir, sizeof(m_frameSunDir));
+    // Low, the cloud shadow map can't reach (its plane met too far off: none under ~3 degrees, coarse to ~6): the sun's
+    // light for our effects (leaves, air, clouds) dimmed by how much of it the clouds and the land let through - a
+    // dawn sun behind a cloud bank lit the trees and air gold (user, 2026-10-13).
+    const float upNow = -m_sunDir[1];
+    const float lowShade = 1.0f - std::clamp((upNow - 0.05f) / 0.05f, 0.0f, 1.0f);
+    const float through = 1.0f + (std::clamp(m_sunThrough, 0.0f, 1.0f) - 1.0f) * lowShade;
+    float undimmed[3];
+    for (int i = 0; i < 3; ++i) {
+        undimmed[i] = haveSun ? m_sunColor[i] : lowSun ? m_sunColor[i] * lowFade : 0.0f;
+        m_frameSunColor[i] = undimmed[i] * through;
+    }
+    // (The clouds themselves aren't dimmed: they're lit above the bank that hides the sun from the ground.)
+    m_frameSunLuma = 0.3f * undimmed[0] + 0.59f * undimmed[1] + 0.11f * undimmed[2];
     m_frameLightsDirty = true;
     // The world camera: the one most casters were drawn with.
     uint32_t world = 0;
@@ -1160,12 +1515,14 @@ void Device::RenderShadowMap(VkCommandBuffer cmd)
         }
         m_frameViewProj = MulMatrix(m_casterViews[world].view, m_casterViews[world].proj);
         m_shadowWorldProj = m_casterViews[world].proj;
+        m_worldCameraGen = 0;                    // (WorldCamera: asked again)
         std::memcpy(m_frameEye, eye, sizeof(eye));             // also what caster cache eviction measures from
     }
     if (!m_frameViewProjValid || m_casters.empty()) {
         m_shadowItems.clear();
         m_shadowOrder.clear();
         m_shadowOrderBox.clear();
+        m_shadowOrderCached.clear();
         return;
     }
     // The caster records and indirect commands live in this ring generation's arena, reserved by Draw - but the ring
@@ -1177,11 +1534,12 @@ void Device::RenderShadowMap(VkCommandBuffer cmd)
     CollectShadowItems();
     m_shadowCollectMs = ProfileCpu() - collectStart;
     ProfileCpuAdd("shadow collect", collectStart);
-    if (!m_shadows || !haveSun)
+    if (!m_shadows || !(haveSun || moon))
         return;
 
-    // Light view: z along the sun's direction; each cascade centred ahead of the camera, snapped to its texels.
-    float z[3] = {m_sunDir[0], m_sunDir[1], m_sunDir[2]};
+    // Light view: z along the sun's (moon's) direction; each cascade centred ahead of the camera, snapped to its texels.
+    std::memcpy(m_shadowLightDir, lightDir, sizeof(m_shadowLightDir));
+    float z[3] = {lightDir[0], lightDir[1], lightDir[2]};
     float up[3] = {0.0f, 1.0f, 0.0f};
     if (std::fabs(z[1]) > 0.99f) { up[1] = 0.0f; up[2] = 1.0f; }
     float x[3], y[3];
@@ -1245,17 +1603,25 @@ void Device::RenderShadowMap(VkCommandBuffer cmd)
         bool last = c == count - 1;
         double cullStart = ProfileCpu();
         m_cascadeVisible.clear();
-        for (uint32_t i : m_shadowOrder) {       // batch-key order (CollectShadowItems)
-            const ShadowItem& item = m_shadowItems[i];
+        const bool affine = lightViewProj.m[0][3] == 0.0f && lightViewProj.m[1][3] == 0.0f &&
+                            lightViewProj.m[2][3] == 0.0f && lightViewProj.m[3][3] == 1.0f;
+        // (Batch-key order, CollectShadowItems; the boxes and flags packed in that order - not the items themselves.)
+        const size_t orderCount = std::min(m_shadowOrder.size(), m_shadowOrderCached.size());
+        for (size_t k = 0; k < orderCount; ++k) {
+            const uint32_t i = m_shadowOrder[k];
+            const float* bmin = &m_shadowOrderBox[k * 6];
+            const float* bmax = bmin + 3;
             // Only casters reaching into this cascade's square (the widest takes every one the game drew).
-            if ((item.cached || !last) && BoxInClip(item.boundsMin, item.boundsMax, lightViewProj, false) == -1) {
+            if ((m_shadowOrderCached[k] || !last) &&
+                (affine ? BoxOutsideAffine(bmin, bmax, lightViewProj)
+                        : BoxInClip(bmin, bmax, lightViewProj, false) == -1)) {
                 ++m_shadowCulled;
                 continue;
             }
             // Beyond the nearest cascade, casters a few texels across leave no shadow worth drawing (they still
             // cast in the sharper cascades nearer the camera).
             if (c > 0) {
-                float extent = std::max(std::max(item.boundsMax[0] - item.boundsMin[0], item.boundsMax[1] - item.boundsMin[1]), item.boundsMax[2] - item.boundsMin[2]);
+                float extent = std::max(std::max(bmax[0] - bmin[0], bmax[1] - bmin[1]), bmax[2] - bmin[2]);
                 if (extent < 4.0f * texel) {
                     ++m_shadowCulled;
                     continue;
@@ -1268,6 +1634,7 @@ void Device::RenderShadowMap(VkCommandBuffer cmd)
         double drawStart = ProfileCpu();
         for (uint32_t i : m_cascadeVisible) {
             ShadowItem& item = m_shadowItems[i];
+            item.cascades |= 1u << c;
             if (item.cached) ++m_cachedCastersDrawn;
             ++m_shadowDrawn;
             if (uint32_t(item.kind) == uint32_t(VisualKind::Static)) ++m_shadowStaticDrawn;
@@ -1312,14 +1679,28 @@ void Device::RenderShadowMap(VkCommandBuffer cmd)
                  VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
     m_shadowImageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     m_cascadeCount = count;
-    std::memcpy(m_shadowSunDir, m_sunDir, sizeof(m_sunDir));
-    std::memcpy(m_shadowSunColor, m_sunColor, sizeof(m_sunColor));
+    std::memcpy(m_shadowSunDir, lightDir, sizeof(m_shadowSunDir));
+    for (int i = 0; i < 3; ++i) m_shadowSunColor[i] = haveSun ? m_frameSunColor[i] : 0.0f;   // (the moon: FrameLights moon)
+    m_shadowIsMoon = !haveSun;
     m_shadowValid = true;
 }
 
 // After all shadow passes of the frame.
 void Device::FinishShadowFrame()
 {
+    if (m_memoryTraceFrames > 0) {
+        --m_memoryTraceFrames;
+        if (m_memoryTraceFrames % 4 == 0) {
+            uint32_t cached = 0, swaying = 0;
+            for (const ShadowItem& it : m_shadowItems)
+                if (it.cached) ++cached;
+            for (const auto& [key, e] : m_casterCache)
+                if (e.lastSeen != m_frameNumber && e.sway.size() >= 8) ++swaying;
+            Log("shadow memory trace (mode %u) frame %llu: %zu items (%u remembered, %u of them swaying), drew %u item-cascades "
+                "(%u remembered), culled %u", m_shadowMemory, (unsigned long long)m_frameNumber, m_shadowItems.size(), cached,
+                swaying, m_shadowDrawn, m_cachedCastersDrawn, m_shadowCulled);
+        }
+    }
     // Daylight for point shadows: the sun's brightness on flat ground, smoothed so a frame without it doesn't pop.
     float daylight = m_sunLuminance * std::max(0.0f, -m_sunDir[1]);
     m_daylight += (daylight - m_daylight) * 0.1f;
@@ -1328,6 +1709,7 @@ void Device::FinishShadowFrame()
     m_animatedItems.clear();
     m_shadowOrder.clear();
     m_shadowOrderBox.clear();
+    m_shadowOrderCached.clear();
     UpdateCasterCache();
     // The mesh cache: forget meshes not drawn for a while (animated ones leave a fingerprint per frame).
     if ((m_frameNumber & 31) == 0 || m_meshInfo.size() > 60000)

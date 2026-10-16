@@ -1,0 +1,541 @@
+#version 450
+// Smoke (rvk/smoke.cpp StepSmoke): a fluid simulation ("stable fluids") in a box of N^3 cells round a smoke source,
+// one stage per dispatch (P.a.x):
+//   0 velocity moved along itself (semi-Lagrangian), with the forces: buoyancy (hot smoke rises), the wind, the
+//     source's push upwards; the ground (the box's floor) lets nothing through it
+//   1 its curl;   2 vorticity confinement (the small swirls the grid would smooth away put back)
+//   3 its divergence;   4 a Jacobi step of the pressure (P.e.w: the first, from 0);   5 the pressure's gradient taken
+//     away (incompressible)
+//   6 density and temperature moved along the velocity (MacCormack: 6 forward into the curl image, 8 that moved back
+//     again into the divergence image, 9 the forward one corrected by half the round trip's error - clamped to what
+//     was there, so it cannot overshoot: much sharper than moving it once), the source's added, fading
+//   7 the sunlight reaching each cell through the smoke; with the density, the rendering's image (look)
+//   10 (once) the wisps' noise for the rendering: tiling, 3 octaves of value noise
+//   11 the velocity for the rendering's wisps (half the cells a side, 8 bits)
+// Characters (B) stir it: the smoke in one moves with it, a moving one leaves eddies behind it.
+// Velocities in world units / s, the box P.a.w world units across; the box may move with its source (P.e.xyz: by how
+// much since last frame, in box units) - the contents stay where they are in the world.
+// The sand volume (Sand.corner.w = 1; rvk/smoke.cpp sand): a box round the camera in a sand or ash storm. No source,
+// no heat: the storm's wind blows through it (and in over its walls, with the sand it carries), the ground under each
+// column (Sand.ground) is solid and gives sand off where the wind lifts it, in streaks; sand settles; characters'
+// feet kick it up.
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+layout(set = 0, binding = 0) uniform sampler3D velIn;            // filtered reads (moving things along)
+layout(set = 0, binding = 1) uniform sampler3D densIn;           // R density, G temperature
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image3D velOut;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image3D densOut;
+layout(set = 0, binding = 4, rgba16f) uniform image3D curlImg;   // xyz curl, w its length
+layout(set = 0, binding = 5, r32f) uniform readonly image3D pIn;
+layout(set = 0, binding = 6, r32f) uniform writeonly image3D pOut;
+layout(set = 0, binding = 7, r32f) uniform image3D divImg;
+layout(set = 0, binding = 8, rgba16f) uniform readonly image3D velRead;   // exact reads (neighbours)
+layout(set = 0, binding = 9, rgba16f) uniform writeonly image3D lookImg;   // stage 7: R density, G sunlight; B A the
+                                                                           // last step's
+layout(set = 0, binding = 10) uniform sampler3D forwardIn;       // stage 8: the forward step (the curl image); stage 7:
+                                                                 // the density before this step; stage 9 (a drift
+                                                                 // cloud): its source's density
+layout(set = 0, binding = 12, r16f) uniform writeonly image3D noiseOut;   // stage 10
+layout(set = 0, binding = 14, rgba8_snorm) uniform writeonly image3D flowOut;   // stage 11 (half the cells a side)
+// The characters in the box (rvk/smoke.cpp SmokeBodies): upright capsules the smoke moves with and flows round.
+layout(set = 0, binding = 11, std140) uniform Bodies {
+    vec4 info;          // x: how many; y: how strongly they stir it (RVK_SmokeStir)
+    vec4 pos[8];        // x z: its middle, y: its feet, w: its top (box units)
+    vec4 vel[8];        // xyz: its velocity (world / s); w: its radius (box units)
+} B;
+
+layout(push_constant) uniform Params {
+    vec4 a;     // x: stage; y: N; z: dt (s); w: the box's size (world)
+    vec4 b;     // xyz: the source (box units, 0..1); w: its radius (box units)
+    vec4 c;     // x: the density the source keeps (in it; no more piles up there); y: the temperature it keeps;
+                // z: the source's push up (world / s); w: how fast the density fades (1 / s) - x y z puffing
+    vec4 d;     // x: buoyancy; y: vorticity confinement; zw: the wind (world / s, x z)
+    vec4 e;     // xyz: the box's move since last frame (box units); w: stage 4: 1 = the first Jacobi step (pressure
+                // from 0; else from the image's); stage 0: the step's number (the source's jitter)
+    vec4 f;     // xyz: towards the sun (unit); w: the smoke's extinction (per world unit at density 1)
+    vec4 g;     // x: the volume's slot in the bounds; y: stage 11: 1 / the flow image's range (world / s); z: the band
+                // along a box's walls and top its smoke leaves over (box units); w: its size over the last step's
+    vec4 h;     // a drift cloud (w > 0): its source's box, uvw * w + xyz (stage 9 takes what that box lets go of)
+} P;
+
+// Each volume's cells with smoke in them (now or a step before), for the drawing: [2 slot] the lowest, [2 slot + 1]
+// the highest (made empty before stage 7, which widens them).
+layout(set = 0, binding = 13, std430) buffer Bounds { uvec4 bounds[]; };
+// The sand volume's (rvk/smoke.cpp SandHeader; a smoke volume's: all 0).
+layout(set = 0, binding = 15, std430) readonly buffer SandBlock {
+    vec4 corner;        // xyz: the box's lowest corner (world); w: 1 = the sand volume
+    vec4 wind;          // xy: the wind (world / s, x z); z: how fast sand settles (world / s); w: the wind's clock (s)
+    vec4 air;           // x: the density blowing in at the ground; y: its scale height (world); z: the density the
+                        // ground gives off (where it is sand); w: the streaks' size (world)
+    vec4 feet;          // x: characters' feet: the density kicked up per world / s they move
+    vec4 streaks;       // the streak pattern (rvk Device::m_sandPivot): xy its pivot (world x z), zw its offset (along,
+                        // across)
+    vec4 ground[];      // a column's (z n + x), three vec4: its top - the ground's height or a solid's over it (box
+                        // units) -, how much sand it gives (0..1), the heights the wind is held off under by solid
+                        // obstacles upwind and by see-through ones (box units); how far the air arriving there was
+                        // pushed aside by obstacles (x z, world), the wind's direction there (a unit wind's, x z); the
+                        // nearest obstacle's top (box units), 1 = that flow known (rvk sand_map.cpp)
+} SD;
+shared uint sLow[3], sHigh[3];
+
+// How much of a cell is inside a character (0..1) and how near it is (1 at its surface, 0 a body width away).
+float InBody(vec3 uvw, int i, out float near_)
+{
+    vec4 b = B.pos[i];
+    float r = B.vel[i].w, soft = 1.5 / P.a.y;
+    vec3 axis = vec3(b.x, clamp(uvw.y, b.y + r, max(b.w - r, b.y + r)), b.z);
+    float dist = length(uvw - axis);
+    near_ = 1.0 - smoothstep(r, 2.2 * r + soft, dist);
+    return 1.0 - smoothstep(r - soft, r + soft, dist);
+}
+
+// Value noise on a lattice repeating every `period` cells (so the image tiles).
+float TileHash(ivec3 c, int period)
+{
+    uvec3 u = uvec3((c % period + period) % period);
+    uint x = u.x * 73856093u ^ u.y * 19349663u ^ u.z * 83492791u ^ uint(period) * 2654435761u;
+    x ^= x >> 16u; x *= 0x7FEB352Du; x ^= x >> 15u; x *= 0x846CA68Bu; x ^= x >> 16u;
+    return float(x >> 8u) / 16777216.0;
+}
+float TileNoise(vec3 p, int period)
+{
+    ivec3 i = ivec3(floor(p));
+    vec3 f = p - vec3(i);
+    f = f * f * (3.0 - 2.0 * f);
+    float c[8];
+    for (int k = 0; k < 8; ++k)
+        c[k] = TileHash(i + ivec3(k & 1, (k >> 1) & 1, (k >> 2) & 1), period);
+    return mix(mix(mix(c[0], c[1], f.x), mix(c[2], c[3], f.x), f.y), mix(mix(c[4], c[5], f.x), mix(c[6], c[7], f.x), f.y), f.z);
+}
+
+ivec3 Clamp(ivec3 c) { return clamp(c, ivec3(0), ivec3(int(P.a.y) - 1)); }
+
+// -1..1 per cell and step (the source's unsteadiness: a perfectly steady source rises as a straight column).
+float Jitter(ivec3 c, uint salt)
+{
+    uint x = uint(c.x) * 73856093u ^ uint(c.y) * 19349663u ^ uint(c.z) * 83492791u ^ salt * 2654435761u;
+    x ^= x >> 16u; x *= 0x7FEB352Du; x ^= x >> 15u; x *= 0x846CA68Bu; x ^= x >> 16u;
+    return float(x >> 8u) * (2.0 / 16777216.0) - 1.0;
+}
+vec3 Vel(ivec3 c) { return imageLoad(velRead, Clamp(c)).xyz; }
+
+// Where a point of this step's box was in the last step's (box units): the box may have moved (P.e.xyz) and, the sand's,
+// changed its size (P.g.w: this size over the last; 1 as a rule); After: the other way.
+vec3 Before(vec3 uvw) { return uvw * P.g.w + P.e.xyz; }
+vec3 After(vec3 old) { return (old - P.e.xyz) / P.g.w; }
+// The sand volume.
+bool IsSand() { return SD.corner.w > 0.5; }
+bool Outside(vec3 uvw) { return any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0))); }
+// How far above the ground a point is (world; negative: in it), and how much sand the ground there gives.
+float AboveGround(vec3 uvw, out float feed)
+{
+    int n = int(P.a.y);
+    ivec2 c = clamp(ivec2(floor(uvw.xz * float(n))), ivec2(0), ivec2(n - 1));
+    vec4 g = SD.ground[(c.y * n + c.x) * 3];
+    feed = g.y;
+    return (uvw.y - g.x) * P.a.w;
+}
+// The column's flow round obstacles (vec4: pushed aside x z, direction x z) and how much of it applies at this height
+// (below the nearest obstacle's top; 0 where not known).
+vec4 SandFlowAt(vec3 uvw, out float below)
+{
+    int n = int(P.a.y);
+    ivec2 c = clamp(ivec2(floor(uvw.xz * float(n))), ivec2(0), ivec2(n - 1));
+    int i = (c.y * n + c.x) * 3;
+    vec4 e = SD.ground[i + 2];
+    below = e.y > 0.5 ? 1.0 - smoothstep(e.x - 0.5 / P.a.w, e.x + 1.0 / P.a.w, uvw.y) : 0.0;
+    return SD.ground[i + 1];
+}
+// How sheltered from the storm's wind a point is (0 open .. 1 held off): under a shelter height standing over its
+// column's top - a hill's, a wall's, a rock's upwind lee - by how far (a band of half the excess, 0.3..3 world units);
+// a see-through obstacle's (a canopy, a fence) half as much. (rvk sand_map.cpp SandShelterAt: the same.)
+float SandShelter(vec3 uvw)
+{
+    int n = int(P.a.y);
+    ivec2 c = clamp(ivec2(floor(uvw.xz * float(n))), ivec2(0), ivec2(n - 1));
+    vec4 g = SD.ground[(c.y * n + c.x) * 3];
+    float size = P.a.w, y = uvw.y * size, top = g.x * size;
+    float held = 0.0;
+    for (int k = 0; k < 2; ++k) {
+        float shelter = (k == 0 ? g.z : g.w) * size, excess = shelter - top;
+        if (excess < 0.3) continue;
+        float band = clamp(0.5 * excess, 0.3, 3.0);
+        held = max(held, (k == 0 ? 1.0 : 0.5) * clamp((shelter - y) / band, 0.0, 1.0) * smoothstep(0.3, 1.2, excess));
+    }
+    return held;
+}
+// Streaks of blowing sand (0..1): long along the wind, narrow across, carried by it.
+float Streaks(vec3 uvw)
+{
+    float below;
+    vec4 f = SandFlowAt(uvw, below);
+    vec2 w = SD.corner.xz + uvw.xz * P.a.w - f.xy * below;   // (where the air came from: parted round obstacles)
+    float speed = length(SD.wind.xy);
+    vec2 along = speed > 1e-3 ? SD.wind.xy / speed : vec2(1.0, 0.0), across = vec2(-along.y, along.x);
+    float t = SD.wind.w;
+    vec2 r = w - SD.streaks.xy;
+    vec2 q = (vec2(dot(r, along), dot(r, across)) + SD.streaks.zw) / SD.air.w;
+    float n = 0.65 * TileNoise(vec3(q.x * 0.25, q.y, t * 0.2), 4096) + 0.35 * TileNoise(vec3(q.x * 0.5, q.y * 2.0, t * 0.35) + 17.0, 4096);
+    return smoothstep(0.3, 0.7, n);
+}
+// A point's place along and across the storm's wind (world units), in the streaks' frame (carried by the wind).
+vec2 WindPlace(vec3 uvw)
+{
+    float below;
+    vec4 f = SandFlowAt(uvw, below);
+    vec2 w = SD.corner.xz + uvw.xz * P.a.w - f.xy * below;
+    float speed = length(SD.wind.xy);
+    vec2 along = speed > 1e-3 ? SD.wind.xy / speed : vec2(1.0, 0.0), across = vec2(-along.y, along.x);
+    vec2 r = w - SD.streaks.xy;
+    return vec2(dot(r, along), dot(r, across)) + SD.streaks.zw;
+}
+// The gusts' shove on the sand (-1..1 a side; up and down less): a smooth noise field ~2.5 world units across, carried
+// along with the wind (the streaks' frame) and changing over ~half a second, two of its moments blended - not a fresh
+// random shove per few cells every few frames (it changed every 8 frames, at once: the user saw the sand jerk from
+// side to side).
+vec3 Eddies(vec3 uvw)
+{
+    vec2 place = WindPlace(uvw);
+    vec3 p = vec3(place.x, uvw.y * P.a.w, place.y) / 2.5;
+    float slice = SD.wind.w / 0.5, k = floor(slice), f = smoothstep(0.0, 1.0, slice - k);
+    vec3 e[2];
+    for (int j = 0; j < 2; ++j) {
+        uint m = uint(k) + uint(j);   // (each moment its own place in the noise: offsets kept small, exact)
+        vec3 o = vec3((uvec3(m) * uvec3(17u, 5u, 41u)) % 4096u);
+        e[j] = vec3(TileNoise(p + o, 4096), TileNoise(p + o + vec3(1009.0, 0.0, 0.0), 4096),
+                    TileNoise(p + o + vec3(0.0, 0.0, 2003.0), 4096));
+    }
+    return (2.0 * mix(e[0], e[1], f) - 1.0) * vec3(1.0, 0.6, 1.0);
+}
+// Characters in the storm (too thin for the grid to hold them much - a cell is about their width): their wind shadow
+// (0..1; downwind of one, ~4 world units long, widening a little; to the top of them) and the push round them (world /
+// s: sideways out of its way, and up over, just upwind and beside).
+float Lee(vec3 uvw, out vec3 push)
+{
+    push = vec3(0.0);
+    float speed = length(SD.wind.xy), lee = 0.0;
+    if (speed < 1e-3) return 0.0;
+    vec2 aw = SD.wind.xy / speed, side = vec2(-aw.y, aw.x);
+    float size = P.a.w;
+    for (int i = 0; i < int(B.info.x); ++i) {
+        vec4 b = B.pos[i];
+        vec2 rel = (uvw.xz - b.xz) * size;
+        float up = (uvw.y - b.y) * size, top = (b.w - b.y) * size;
+        if (up < -0.3 || up > top + 0.4) continue;
+        float al = dot(rel, aw), ac = dot(rel, side);
+        float R = max(B.vel[i].w * size, 0.45), width = R * (1.3 + 0.25 * max(al, 0.0));
+        float tall = 1.0 - smoothstep(top, top + 0.4, up);
+        lee = max(lee, step(0.0, al) * (1.0 - smoothstep(0.5 * width, width, abs(ac))) * (1.0 - smoothstep(1.0, 4.5, al)) * tall);
+        float front = (1.0 - smoothstep(0.0, 1.0, abs(al + 0.4))) * (1.0 - smoothstep(R, 2.5 * R, abs(ac))) * tall;
+        push += front * speed * vec3(0.6 * (ac >= 0.0 ? side.x : -side.x), 0.25, 0.6 * (ac >= 0.0 ? side.y : -side.y));
+    }
+    return lee;
+}
+// The storm's wind at a point: a little slower near the ground (the sand hopping along it races still), none in it.
+vec3 SandWind(vec3 uvw)
+{
+    float feed, above = AboveGround(uvw, feed);
+    if (above < 0.0) return vec3(0.0);
+    float k = clamp(0.65 + 0.35 * sqrt(above / 4.0), 0.65, 1.0);
+    k *= 1.0 - 0.85 * SandShelter(uvw);                                  // (still air in a lee)
+    float below;
+    vec4 f = SandFlowAt(uvw, below);
+    vec2 wind = mix(SD.wind.xy, f.zw * length(SD.wind.xy), below);      // (round obstacles, below their tops)
+    return vec3(wind.x * k, 0.0, wind.y * k);
+}
+// The sand blowing in over the walls, in streaks: most of it a thick layer hopping along the ground (the bottom
+// world unit), over it a thinner dust thinning with height.
+float SandInflow(vec3 uvw)
+{
+    float feed, above = AboveGround(uvw, feed);
+    if (above < 0.0) return 0.0;
+    float streak = Streaks(uvw);
+    return SD.air.x * (1.0 - SandShelter(uvw)) *                        // (none blowing in where it is held off)
+           (1.8 * streak * exp(-above / 0.6) + 0.4 * (0.35 + 0.65 * streak) * exp(-above / max(SD.air.y, 0.1)));
+}
+// The density (and temperature) at a point: the image's, or beyond the walls what the storm brings.
+vec2 DensAt(vec3 at)
+{
+    return IsSand() && Outside(at) ? vec2(SandInflow(at), 0.0) : texture(densIn, at).rg;
+}
+// The velocity the density moves with: sand settles through the air.
+vec3 Carry(vec3 v) { return IsSand() ? v - vec3(0.0, SD.wind.z, 0.0) : v; }
+
+void main()
+{
+    int n = int(P.a.y);
+    ivec3 id = ivec3(gl_GlobalInvocationID);
+    if (any(greaterThanEqual(id, ivec3(n))))
+        return;
+    int stage = int(P.a.x);
+    float dt = P.a.z, size = P.a.w, h = size / float(n);   // h: a cell (world)
+    vec3 uvw = (vec3(id) + 0.5) / float(n);
+
+    if (stage == 0 && IsSand()) {
+        vec3 v = texelFetch(velIn, id, 0).xyz;
+        vec3 back = Before(uvw) - v * (dt / size);
+        v = Outside(back) ? SandWind(back) : texture(velIn, back).xyz;   // (in over the walls: the storm's wind)
+        float feed, above = AboveGround(uvw, feed);
+        vec3 wind = SandWind(uvw);
+        v.xz += (wind.xz - v.xz) * (1.0 - exp(-1.5 * dt));
+        // Gusty: eddies a few world units wide shoving it about, as hard as the wind blows.
+        v += length(SD.wind.xy) * dt * Eddies(uvw);
+        for (int i = 0; i < int(B.info.x); ++i) {
+            float near_, inside = InBody(uvw, i, near_);
+            vec3 bv = B.vel[i].xyz;
+            v = mix(v, bv, inside * min(B.info.y, 1.0));
+            float wake = near_ * (1.0 - inside) * length(bv) * 0.7 * B.info.y;
+            uint salt = uint(P.e.w) / 4u + uint(i) * 131u;
+            v += wake * vec3(Jitter(id / 2, salt), 0.5 * Jitter(id / 2, salt + 17u), Jitter(id / 2, salt + 7919u));
+        }
+        vec3 push;
+        float lee = Lee(uvw, push);
+        v.xz *= 1.0 - 0.75 * lee;                                        // (sheltered: still air behind a character)
+        v += push * (1.0 - exp(-8.0 * dt));
+        if (above < 0.0 || id.y == 0) v = vec3(0.0);                     // (the ground: solid)
+        v *= exp(-0.05 * dt);
+        imageStore(velOut, id, vec4(v, 0.0));
+    } else if (stage == 0) {
+        vec3 v = texelFetch(velIn, id, 0).xyz;
+        vec3 back = Before(uvw) - v * (dt / size);
+        v = texture(velIn, back).xyz;
+        float temperature = texelFetch(densIn, id, 0).g;
+        v.y += P.d.x * temperature * dt;                                 // buoyancy
+        // Dragged along by the wind - in a storm (a wind past a calm one's 0.8: rvk smoke.cpp StormSmokeWind) faster,
+        // and torn: gusty eddies a couple of units wide shoving it about.
+        float tear = clamp((length(P.d.zw) - 0.8) / 3.5, 0.0, 1.0);
+        v.xz += (P.d.zw - v.xz) * (1.0 - exp(-(0.4 + 1.6 * tear) * dt));
+        if (tear > 0.0) {
+            vec3 q = uvw * P.a.w / 2.0 + vec3(float(P.e.w) * 0.015);
+            vec3 e = vec3(TileNoise(q, 4096), TileNoise(q + vec3(1009.0, 0.0, 0.0), 4096), TileNoise(q + vec3(0.0, 0.0, 2003.0), 4096));
+            v += tear * 4.0 * dt * (2.0 * e - 1.0) * vec3(1.0, 0.5, 1.0);
+        }
+        vec3 d = (uvw - P.b.xyz) / max(P.b.w, 1e-4);
+        float inSource = exp(-dot(d, d));
+        v.y = mix(v.y, max(v.y, P.c.z), inSource);                       // the source pushes up
+        // ... unsteadily: across it, in eddies a few cells wide changing every few steps (P.e.w: the step's number in
+        // this stage) - finer jitter would only average away.
+        uint step_ = uint(P.e.w) / 6u;
+        ivec3 eddy = id / 3;
+        v.xz += inSource * P.c.z * 0.8 * vec2(Jitter(eddy, step_), Jitter(eddy, step_ + 7919u));
+        // Characters: inside one the smoke moves as it does (pushed ahead, pulled along behind - the pressure solve
+        // sends the rest round it); round a moving one, eddies in its wake as fast as it goes.
+        for (int i = 0; i < int(B.info.x); ++i) {
+            float near_, inside = InBody(uvw, i, near_);
+            vec3 bv = B.vel[i].xyz;
+            v = mix(v, bv, inside * min(B.info.y, 1.0));
+            float wake = near_ * (1.0 - inside) * length(bv) * 0.7 * B.info.y;
+            uint salt = uint(P.e.w) / 4u + uint(i) * 131u;
+            v += wake * vec3(Jitter(id / 2, salt), 0.5 * Jitter(id / 2, salt + 17u), Jitter(id / 2, salt + 7919u));
+        }
+        if (id.y == 0) v.y = max(v.y, 0.0);                              // the ground
+        v *= exp(-0.05 * dt);
+        imageStore(velOut, id, vec4(v, 0.0));
+    } else if (stage == 1) {
+        vec3 dx = (Vel(id + ivec3(1, 0, 0)) - Vel(id - ivec3(1, 0, 0))) / (2.0 * h);
+        vec3 dy = (Vel(id + ivec3(0, 1, 0)) - Vel(id - ivec3(0, 1, 0))) / (2.0 * h);
+        vec3 dz = (Vel(id + ivec3(0, 0, 1)) - Vel(id - ivec3(0, 0, 1))) / (2.0 * h);
+        vec3 curl = vec3(dy.z - dz.y, dz.x - dx.z, dx.y - dy.x);
+        imageStore(curlImg, id, vec4(curl, length(curl)));
+    } else if (stage == 2) {
+        float l = imageLoad(curlImg, Clamp(id - ivec3(1, 0, 0))).w, r = imageLoad(curlImg, Clamp(id + ivec3(1, 0, 0))).w;
+        float bt = imageLoad(curlImg, Clamp(id - ivec3(0, 1, 0))).w, tp = imageLoad(curlImg, Clamp(id + ivec3(0, 1, 0))).w;
+        float bk = imageLoad(curlImg, Clamp(id - ivec3(0, 0, 1))).w, fr = imageLoad(curlImg, Clamp(id + ivec3(0, 0, 1))).w;
+        vec3 grad = vec3(r - l, tp - bt, fr - bk) / (2.0 * h);
+        vec3 curl = imageLoad(curlImg, id).xyz;
+        vec3 v = Vel(id);
+        float gl = length(grad);
+        if (gl > 1e-5)
+            v += P.d.y * h * cross(grad / gl, curl) * dt;
+        imageStore(velOut, id, vec4(v, 0.0));
+    } else if (stage == 3) {
+        // The box's walls are open (smoke leaves through them: the velocity beyond is the edge's); the floor is ground.
+        float div = (Vel(id + ivec3(1, 0, 0)).x - Vel(id - ivec3(1, 0, 0)).x + Vel(id + ivec3(0, 1, 0)).y -
+                     (id.y == 0 ? -Vel(id).y : Vel(id - ivec3(0, 1, 0)).y) + Vel(id + ivec3(0, 0, 1)).z -
+                     Vel(id - ivec3(0, 0, 1)).z) / (2.0 * h);
+        imageStore(divImg, id, vec4(div));
+    } else if (stage == 4) {
+        // Neighbours beyond the walls and the top: 0 (open); below the floor: this cell's (no flow through it).
+        bool first = P.e.w > 0.5;
+        float self = first ? 0.0 : imageLoad(pIn, id).x;
+        float sum = 0.0;
+        const ivec3 offs[6] = ivec3[](ivec3(1, 0, 0), ivec3(-1, 0, 0), ivec3(0, 1, 0), ivec3(0, -1, 0), ivec3(0, 0, 1),
+                                      ivec3(0, 0, -1));
+        for (int i = 0; i < 6; ++i) {
+            ivec3 c = id + offs[i];
+            if (c.y < 0) { sum += self; continue; }
+            if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, ivec3(n)))) continue;
+            sum += first ? 0.0 : imageLoad(pIn, c).x;
+        }
+        float p = (sum - imageLoad(divImg, id).x * h * h) / 6.0;
+        imageStore(pOut, id, vec4(p));
+    } else if (stage == 5) {
+        float self = imageLoad(pIn, id).x;
+        float px1 = id.x + 1 < n ? imageLoad(pIn, id + ivec3(1, 0, 0)).x : 0.0;
+        float px0 = id.x > 0 ? imageLoad(pIn, id - ivec3(1, 0, 0)).x : 0.0;
+        float py1 = id.y + 1 < n ? imageLoad(pIn, id + ivec3(0, 1, 0)).x : 0.0;
+        float py0 = id.y > 0 ? imageLoad(pIn, id - ivec3(0, 1, 0)).x : self;
+        float pz1 = id.z + 1 < n ? imageLoad(pIn, id + ivec3(0, 0, 1)).x : 0.0;
+        float pz0 = id.z > 0 ? imageLoad(pIn, id - ivec3(0, 0, 1)).x : 0.0;
+        vec3 v = Vel(id) - vec3(px1 - px0, py1 - py0, pz1 - pz0) / (2.0 * h);
+        if (id.y == 0) v.y = max(v.y, 0.0);
+        float feed;
+        if (IsSand() && AboveGround(uvw, feed) < 0.0) v = vec3(0.0);
+        imageStore(velOut, id, vec4(v, 0.0));
+    } else if (stage == 6) {
+        vec3 v = Carry(texelFetch(velIn, id, 0).xyz);
+        imageStore(curlImg, id, vec4(DensAt(Before(uvw) - v * (dt / size)), 0.0, 0.0));
+    } else if (stage == 8) {
+        vec3 v = Carry(texelFetch(velIn, id, 0).xyz);
+        // (The scratch image may be bigger than this box: only its first n cells a side are this step's.)
+        vec3 at = After(uvw) + v * (dt / size);
+        float back = Outside(at) ? (IsSand() ? SandInflow(at) : 0.0)
+                   : texture(forwardIn, at * float(n) / vec3(textureSize(forwardIn, 0))).r;
+        imageStore(divImg, id, vec4(back));
+    } else if (stage == 9) {
+        vec3 v = Carry(texelFetch(velIn, id, 0).xyz);
+        vec3 at = (Before(uvw) - v * (dt / size)) * float(n) - 0.5;   // where it came from (cells)
+        ivec3 c0 = ivec3(floor(at));
+        float lo = 1e9, hi = -1e9;
+        for (int k = 0; k < 8; ++k) {
+            ivec3 c = c0 + ivec3(k & 1, (k >> 1) & 1, (k >> 2) & 1);
+            float x = any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, ivec3(n)))
+                    ? (IsSand() ? SandInflow((vec3(c) + 0.5) / float(n)) : 0.0) : texelFetch(densIn, c, 0).r;
+            lo = min(lo, x);
+            hi = max(hi, x);
+        }
+        vec2 dens = imageLoad(curlImg, id).rg;
+        dens.r = clamp(dens.r + 0.5 * (texelFetch(densIn, id, 0).r - imageLoad(divImg, id).r), lo, hi);
+        if (IsSand()) {
+            // Fading slowly (it settles out, P.c.w); given off the ground where the wind lifts it - in streaks, the
+            // more where the ground is sand - and where characters' feet kick it up.
+            float feed, above = AboveGround(uvw, feed);
+            float held = SandShelter(uvw);
+            dens.r *= exp(-(P.c.w + 2.5 * held) * dt);                  // (sheltered: what blew in settles out)
+            float level = 0.0;
+            if (above >= 0.0 && above < 0.8)
+                level = SD.air.z * feed * (0.1 + 0.9 * Streaks(uvw)) * (1.0 - above / 0.8) * (1.0 - held);
+            vec3 push_;
+            float lee = Lee(uvw, push_);
+            level *= 1.0 - lee;                                          // (none lifted in a character's wind shadow,
+            dens.r *= exp(-2.0 * lee * dt);                              // and what blows in there settles out)
+            for (int i = 0; i < int(B.info.x); ++i) {
+                vec3 foot = vec3(B.pos[i].x, B.pos[i].y, B.pos[i].z);
+                float speed = length(B.vel[i].xz), d = length((uvw - foot) * size);
+                level = max(level, SD.feet.x * speed * (1.0 - smoothstep(0.15, 0.6, d)) * step(0.0, above));
+            }
+            dens.r = max(dens.r, min(dens.r + level * 3.0 * dt, level));
+            dens.g = 0.0;
+            if (above < 0.0) dens = vec2(0.0);
+            imageStore(densOut, id, vec4(max(dens, vec2(0.0)), 0.0, 0.0));
+            return;
+        }
+        vec3 d = (uvw - P.b.xyz) / max(P.b.w, 1e-4);
+        float inSource = exp(-dot(d, d));
+        // (Built up there over a moment - no blob popping in - up to the level, no more.)
+        float level = P.c.x * inSource;
+        dens.r = dens.r * exp(-P.c.w * dt);
+        dens.r = max(dens.r, min(dens.r + level * 4.0 * dt, level));
+        dens.g = max(dens.g, P.c.y * inSource) * exp(-0.6 * dt);       // (the source as hot as that, however small)
+        for (int i = 0; i < int(B.info.x); ++i) {                       // (none left inside a character)
+            float near_, inside = InBody(uvw, i, near_);
+            dens *= 1.0 - inside * min(12.0 * dt, 1.0) * min(B.info.y, 1.0);
+        }
+        // A drift cloud: within its source's box, the smoke that box lets go of (along its walls and top - as much
+        // as the drawing thins it out there) is this one's; inside it, none (that box's own).
+        if (P.h.w > 0.0) {
+            vec3 pu = uvw * P.h.w + P.h.xyz;
+            if (all(greaterThan(pu, vec3(0.0))) && all(lessThan(pu, vec3(1.0)))) {
+                vec2 side = min(pu.xz, 1.0 - pu.xz);
+                float kept = smoothstep(0.0, P.g.z, min(min(side.x, side.y), 1.0 - pu.y));
+                dens = max(dens, texture(forwardIn, pu).rg) * (1.0 - kept);
+            }
+        }
+        // Fading out towards the walls and the top (what reaches them leaves the box).
+        vec3 edge = min(uvw, 1.0 - uvw);
+        dens *= smoothstep(0.0, 0.06, min(min(edge.x, edge.z), 1.0 - uvw.y));
+        imageStore(densOut, id, vec4(max(dens, vec2(0.0)), 0.0, 0.0));
+    } else if (stage == 12) {
+        // The sand, procedural (RVK_SandProc; docs/sand-shelter-plan.md phase 3) - in place of stages 0..9: no state
+        // carried, each step made from where things are. Its density: the storm's sand over the ground (a thick layer
+        // hopping along it, dust thinning above), what the ground gives off where it is sand, in streaks along the
+        // wind broken into billows drifting with it; none where the wind is held off (SandShelter: a hill's, a wall's,
+        // a tree's lee) or a character shelters it, none inside things. Feet that move kick up a
+        // puff. Its velocity (the drawing's flow, stage 11): the storm's wind, slowed in a lee, pushed round characters.
+        float feed, above = AboveGround(uvw, feed);
+        if (above < 0.0) {
+            imageStore(velOut, id, vec4(0.0));
+            imageStore(densOut, id, vec4(0.0));
+            return;
+        }
+        float t = SD.wind.w;
+        vec3 v = SandWind(uvw);
+        vec3 push;
+        float lee = Lee(uvw, push);
+        v.xz *= 1.0 - 0.75 * lee;
+        v += 0.5 * push;
+        float held = SandShelter(uvw);
+        float streak = Streaks(uvw);
+        vec2 aw = WindPlace(uvw);
+        float b1 = TileNoise(vec3(aw.x * 0.19, above * 0.45 - t * 0.07, aw.y * 0.21 + t * 0.04), 4096);
+        float b2 = TileNoise(vec3(aw.x * 0.47 + 7.3, above * 1.1 + t * 0.11, aw.y * 0.5 + 3.1), 4096);
+        float billow = smoothstep(0.25, 0.8, 0.65 * b1 + 0.35 * b2);
+        // (As thick as the simulation's, which piles up what blows in and what the ground gives off.)
+        // (Never emptying out: a base under the streaks and billows - in a sandstorm the air is never clear.)
+        float layer = (0.5 + 1.3 * streak) * exp(-above / 0.6) + 0.7 * (0.5 + 0.5 * streak) * exp(-above / max(SD.air.y, 0.1));
+        float lifted = 0.3 * SD.air.z * feed * (0.25 + 0.75 * streak) * exp(-above / 0.45);
+        float d = (2.2 * SD.air.x * layer + lifted) * (1.0 - held) * (1.0 - lee) * (0.6 + 0.9 * billow);
+        for (int i = 0; i < int(B.info.x); ++i) {
+            vec3 foot = vec3(B.pos[i].x, B.pos[i].y, B.pos[i].z);
+            float speed = length(B.vel[i].xz), dist = length((uvw - foot) * size);
+            d = max(d, 0.6 * SD.feet.x * speed * (1.0 - smoothstep(0.15, 0.7, dist)));
+        }
+        imageStore(velOut, id, vec4(v, 0.0));
+        imageStore(densOut, id, vec4(max(d, 0.0), 0.0, 0.0, 0.0));
+    } else if (stage == 10) {
+        float w = 0.55 * TileNoise(uvw * 8.0, 8) + 0.3 * TileNoise(uvw * 16.0 + 5.0, 16) + 0.15 * TileNoise(uvw * 32.0 + 3.0, 32);
+        imageStore(noiseOut, id, vec4(w));
+    } else if (stage == 11) {
+        // (Each cell the average of the 2^3 under it: filtered at their shared corner.)
+        int half_ = n / 2;
+        if (any(greaterThanEqual(id, ivec3(half_))))
+            return;
+        vec3 v = texture(velIn, (vec3(id) + 0.5) / float(half_)).xyz;
+        imageStore(flowOut, id, vec4(clamp(v * P.g.y, -1.0, 1.0), 0.0));
+    } else if (stage == 7) {
+        if (gl_LocalInvocationIndex == 0u) {
+            sLow[0] = sLow[1] = sLow[2] = 0xFFFFFFFFu;
+            sHigh[0] = sHigh[1] = sHigh[2] = 0u;
+        }
+        barrier();
+        // Towards the sun, to the box's edge: the smoke the light goes through.
+        vec3 s = P.f.xyz;
+        float stepLen = 1.5 / float(n), optical = 0.0;
+        vec3 p = uvw;
+        for (int i = 0; i < 24; ++i) {
+            p += s * stepLen;
+            if (any(lessThan(p, vec3(0.0))) || any(greaterThan(p, vec3(1.0))))
+                break;
+            optical += texture(densIn, p).r;
+        }
+        // With the density before this step, which the drawing blends from (the simulation steps less often than
+        // frames) - read where this cell was then, as the box may have moved with its source since (P.e).
+        float now = texelFetch(densIn, id, 0).r;
+        float sunlit = exp(-optical * P.f.w * stepLen * size);
+        vec2 last = vec2(texture(forwardIn, Before(uvw)).r, sunlit);
+        imageStore(lookImg, id, vec4(now, sunlit, last));
+        // The bounds (the drawing skips smoke thinner than this): the group's, then the volume's.
+        if (max(now, last.x) >= 1e-4) {
+            uvec3 u = uvec3(id);
+            atomicMin(sLow[0], u.x); atomicMin(sLow[1], u.y); atomicMin(sLow[2], u.z);
+            atomicMax(sHigh[0], u.x); atomicMax(sHigh[1], u.y); atomicMax(sHigh[2], u.z);
+        }
+        barrier();
+        if (gl_LocalInvocationIndex == 0u && sLow[0] <= sHigh[0]) {
+            uint slot = uint(P.g.x) * 2u;
+            atomicMin(bounds[slot].x, sLow[0]); atomicMin(bounds[slot].y, sLow[1]); atomicMin(bounds[slot].z, sLow[2]);
+            atomicMax(bounds[slot + 1u].x, sHigh[0]); atomicMax(bounds[slot + 1u].y, sHigh[1]);
+            atomicMax(bounds[slot + 1u].z, sHigh[2]);
+        }
+    }
+}

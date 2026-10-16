@@ -144,7 +144,7 @@ void* __fastcall DummyRequestMatrix(void* c) { return static_cast<uint8_t*>(c) +
 
 void Install(HMODULE orig)
 {
-    if (GetMode("Scene", Mode::Off) != Mode::On) return;
+    if (GetMode("Scene", Mode::On) != Mode::On) return;
     g_orig = orig;
     if (!S().complete || !S().findObject) {
         Log("connectors: serialize.dll missing - not replaced");

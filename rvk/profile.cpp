@@ -48,7 +48,7 @@ bool Device::CreateProfiler(std::string* error)
     Log("profiling: a clock read costs %.0f ns", m_timerCost * 1e6);
     VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
     qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
-    qi.queryCount = kProfileMarks;
+    qi.queryCount = kProfileMarks + 2;          // (the last two: the clouds' own pass, ProfileFrame::cloudsTimed)
     for (ProfileFrame& p : m_profile)
         if (!Check(vkCreateQueryPool(m_device, &qi, nullptr, &p.pool), "timestamp query pool", error))
             return false;
@@ -86,14 +86,31 @@ void Device::ProfileBeginFrame(VkCommandBuffer cmd)
         uint64_t t[kProfileMarks];
         if (vkGetQueryPoolResults(m_device, p.pool, 0, p.count, sizeof(t), t, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) ==
             VK_SUCCESS) {
-            for (uint32_t i = 1; i < p.count; ++i)
-                ProfileAdd(m_profileGpu, p.names[i], double(t[i] - t[i - 1]) * m_timestampPeriod * 1e-6);
+            for (uint32_t i = 1; i < p.count; ++i) {
+                const double ms = double(t[i] - t[i - 1]) * m_timestampPeriod * 1e-6;
+                ProfileAdd(m_profileGpu, p.names[i], ms);
+                // (The smoke's budget: what its steps really took against what they were thought to - smoke.cpp.)
+                if (m_smokeEstimate[m_frameIndex] > 0.05 && std::strcmp(p.names[i], "smoke simulation") == 0)
+                    m_smokeCostScale = std::clamp(0.9f * m_smokeCostScale +
+                                                  0.1f * float(ms / m_smokeEstimate[m_frameIndex]), 0.1f, 5.0f);
+            }
             ProfileAdd(m_profileGpu, "total", double(t[p.count - 1] - t[0]) * m_timestampPeriod * 1e-6);
             ++m_profileFrames;
+            // The clouds' own pass (clouds.cpp) runs between the pre-pass and the scene's draws: inside the interval
+            // the pre-pass's mark closes - taken out of it.
+            uint64_t c[2];
+            if (p.cloudsTimed && vkGetQueryPoolResults(m_device, p.pool, kProfileMarks, 2, sizeof(c), c, sizeof(uint64_t),
+                                                       VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+                const double ms = double(c[1] - c[0]) * m_timestampPeriod * 1e-6;
+                ProfileAdd(m_profileGpu, "clouds (own pass)", ms);
+                ProfileAdd(m_profileGpu, "depth pre-pass", -ms);
+            }
         }
     }
     p.count = 0;
-    vkCmdResetQueryPool(cmd, p.pool, 0, kProfileMarks);
+    p.cloudsTimed = false;
+    m_smokeEstimate[m_frameIndex] = 0.0;
+    vkCmdResetQueryPool(cmd, p.pool, 0, kProfileMarks + 2);
     if (p.shadePool) {
         if (p.shadeCount) {
             uint64_t v[kShadeQueries];
@@ -118,8 +135,10 @@ void Device::ProfileBeginFrame(VkCommandBuffer cmd)
         ProfileAdd(m_profileCpu, "render thread frame", now - m_profileCpuStart);
     m_profileCpuStart = now;
     ProfileMark("start");
-    if (m_profileFrames >= kProfileFrames && !m_profileManual)
+    if (m_profileFrames >= kProfileFrames && !m_profileManual) {
         ProfileLog("");
+        LogMeshIds();                            // (mesh ids: how many draws were named)
+    }
 }
 
 // A GPU timestamp after everything recorded so far; the interval up to it is named `name` (a string literal).
@@ -137,7 +156,7 @@ void Device::ProfileMark(const char* name)
 // isn't exhausted mid-frame; what comes after the last mark stays in "scene".
 void Device::ProfileSceneClass(int cls)
 {
-    if (cls == m_sceneClass)
+    if (cls == m_sceneClass || !m_sceneProfile)
         return;
     // The closing class's batched draws (M3) are still pending: issue them first, or the timestamp lands before them
     // and they are counted in the next class. Only while profiling (it can split a group).
@@ -153,7 +172,7 @@ void Device::ProfileSceneClass(int cls)
 // The shading count's class for the draws from here on (Draw, once it knows whether the draw is pre-passed).
 void Device::ShadeClass(int cls)
 {
-    if (cls == m_shadeClass)
+    if (cls == m_shadeClass || !m_shadeQueries)
         return;
     if (m_profile[m_frameIndex].pool)
         FlushGroup();                            // the closing class's batched draws, counted in it
@@ -198,8 +217,12 @@ void Device::ProfileCpuAdd(const char* name, double since) { ProfileAdd(m_profil
 
 void Device::ProfileAdd(std::vector<std::pair<const char*, double>>& sums, const char* name, double ms)
 {
+    // By address first (the names are literals: a per-draw section is added ~10 times a draw on a sampled frame, and a
+    // string compare against each section before it cost the render thread ~1%), then by text.
     for (auto& s : sums)
-        if (s.first == name || std::strcmp(s.first, name) == 0) { s.second += ms; return; }
+        if (s.first == name) { s.second += ms; return; }
+    for (auto& s : sums)
+        if (std::strcmp(s.first, name) == 0) { s.second += ms; return; }
     sums.push_back({name, ms});
 }
 

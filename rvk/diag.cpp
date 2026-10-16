@@ -11,14 +11,27 @@ namespace rvk {
 
 using namespace detail;
 
-void Device::RequestFrameDump(const std::string& path)
+void Device::RequestFrameDump(const std::string& path, int frames)
 {
     m_dumpPath = path;
+    m_dumpBurstLeft = m_dumpBurstIndex = 0;
+    if (frames > 1) {                            // (a run: <base>-00.txt, -01.txt ... - what changes frame to frame)
+        const size_t dot = path.rfind('.');
+        m_dumpBurstBase = dot != std::string::npos ? path.substr(0, dot) : path;
+        m_dumpBurstLeft = frames - 1;
+        m_dumpBurstIndex = 0;
+        m_dumpPath = m_dumpBurstBase + "-00.txt";
+    }
 }
 
 void Device::BeginFrameDump()
 {
     m_dumpFile = std::fopen(m_dumpPath.c_str(), "w");
+    if (m_sandMap.valid && m_dumpBurstIndex == 0) {                       // (the sand's shelter map beside it: <dump>-sand.bmp)
+        std::string sand = m_dumpPath;
+        const size_t dot = sand.rfind('.');
+        DumpSandMap((dot != std::string::npos ? sand.substr(0, dot) : sand) + "-sand.bmp");
+    }
     m_dumpPath.clear();
     if (!m_dumpFile) return;
     m_dumpDraw = 0;
@@ -101,6 +114,59 @@ void Device::EndFrameDump()
     std::fprintf(m_dumpFile, "# end: %u draws; %zu casters this frame, %zu remembered (%u drawn out of view last frame);"
                              " forgotten since start: %u in view but not drawn, %u far away\n",
                  m_dumpDraw, m_casters.size(), m_casterCache.size(), m_cachedCastersDrawn, m_forgottenInView, m_forgottenFar);
+    {
+        // The remembered casters the shadow passes draw though the game didn't this frame (out of view), biggest first:
+        // where, how big, what mesh, how long since the game drew it, its recorded sway (a remembered wall's shadow
+        // changing while the camera looked away - user, 2026-10-13).
+        std::vector<std::pair<float, std::pair<uint64_t, const CachedCaster*>>> out;
+        for (const auto& [key, e] : m_casterCache) {
+            if (e.lastSeen == m_frameNumber)
+                continue;
+            float size = 0.0f;
+            for (int j = 0; j < 3; ++j) size = std::max(size, e.boundsMax[j] - e.boundsMin[j]);
+            out.push_back({size, {key, &e}});
+        }
+        std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+        std::fprintf(m_dumpFile, "# remembered casters out of view: %zu (biggest first)\n", out.size());
+        for (size_t i = 0; i < out.size() && i < 300; ++i) {
+            const CachedCaster& e = *out[i].second.second;
+            std::fprintf(m_dumpFile,
+                         "R %016llx: size %.1f box (%.1f %.1f %.1f)..(%.1f %.1f %.1f) at (%.2f %.2f %.2f) v %u i %u kind %u "
+                         "unseen %llu frames, sway %zu%s\n",
+                         (unsigned long long)out[i].second.first, double(out[i].first), double(e.boundsMin[0]),
+                         double(e.boundsMin[1]), double(e.boundsMin[2]), double(e.boundsMax[0]), double(e.boundsMax[1]),
+                         double(e.boundsMax[2]), double(e.world.m[3][0]), double(e.world.m[3][1]), double(e.world.m[3][2]),
+                         e.vertexCount, e.indexCount, e.kind, (unsigned long long)(m_frameNumber - e.lastSeen),
+                         e.sway.size(), e.texture ? " cut-out" : "");
+        }
+    }
+    {
+        // Every sun shadow item near the eye (within 120 units): this frame's or remembered, shadow-only or drawn, its
+        // key, where, its box, and the cascades it went into (bits: 1 nearest .. 8 widest) - which casters a shadow had.
+        std::fprintf(m_dumpFile, "# placed objects (statels.cpp): playfield %u, %zu pieces, %u cast this frame, %u drawn ones not "
+                                 "remembered; mode %u, placement %s\n",
+                     m_statelPlayfield, m_statelItems.size(), m_statelItemsThisFrame, m_statelCoveredLast, m_statelMode,
+                     StatelPlacementState().c_str());
+        DumpRainCover(m_dumpFile, m_frameEye[0], m_frameEye[2]);
+        for (const WaterBody& b : m_waterBodies)        // (the characters near: the player under the camera among them)
+            if (std::hypot(b.x - m_frameEye[0], b.z - m_frameEye[2]) < 6.0f)
+                DumpRainCover(m_dumpFile, b.x, b.z);
+        std::fprintf(m_dumpFile, "# sun shadow items within 120 of the eye (T this frame, M remembered, P placed; cascades bits):\n");
+        for (const ShadowItem& it : m_shadowItems) {
+            float d2 = 0.0f;
+            for (int j = 0; j < 3; ++j) {
+                const float d = std::max(std::max(it.boundsMin[j] - m_frameEye[j], m_frameEye[j] - it.boundsMax[j]), 0.0f);
+                d2 += d * d;
+            }
+            if (d2 > 120.0f * 120.0f)
+                continue;
+            std::fprintf(m_dumpFile, "%c %016llx: at (%.2f %.2f %.2f) box (%.1f %.1f %.1f)..(%.1f %.1f %.1f) v %u i %u%s cascades %x\n",
+                         !it.cached ? 'T' : (it.cacheKey >> 48) == 0x5354 ? 'P' : 'M', (unsigned long long)it.cacheKey, double(it.world.m[3][0]),
+                         double(it.world.m[3][1]), double(it.world.m[3][2]), double(it.boundsMin[0]), double(it.boundsMin[1]),
+                         double(it.boundsMin[2]), double(it.boundsMax[0]), double(it.boundsMax[1]), double(it.boundsMax[2]),
+                         it.vertexCount, it.indexCount, it.texture ? " cut-out" : "", it.cascades);
+        }
+    }
     std::fprintf(m_dumpFile, "# sun shadow pass: %u items (%u static, %u animated); drew %u item-cascades (%u static,"
                              " %u animated), culled %u; %.2f ms collect, %.2f cull, %.2f draw; M4 %u calls\n",
                  m_shadowItemsCount, m_shadowStaticItems, m_shadowAnimatedItems, m_shadowDrawn, m_shadowStaticDrawn,
@@ -110,6 +176,22 @@ void Device::EndFrameDump()
                              " %u)\n", m_batchRuns, m_batchMerged, m_batchMaxRun);
     std::fprintf(m_dumpFile, "# M3 batching: %u indirect calls for %u draws (%u single); %u indexed draws left direct\n",
                  m_groupCalls, m_groupDraws, m_singleDraws, m_frameDraw - m_groupDraws);
+    {
+        static const char* const rewhy[kRewhy] = {"state set", "new arena", "fvf", "textures", "terrain", "label",
+                                                  "carried light", "bump base", "foliage lod", "normal map", "character",
+                                                  "opaque texture", "texture holes", "sky scenery", "blend"};
+        static const char* const split[kSplitParts + 2] = {"constants", "pipeline", "primitive", "fvf", "vb", "ib",
+                                                           "prev positions", "smooth normals", "frame lights",
+                                                           "prepassed", "backdrop", "cull", "z", "blend", "discard/label",
+                                                           "terrain pass", "ended elsewhere", "not batchable"};
+        std::fprintf(m_dumpFile, "# constant blocks made again, by what changed:");
+        for (int i = 0; i < kRewhy; ++i)
+            if (m_rewriteWhy[i]) std::fprintf(m_dumpFile, " %s %u", rewhy[i], m_rewriteWhy[i]);
+        std::fprintf(m_dumpFile, "\n# batches ended, by what differed:");
+        for (int i = 0; i < kSplitParts + 2; ++i)
+            if (m_splitWhy[i]) std::fprintf(m_dumpFile, " %s %u", split[i], m_splitWhy[i]);
+        std::fprintf(m_dumpFile, "\n");
+    }
     std::fprintf(m_dumpFile, "# mesh info: %u draws identified by static snapshot, %u by a content hash\n",
                  m_meshStaticDraws, m_meshHashedDraws);
     if (m_lightMaskVerify)
@@ -181,6 +263,12 @@ void Device::EndFrameDump()
     }
     std::fclose(m_dumpFile);
     m_dumpFile = nullptr;
+    if (m_dumpBurstLeft > 0) {
+        --m_dumpBurstLeft;
+        char n[16];
+        std::snprintf(n, sizeof(n), "-%02d.txt", ++m_dumpBurstIndex);
+        m_dumpPath = m_dumpBurstBase + n;
+    }
 }
 
 static void Mul(const d3d::Matrix& m, const float in[4], float out[4])
@@ -207,6 +295,13 @@ void Device::DumpDraw(uint32_t primitive, uint32_t fvf, const void* vertices, ui
                          m_rs[d3d::RS_DESTBLEND], m_rs[d3d::RS_ALPHATESTENABLE], m_rs[d3d::RS_ZENABLE],
                          m_rs[d3d::RS_ZWRITEENABLE], m_rs[d3d::RS_ZFUNC], z0, rhw0,
                          WaterWritesDepth(fvf) ? "forced (water)" : "as the game sets it");
+        } else {                                 // (the rest of 2D: what it is, how it blends - a screen flash shows)
+            const Texture* t = m_textures[0];
+            std::fprintf(m_dumpFile, "Q %u: 2D, prim %u fvf 0x%x v %u i %u | tex0 %ux%u | blend %u %u/%u | z %u/%u/%u | target %s\n",
+                         n, primitive, fvf, vertexCount, indexCount, t ? t->Width() : 0, t ? t->Height() : 0,
+                         m_rs[d3d::RS_ALPHABLENDENABLE], m_rs[d3d::RS_SRCBLEND], m_rs[d3d::RS_DESTBLEND],
+                         m_rs[d3d::RS_ZENABLE], m_rs[d3d::RS_ZWRITEENABLE], m_rs[d3d::RS_ZFUNC],
+                         m_target == m_scene ? "scene" : m_target == m_main ? "main" : "other");
         }
         return;
     }
@@ -281,7 +376,16 @@ void Device::DumpDraw(uint32_t primitive, uint32_t fvf, const void* vertices, ui
                  m_tss[0][d3d::TSS_COLORARG2], m_tss[1][d3d::TSS_COLOROP], m_tss[1][d3d::TSS_COLORARG1],
                  m_tss[1][d3d::TSS_COLORARG2]);
     for (int s = 0; s < 2; ++s)
-        if (m_textures[s]) std::fprintf(f, " tex%d %ux%u", s, m_textures[s]->Width(), m_textures[s]->Height());
+        if (const Texture* t = m_textures[s]) {
+            std::fprintf(f, " tex%d %ux%u", s, t->Width(), t->Height());
+            // (Which texture and what reached it: slot, uploads and the frame of the last, non-zero bytes of level 0,
+            // an image or view missing, a side-loaded albedo drawn instead.)
+            std::fprintf(f, " [%p s%d up %u@%lld nz %d%s%s%s fmt %u]", static_cast<const void*>(t),
+                         t->m_bindless == ~0u ? -1 : int(t->m_bindless), t->m_uploads,
+                         (long long)(m_frameNumber - t->m_uploadFrame),
+                         t->m_level0NonZero == ~0u ? -1 : int(t->m_level0NonZero), t->m_image ? "" : " NO-IMAGE",
+                         t->m_view ? "" : " NO-VIEW", t->m_albedoMap ? " albedo" : "", uint32_t(t->m_format));
+        }
     if (m_rs[d3d::RS_ALPHABLENDENABLE]) std::fprintf(f, " | blend %u/%u", m_rs[d3d::RS_SRCBLEND], m_rs[d3d::RS_DESTBLEND]);
     std::fprintf(f, " | z %u/%u/%u | at (%.1f %.1f %.1f)", m_rs[d3d::RS_ZENABLE], m_rs[d3d::RS_ZWRITEENABLE],
                  m_rs[d3d::RS_ZFUNC], m_world.m[3][0], m_world.m[3][1], m_world.m[3][2]);

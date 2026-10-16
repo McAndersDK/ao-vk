@@ -23,9 +23,9 @@ const vec4 kSectionW[4] = vec4[4](vec4(1.0, 0.6667, 0.3333, 0.0), vec4(1.0, 0.92
 // The steady wind: waves running through the field along it - each row of grass sways a moment after the one upwind,
 // as wind over a meadow does - a slower cross wave, and each blade's own flutter (stronger in a gust). Around a lean
 // with the wind, never far back against it.
-float Sway(vec2 xz, vec2 wd, float time, float phase, float gust)
+float Sway(vec2 aa, float time, float phase, float gust)
 {
-    float along = dot(xz, wd), across = dot(xz, vec2(-wd.y, wd.x));
+    float along = aa.x, across = aa.y;            // (the blade's place in the wind's frame, wind.glsl WindAxes)
     float rows = sin(along * 0.55 - time * 2.4 + 0.7 * sin(phase));        // ~11 units apart, ~4.4 units a second
     float cross = sin(across * 0.23 + along * 0.31 - time * 1.7 + 1.3);
     float flutter = sin(time * 5.3 + phase * 1.7);
@@ -42,6 +42,22 @@ vec3 BendKeepingLength(vec3 b, float above)
     return vec3(b.x, -(above - sqrt(max(above * above - dot(b, b), 0.0))), b.z);
 }
 
+// The wind's bend b (as BendKeepingLength) for a blade that bends only so far (`stiff`: its furthest, a share of the
+// point's height up the blade), easing into it rather than stopping at it - unchanged up to half of it - and still
+// alive when it gets there: the nearer flat the more it ripples, along the bend (ripple.x) and across it (ripple.y,
+// -1..1 each). (Pushed past its furthest bend, every blade of a field lay at the one flatness, still - the user.)
+vec3 BendSoft(vec3 b, float above, float stiff, vec2 ripple, vec3 across)
+{
+    float l = length(b), most = stiff * above;
+    if (l < 1e-6 || most < 1e-6)
+        return BendKeepingLength(b, above);
+    float knee = 0.5 * most;
+    float soft = l < knee ? l : knee + knee * (1.0 - exp(-(l - knee) / knee));
+    float k = clamp((soft - knee) / knee, 0.0, 1.0);   // 0 below the knee .. 1 at its furthest
+    vec3 dir = b / l;
+    return BendKeepingLength(dir * soft * (1.0 + 0.14 * k * ripple.x) + across * (soft * 0.18 * k * ripple.y), above);
+}
+
 // A blade's vertex placed (grass.cpp's record expanded): everything but the pushers, the billboard and the light.
 struct BladeAt {
     vec3 root, up, upV, rr;     // the root, its up (the ground's slope), up leaning over for a top-down view, droop way
@@ -55,8 +71,9 @@ struct BladeAt {
     float gust;
 };
 
-// camera: the eye; R: the field radius; wind: x time, yz direction, w strength; gusts: their strength (0 = none).
-BladeAt ShapeBlade(Blade bl, uint vi, vec3 camera, float R, vec4 wind, float timeBefore, float gusts)
+// camera: the eye; R: the field radius; wind: x time, yz direction, w strength; gusts: their strength (0 = none);
+// frame: the wind's patterns' frame (wind.glsl WindAxes).
+BladeAt ShapeBlade(Blade bl, uint vi, vec3 camera, float R, vec4 wind, float timeBefore, float gusts, vec2 frame)
 {
     BladeAt b;
     b.root = bl.a.xyz;
@@ -109,14 +126,33 @@ BladeAt ShapeBlade(Blade bl, uint vi, vec3 camera, float R, vec4 wind, float tim
     vec3 wdir = vec3(wd.x, 0.0, wd.y);
     b.gust = 0.0;
     float gustBefore = 0.0;
+    vec2 aa = WindAxes(b.root.xz, wd, frame);    // (frame: rvk Device::WindFrame)
     if (gusts > 0.0) {
-        b.gust = Gust(b.root.xz, wd, wind.x) * gusts;
-        gustBefore = Gust(b.root.xz, wd, timeBefore) * gusts;
+        b.gust = Gust(aa, wind.x) * GrassGusts(gusts);
+        gustBefore = Gust(aa, timeBefore) * GrassGusts(gusts);
     }
-    float amp = 0.16 * b.height * b.fade * wind.w * b.t * b.t, gustAmp = 0.7 * b.height * b.fade * wind.w * b.t * b.t;
+    // In a strong wind (a storm: strength over ~1.2) the lean levels off - a blade can't go flatter than flat; pushed
+    // past its furthest bend it would lie pinned there, still - and it thrashes instead: quick, uneven, a little across
+    // the wind too.
+    float s = wind.w, lean = s <= 1.0 ? s : 1.0 + 1.3 * (1.0 - exp(-(s - 1.0) / 1.2));
+    float storm = clamp((s - 1.2) / 2.5, 0.0, 1.0);
+    float amp = 0.16 * b.height * b.fade * lean * b.t * b.t, gustAmp = 0.7 * b.height * b.fade * lean * b.t * b.t;
     float above = b.height * b.t * b.fade;
-    b.bendNow = BendKeepingLength(wdir * (amp * Sway(b.root.xz, wd, wind.x, b.phase, b.gust) + gustAmp * b.gust), above);
-    b.bendBefore = BendKeepingLength(wdir * (amp * Sway(b.root.xz, wd, timeBefore, b.phase, gustBefore) +
-                                             gustAmp * gustBefore), above);
+    vec3 across = vec3(-wd.y, 0.0, wd.x);
+    float along = aa.x;
+    vec2 thrash = storm * vec2(sin(wind.x * 6.1 + b.phase * 2.3 + along * 1.1) + 0.5 * sin(wind.x * 9.7 + b.phase * 3.7),
+                               sin(wind.x * 5.3 + b.phase * 1.9));
+    vec2 thrashBefore = storm * vec2(sin(timeBefore * 6.1 + b.phase * 2.3 + along * 1.1) + 0.5 * sin(timeBefore * 9.7 + b.phase * 3.7),
+                                     sin(timeBefore * 5.3 + b.phase * 1.9));
+    float shake = 0.16 * b.height * b.fade * b.t * b.t;
+    // Each blade its own stiffness (how far it can bend: 0.6..0.9 of the way flat), and its ripple when pushed far.
+    float stiff = 0.6 + 0.3 * fract(sin(b.phase * 12.9898) * 43758.5453);
+    vec2 ripple = vec2(sin(wind.x * 11.3 + b.phase * 5.1 + along * 0.7), sin(wind.x * 8.1 + b.phase * 2.9));
+    vec2 rippleBefore = vec2(sin(timeBefore * 11.3 + b.phase * 5.1 + along * 0.7), sin(timeBefore * 8.1 + b.phase * 2.9));
+    b.bendNow = BendSoft(wdir * (amp * Sway(aa, wind.x, b.phase, b.gust) + gustAmp * b.gust + shake * 0.9 * thrash.x) +
+                         across * (shake * 0.5 * thrash.y), above, stiff, ripple, across);
+    b.bendBefore = BendSoft(wdir * (amp * Sway(aa, timeBefore, b.phase, gustBefore) + gustAmp * gustBefore +
+                                    shake * 0.9 * thrashBefore.x) + across * (shake * 0.5 * thrashBefore.y),
+                            above, stiff, rippleBefore, across);
     return b;
 }

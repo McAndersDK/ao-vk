@@ -290,7 +290,7 @@ void* __cdecl FafInstantiate(void* archive)         // ?Instantiate@FAFAnim_t@@S
 
 void Install(HMODULE orig)
 {
-    if (GetMode("Scene", Mode::Off) != Mode::On) return;
+    if (GetMode("Scene", Mode::On) != Mode::On) return;
     g_orig = orig;
     if (!serialize::Get().complete || !serialize::Get().addData || !serialize::Get().findData) {
         Log("keyframe animations: not replaced (serialize.dll exports missing)");

@@ -92,7 +92,7 @@ bool Device::CreateParticleResources(std::string* error)
     VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
     ci.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, module, "main", nullptr};
     ci.layout = m_particleLayout;
-    bool ok = Check(vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &ci, nullptr, &m_particlePipeline),
+    bool ok = Check(vkCreateComputePipelines(m_device, m_pipelineCache, 1, &ci, nullptr, &m_particlePipeline),
                     "particle pipeline", error);
     vkDestroyShaderModule(m_device, module, nullptr);
     if (!ok)
@@ -498,6 +498,7 @@ void Device::DrawOrphanParticles()
             m_textures = st.textures;
             m_view = st.view;
             m_proj = st.proj;
+            ++m_cameraGen;
             m_texMatrix[0] = st.texMatrix[0];
             m_texMatrix[1] = st.texMatrix[1];
             m_viewport = st.viewport;

@@ -7,6 +7,8 @@
 //                        a missing one is roughness 1, metallic 0, occlusion 1). Ignored when there is an _orm.png.
 //   <type>_<id>_d.png    albedo (diffuse colour): drawn instead of the game's texture, alpha included
 //   <type>_<id>_e.png    emissive: the light the surface gives off (black = none), added after its lighting
+//   <type>_<id>_leaves.png, _leaves_n.png   a tree canopy's own leaf art (rvk leaves.cpp): an atlas of 4 x 4 sprigs drawn
+//                        in place of this canopy texture's cards, and its normal map (ao-assets leaf-art --install)
 //   <id>_<suffix>        any of these for any type (fallback)
 // ao-assets writes these names (python -m aoassets material-template / import).
 //
@@ -237,6 +239,8 @@ rvk::maps::MaterialFiles FilesFor(uint32_t type, uint32_t id)
     f.parts[2] = FindMap(type, id, "_m.png");
     f.albedo = FindMap(type, id, "_d.png");
     f.emissive = FindMap(type, id, "_e.png");
+    f.leaves = FindMap(type, id, "_leaves.png");
+    f.leavesNormal = FindMap(type, id, "_leaves_n.png");
     return f;
 }
 
@@ -453,7 +457,7 @@ std::string DescribeTexture(const rvk::Texture* texture, std::string* reference)
         const uint32_t full = FullQualityType(top->rdbType);
         auto it = g_names.find(KeyOf(top->rdbType, top->rdbId));
         std::string maps;
-        for (const char* suffix : {"_n.png", "_orm.png", "_r.png", "_m.png", "_ao.png", "_d.png", "_e.png"})
+        for (const char* suffix : {"_n.png", "_orm.png", "_r.png", "_m.png", "_ao.png", "_d.png", "_e.png", "_leaves.png"})
             if (!FindMap(top->rdbType, top->rdbId, suffix).empty())
                 maps += std::string(" ") + suffix;
         // (No name: what the game hands CreateTexture as one isn't the texture's - "a.?", "" - the workbench has them.)
@@ -477,6 +481,7 @@ void AttachMaterialMaps(RSurface* top)
     if (!top || !top->rdbId || !top->texture || top->materialsFor == top->texture || !g_rvk.device)
         return;
     top->materialsFor = top->texture;
+    g_rvk.device->SetTextureRdbId(top->texture, top->rdbId);   // (the renderer tells the game's textures apart: clouds)
     uint64_t key = KeyOf(top->rdbType, top->rdbId);
     Waiter waiter{top, top->texture};
     if (DecodedPtr cached = CacheGet(key)) {

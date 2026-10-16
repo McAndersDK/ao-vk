@@ -1,4 +1,5 @@
 #version 450
+#include "dither.glsl"
 // Per-object motion blur: McGuire et al.'s reconstruction filter ("A Reconstruction Filter for Plausible Motion
 // Blur", 2012). Samples along the neighbourhood's strongest motion; each sample counts if it is behind this pixel and
 // this pixel's own motion covers it, or in front and its motion covers this pixel - so a moving object smears over
@@ -38,5 +39,5 @@ void main()
         sum += texelFetch(colour, y, 0).rgb * a;
         weight += a;
     }
-    outColor = vec4(sum / weight, centre.a);
+    outColor = vec4(Dither8(sum / weight, gl_FragCoord.xy, 0.0), centre.a);
 }

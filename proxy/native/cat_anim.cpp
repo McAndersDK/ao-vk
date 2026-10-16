@@ -320,7 +320,7 @@ constexpr uint8_t kHierarchyPrologue[] = {0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x48};  
 
 void Install(HMODULE orig)
 {
-    if (GetMode("Anim", Mode::Off) != Mode::On)
+    if (GetMode("Anim", Mode::On) != Mode::On)
         return;
     g_keyframeVtable = reinterpret_cast<uintptr_t>(orig) + kKeyframeVtableRva;
     g_blendVtable = reinterpret_cast<uintptr_t>(orig) + kBlendVtableRva;

@@ -48,7 +48,7 @@ struct GrassShadowPass {
     float camera[4];     // xyz: the camera; w: the field radius
     float wind[4];       // as GrassFrame.wind
     float sun[4];        // xyz: the direction sunlight travels; w: the gusts
-    float cascade[4];    // x: the least half width; y, z: the edge fade (NDC)
+    float cascade[4];    // x: the least half width; y, z: the wind's patterns' frame (Device::WindFrame); w: point
 };
 static_assert(sizeof(GrassShadowPass) == 128, "grass shadow push constants (the guaranteed minimum)");
 
@@ -285,7 +285,7 @@ void Device::CaptureTerrain(uint32_t primitive, const FvfLayout& layout, const v
     // A chunk already captured is skipped whole unless a tile under it is newer than that capture (made since, or its
     // light reset): drawing the same triangles again would add nothing - a cell only ever takes a finer one. Chunks are
     // known by their contents (the ground's level of detail changes them), the pass and the texture.
-    const uint64_t chunkKey = TerrainChunkKey(vertices, vertexCount, uint32_t(layout.stride), indexCount) ^
+    const uint64_t chunkKey = TerrainChunkKey(vertices, vertexCount, uint32_t(layout.stride), indices, indexCount) ^
                               (lightPass ? 0x9E3779B97F4A7C15ull : 0) ^
                               uint64_t(reinterpret_cast<uintptr_t>(tex)) * 0x100000001B3ull;
     GrassChunk& chunk = m_grassChunks[chunkKey];
@@ -544,11 +544,29 @@ void Device::CaptureCover(uint32_t primitive, const FvfLayout& layout, const voi
         m_grassCoverFrame = m_frameNumber;
         m_grassCoverMs = 0.0;
     }
-    uint64_t key = uint64_t(reinterpret_cast<uintptr_t>(m_drawMesh)) * 0x9E3779B97F4A7C15ull;
-    const uint32_t* wb = reinterpret_cast<const uint32_t*>(&m_world);
-    for (int i = 0; i < 16; ++i)
-        key = (key ^ wb[i]) * 0x100000001B3ull;
-    GrassChunk& seen = m_grassCovers[key];
+    // The object's record: with its entry in the per-object cache (objects.cpp), else by its mesh and matrix here - as
+    // on its first frame, before its mesh counts as static and it has an entry: the entry then takes that record over.
+    auto mapKey = [&] {
+        uint64_t key = uint64_t(reinterpret_cast<uintptr_t>(m_drawMesh)) * 0x9E3779B97F4A7C15ull;
+        const uint32_t* wb = reinterpret_cast<const uint32_t*>(&m_world);
+        for (int i = 0; i < 16; ++i)
+            key = (key ^ wb[i]) * 0x100000001B3ull;
+        return key;
+    };
+    GrassChunk* record;
+    if (m_drawObject) {
+        record = &m_drawObject->cover;
+        if (record->lastSeen == 0 && !m_grassCovers.empty()) {
+            auto it = m_grassCovers.find(mapKey());
+            if (it != m_grassCovers.end()) {
+                *record = it->second;
+                m_grassCovers.erase(it);
+            }
+        }
+    } else {
+        record = &m_grassCovers[mapKey()];
+    }
+    GrassChunk& seen = *record;
     if (seen.lastSeen + 1 < m_frameNumber)
         seen.firstSeen = m_frameNumber;          // new, or back after a gap: its still run starts again
     seen.lastSeen = m_frameNumber;
@@ -740,13 +758,14 @@ bool Device::CreateGrassResources(std::string* error)
 {
     DestroyGrassResources();
     // One set: 0 the camera (uniform), 2 the blades, 3 the trails, 4 the frame lights, 5 the sun's shadows, 6 the point
-    // lights'.
-    VkDescriptorSetLayoutBinding b[6] = {};
-    const uint32_t numbers[6] = {0, 2, 3, 4, 5, 6};
-    const VkDescriptorType types[6] = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    // lights', 7 the clouds', 8 the terrain's shade (terrain_sun.cpp).
+    VkDescriptorSetLayoutBinding b[8] = {};
+    const uint32_t numbers[8] = {0, 2, 3, 4, 5, 6, 7, 8};
+    const VkDescriptorType types[8] = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                                       VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                                        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < 8; ++i) {
         b[i].binding = numbers[i];
         b[i].descriptorType = types[i];
         b[i].descriptorCount = 1;
@@ -754,7 +773,7 @@ bool Device::CreateGrassResources(std::string* error)
     }
     VkDescriptorSetLayoutCreateInfo sl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     sl.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-    sl.bindingCount = 6;
+    sl.bindingCount = 8;
     sl.pBindings = b;
     if (!Check(vkCreateDescriptorSetLayout(m_device, &sl, nullptr, &m_grassSetLayout),
                "vkCreateDescriptorSetLayout", error))
@@ -827,7 +846,7 @@ bool Device::CreateGrassResources(std::string* error)
         ci.pColorBlendState = &cb;
         ci.pDynamicState = &ds;
         ci.layout = m_grassLayout;
-        ok = Check(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &ci, nullptr, &m_grassPipeline),
+        ok = Check(vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &ci, nullptr, &m_grassPipeline),
                    "vkCreateGraphicsPipelines", error);
     }
     if (vert) vkDestroyShaderModule(m_device, vert, nullptr);
@@ -889,7 +908,7 @@ bool Device::CreateGrassResources(std::string* error)
         ci.pColorBlendState = &cb;
         ci.pDynamicState = &ds;
         ci.layout = m_grassShadowLayout;
-        ok = Check(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &ci, nullptr, &m_grassShadowPipeline),
+        ok = Check(vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &ci, nullptr, &m_grassShadowPipeline),
                    "vkCreateGraphicsPipelines", error);
     }
     if (shadowVert) vkDestroyShaderModule(m_device, shadowVert, nullptr);
@@ -1808,9 +1827,9 @@ void Device::DrawGrassTiles(VkCommandBuffer cmd)
     // frame's for the motion vectors.
     gf.wind[0] = float(m_windTime);
     gf.viewport[3] = float(m_windTimePrev);
-    gf.wind[1] = 0.56f;
-    gf.wind[2] = 0.35f;                          // a wind direction (normalised in the shader)
-    gf.wind[3] = std::max(m_sway, 0.3f);         // the plants' sway strength scales the wind
+    gf.wind[1] = m_windDir[0];                   // the shared wind (wind.cpp)
+    gf.wind[2] = m_windDir[1];
+    gf.wind[3] = std::max(m_sway, 0.3f) * m_windStrength;   // the plants' sway strength scales the wind
     gf.camera[0] = m_frameEye[0];
     gf.camera[1] = m_frameEye[1];
     gf.camera[2] = m_frameEye[2];
@@ -1820,7 +1839,7 @@ void Device::DrawGrassTiles(VkCommandBuffer cmd)
     gf.look[1] = 1.0f;
     std::memcpy(gf.sunColour, m_terrainSun, sizeof(gf.sunColour) + sizeof(gf.sunDir));
     gf.look[2] = std::max(m_grassGlow, 0.0f);
-    gf.look[3] = std::max(m_grassGusts, 0.0f);
+    gf.look[3] = Gusts();
     gf.lod[0] = float(m_scene->m_height) * 0.5f * m_proj.m[1][1];   // pixels per world unit at view depth 1
     gf.lod[1] = 1.0f;                            // blades at least a pixel wide
     // The frame lights (the sun, its cascades, the lights, the pushers) as of now, in this ring: the scene writes them
@@ -1863,7 +1882,11 @@ void Device::DrawGrassTiles(VkCommandBuffer cmd)
     VkDescriptorBufferInfo lightsInfo{f.ring, m_frameLightsOffset, sizeof(FrameLights)};
     VkDescriptorImageInfo shadowInfo{m_shadowSampler, m_shadowView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkDescriptorImageInfo cubeInfo{m_cubeSampler, m_cubeArrayView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet writes[6] = {};
+    VkDescriptorImageInfo cloudInfo{m_linearSampler, CloudShadowView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    const bool terrainMap = m_terrainSunMap && m_terrainSunMap->m_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkDescriptorImageInfo terrainInfo{m_linearSampler, terrainMap ? m_terrainSunMap->m_view : m_blackTexture->m_view,
+                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet writes[8] = {};
     for (auto& w : writes) {
         w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w.descriptorCount = 1;
@@ -1886,7 +1909,13 @@ void Device::DrawGrassTiles(VkCommandBuffer cmd)
     writes[5].dstBinding = 3;
     writes[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[5].pBufferInfo = &trailInfo;
-    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_grassLayout, 0, 6, writes);
+    writes[6].dstBinding = 7;
+    writes[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[6].pImageInfo = &cloudInfo;
+    writes[7].dstBinding = 8;
+    writes[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[7].pImageInfo = &terrainInfo;
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_grassLayout, 0, 8, writes);
     vkCmdBindIndexBuffer(cmd, m_grassIndex, 0, VK_INDEX_TYPE_UINT32);
     // Which of the frame's 64 lights reach a tile, so a blade only tests the few that matter (the frame lights the
     // scene lights by too, so only with the light override on).
@@ -1951,16 +1980,20 @@ void Device::DrawGrassShadow(VkCommandBuffer cmd, const d3d::Matrix& lightViewPr
     p.camera[2] = m_frameEye[2];
     p.camera[3] = m_grassDistance;
     p.wind[0] = float(m_windTime);              // (as DrawGrassTiles: the blades sway the same)
-    p.wind[1] = 0.56f;
-    p.wind[2] = 0.35f;
-    p.wind[3] = std::max(m_sway, 0.3f);
-    p.sun[0] = m_sunDir[0];
-    p.sun[1] = m_sunDir[1];
-    p.sun[2] = m_sunDir[2];
-    p.sun[3] = std::max(m_grassGusts, 0.0f);
+    p.wind[1] = m_windDir[0];
+    p.wind[2] = m_windDir[1];
+    p.wind[3] = std::max(m_sway, 0.3f) * m_windStrength;
+    p.sun[0] = m_shadowLightDir[0];             // (the sun's, or by night the moon's)
+    p.sun[1] = m_shadowLightDir[1];
+    p.sun[2] = m_shadowLightDir[2];
+    p.sun[3] = Gusts();
     p.cascade[0] = 0.5f * texel;
-    p.cascade[1] = 0.75f;
-    p.cascade[2] = 0.95f;
+    {
+        float frame[4];
+        WindFrame(frame);                        // (the edge fade, 0.75 .. 0.95 NDC: in the shader now)
+        p.cascade[1] = frame[0];
+        p.cascade[2] = frame[1];
+    }
     vkCmdPushConstants(cmd, m_grassShadowLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(p), &p);
     const float tall = m_grassHeight * 1.7f + 1.0f;
     const float reach = m_grassDistance + kGrassTileSize * 0.7072f;
@@ -1984,6 +2017,87 @@ void Device::DrawGrassShadow(VkCommandBuffer cmd, const d3d::Matrix& lightViewPr
         vkCmdDrawIndexed(cmd, n * kFarIndices, 1, m_grassIndexBlades * kNearIndices, int32_t(t.first * 8), 0);
         m_grassShadowBlades += n;
     }
+}
+
+// The blades into a point light's cube face (pointshadow.cpp RenderPointShadowMaps, after the face's casters, its
+// rendering open): the tiles within the light's range that reach the face, each blade square to the light
+// (grass_shadow.vert's point mode). Tiles further than a few units from the light through their sparse quarter.
+// Returns whether anything was drawn (the caller then rebinds the shadow pipelines' state).
+bool Device::DrawGrassPointShadow(VkCommandBuffer cmd, const d3d::Matrix& faceViewProj, const float light[3], float range)
+{
+    if (!m_grassOn || !m_grassShadows || !m_grassShadowPipeline || !m_grassPool || !m_grassIndex || !m_frameEyeValid ||
+        m_grassTiles.empty())
+        return false;
+    const float tall = m_grassHeight * 1.7f + 1.0f;
+    bool bound = false;
+    for (const auto& [key, tp] : m_grassTiles) {
+        const GrassTile& t = *tp;
+        if (!t.built || !t.blades)
+            continue;
+        const float x0 = float(t.tx) * kGrassTileSize, z0 = float(t.tz) * kGrassTileSize;
+        const float lo[3] = {x0 - 1.0f, t.minY - 1.0f, z0 - 1.0f};
+        const float hi[3] = {x0 + kGrassTileSize + 1.0f, t.maxY + tall, z0 + kGrassTileSize + 1.0f};
+        const float nx = std::max({lo[0] - light[0], 0.0f, light[0] - hi[0]});
+        const float ny = std::max({lo[1] - light[1], 0.0f, light[1] - hi[1]});
+        const float nz = std::max({lo[2] - light[2], 0.0f, light[2] - hi[2]});
+        const float near2 = nx * nx + ny * ny + nz * nz;
+        if (near2 > range * range || BoxInClip(lo, hi, faceViewProj, false) == -1)
+            continue;
+        if (!bound) {
+            bound = true;
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_grassShadowPipeline);
+            VkDescriptorBufferInfo bladeInfo{m_grassPool, 0, VK_WHOLE_SIZE};
+            VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            w.dstBinding = 2;
+            w.descriptorCount = 1;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w.pBufferInfo = &bladeInfo;
+            vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_grassShadowLayout, 0, 1, &w);
+            vkCmdBindIndexBuffer(cmd, m_grassIndex, 0, VK_INDEX_TYPE_UINT32);
+            GrassShadowPass p{};
+            std::memcpy(p.lightViewProj, &faceViewProj, sizeof(p.lightViewProj));
+            p.camera[0] = m_frameEye[0];
+            p.camera[1] = m_frameEye[1];
+            p.camera[2] = m_frameEye[2];
+            p.camera[3] = m_grassDistance;
+            p.wind[0] = float(m_windTime);          // (as DrawGrassTiles: the blades sway the same)
+            p.wind[1] = m_windDir[0];
+            p.wind[2] = m_windDir[1];
+            p.wind[3] = std::max(m_sway, 0.3f) * m_windStrength;
+            p.sun[0] = light[0];
+            p.sun[1] = light[1];
+            p.sun[2] = light[2];
+            p.sun[3] = Gusts();
+            p.cascade[0] = 0.01f;                   // (a cube texel a few units out: about a centimetre)
+            float frame[4];
+            WindFrame(frame);                    // (the wind's patterns' frame; a cube face has no edge fade)
+            p.cascade[1] = frame[0];
+            p.cascade[2] = frame[1];
+            p.cascade[3] = 1.0f;
+            vkCmdPushConstants(cmd, m_grassShadowLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(p), &p);
+        }
+        const uint32_t n = near2 > 6.0f * 6.0f && t.sparse ? t.sparse : t.blades;
+        vkCmdDrawIndexed(cmd, n * kFarIndices, 1, m_grassIndexBlades * kNearIndices, int32_t(t.first * 8), 0);
+        m_grassPointShadowBlades += n;
+    }
+    return bound;
+}
+
+// Whether all the grass within `range` of the light is below it (the cube's upward face then needs none).
+bool Device::GrassBelow(const float light[3], float range) const
+{
+    const float tall = m_grassHeight * 1.7f + 1.0f;
+    for (const auto& [key, tp] : m_grassTiles) {
+        const GrassTile& t = *tp;
+        if (!t.built || !t.blades || t.maxY + tall < light[1])
+            continue;
+        const float x0 = float(t.tx) * kGrassTileSize, z0 = float(t.tz) * kGrassTileSize;
+        const float nx = std::max({x0 - light[0], 0.0f, light[0] - x0 - kGrassTileSize});
+        const float nz = std::max({z0 - light[2], 0.0f, light[2] - z0 - kGrassTileSize});
+        if (nx * nx + nz * nz <= range * range)
+            return false;
+    }
+    return true;
 }
 
 // The fallback: if the frame never saw a blended draw to hook, the blades go in at the end of the scene, on their own

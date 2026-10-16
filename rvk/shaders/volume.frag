@@ -7,12 +7,27 @@
 #include "frame_lights.glsl"
 layout(set = 0, binding = 0) uniform sampler2D depthTex;
 layout(set = 0, binding = 1) uniform sampler2DArrayShadow shadowMap;
+layout(set = 0, binding = 2) uniform sampler2D cloudShadow;   // the clouds' (rvk clouds.cpp; FL.clouds: where, if any)
+layout(set = 0, binding = 3) uniform sampler2D terrainSun;    // the terrain's shade from a low sun (rvk terrain_sun.cpp)
+
+// At a point of the air: 1 in the sun, 0 under the terrain hiding a low sun (FL.terrainSun: where, its weight).
+float TerrainSunAt(vec3 q)
+{
+    if ((floatBitsToUint(FL.terrainSun.w) & 0xFFFFFu) == 0u || FL.terrainSun2.y <= 0.0)
+        return 1.0;
+    vec2 uv = (q.xz - FL.terrainSun.xy) * FL.terrainSun.z;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
+        return 1.0;
+    float need = textureLod(terrainSun, uv, 0.0).r;
+    return mix(1.0, smoothstep(need - 1.0, need + 3.0, q.y), FL.terrainSun2.y);
+}
 layout(push_constant) uniform Push {
     mat4 invViewProj;   // the world camera's clip -> world (raw D3DMATRIX memory)
     vec4 eye;           // camera position; w = longest ray (world units)
     vec4 params;        // haze density, sun strength, this frame's noise offset, D3D projection m[2][2]
     vec4 size;          // full target width, height, steps, D3D projection m[3][2]
-    vec4 shafts;        // contrast of the shafts (power on the ray's lit fraction - 1)
+    vec4 shafts;        // x: contrast of the shafts (power on the ray's lit fraction - 1); y: the rays through the
+                        // clouds' gaps, x (0: none); z: their reach (world)
 } P;
 layout(location = 0) out vec4 outVolume;
 
@@ -31,6 +46,9 @@ float SunVisible(float t)
     }
     return 1.0;
 }
+
+// The sunlight through the clouds (light shafts through the gaps between them).
+#include "cloud_shadow_common.glsl"
 
 void main()
 {
@@ -59,6 +77,9 @@ void main()
             gRayStart[c] = (FL.shadowViewProj[c] * vec4(P.eye.xyz, 1.0)).xyz;
             gRayDir[c] = (FL.shadowViewProj[c] * vec4(dir, 0.0)).xyz;
         }
+        // (Things' shadows fade out as the sun nears the horizon, as on the ground - rvk draw.cpp: full from ~10 degrees
+        // up, none at ~3. Unfaded, shafts of shadows no longer seen came from invisible things - user, 2026-10-13.)
+        float casterFade = smoothstep(0.05, 0.17, -normalize(FL.sunDir.xyz).y);
         float lit = 0.0, open = 0.0;
         for (int i = 0; i < steps; ++i) {
             float u = (float(i) + noise) / float(steps), t = len * u * u;
@@ -67,7 +88,7 @@ void main()
             // the sky leave it soon (the sky isn't washed out), air near the ground - where shadows fall - keeps it.
             float density = exp(-max(q.y - (P.eye.y - 2.0), 0.0) / kHazeHeight);
             float w = (2.0 * u) * exp(-kExtinction * t) * density;
-            lit += SunVisible(t) * w;
+            lit += mix(1.0, SunVisible(t), casterFade) * CloudShadowMap(q) * TerrainSunAt(q) * w;   // (and the terrain's)
             open += w;
         }
         // Shafts are contrast: a ray partly in shadow is darkened by a power of its lit fraction, a fully lit one
@@ -81,6 +102,36 @@ void main()
         float cosAngle = dot(dir, -normalize(FL.sunDir.xyz));
         float phase = min((1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * cosAngle, 1.5), 4.0);
         light += FL.sunColor.rgb * (lit * stepLen * P.params.x * P.params.y * phase);
+    }
+
+    // Rays through the gaps in the clouds: the air out to kilometres (thin, thinning with height up to the clouds'
+    // shadow plane), lit where the clouds let the sun through (their shadow map) - beams fanning from the gaps,
+    // brightest looking towards the sun. A few long steps: the clouds' shadows are kilometres across.
+    if (P.shafts.y > 0.0 && floatBitsToUint(FL.clouds.w) != 0u && dot(FL.sunColor.rgb, FL.sunColor.rgb) > 0.0) {
+        const int kSteps = 16;
+        float reach = min(d >= 1.0 ? P.shafts.z : dist, P.shafts.z);
+        float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.0583715, 0.06711056))) + P.params.z);
+        float lit = 0.0, open = 0.0, stepLen = reach / float(kSteps);
+        for (int i = 0; i < kSteps; ++i) {
+            float t = (float(i) + noise) * stepLen;
+            vec3 q = P.eye.xyz + dir * t;
+            if (q.y >= FL.clouds2.x) break;      // (into the clouds)
+            float w = exp(-max(q.y - P.eye.y, 0.0) / 500.0) * exp(-t / 2500.0);
+            lit += CloudShadowMap(q) * w;
+            open += w;
+        }
+        if (open > 1e-6) {
+            // Contrast as the near shafts': the shadowed air dark, the beams through the gaps standing out - and only
+            // where the ray crosses both lit and shaded air (4 f (1 - f)): air lit all along is the haze (tonemap.frag
+            // Air) already. With the clouds' shadows mostly lit (finer patches) the old open * f^4 lit kilometres of
+            // air towards the sun: the morning washed out (user).
+            float fraction = lit / open;
+            float beams = open * fraction * fraction * 4.0 * fraction * (1.0 - fraction);
+            const float g = 0.7;
+            float cosAngle = dot(dir, -normalize(FL.sunDir.xyz));
+            float phase = min((1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * cosAngle, 1.5), 6.0);
+            light += FL.sunColor.rgb * (beams * stepLen * 0.0001 * P.shafts.y * phase);
+        }
     }
 
     outVolume = vec4(light, viewZ);

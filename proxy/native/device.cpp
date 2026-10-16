@@ -692,7 +692,7 @@ uint32_t FormatSize(uint32_t fvf)                   // FUN_100116c7
 
 void Install(HMODULE orig)
 {
-    if (GetMode("Device", Mode::Off) != Mode::On)
+    if (GetMode("Device", Mode::On) != Mode::On)
         return;
     g_orig = orig;
     g_directOn = GetMode("Direct", Mode::On) == Mode::On;    // docs/device-on-rvk.md (call log identical: default on)

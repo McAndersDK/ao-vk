@@ -19,8 +19,26 @@ namespace rvkproxy {
 HRESULT StubCall(unsigned index);                 // logs an unimplemented method once
 void CountBackendDraw();                          // heartbeat statistics
 unsigned ComIndex(const char* name);              // counter index of "Interface::Method"
+// randy-vk.log's path for this process (a second client in the same folder gets randy-vk-2.log).
+const char* LogPath();
+// Texture writes through Lock on the game's thread since the last call (the 600-frame log line), then reset.
+struct TextureWrites { uint32_t locks, partial; uint64_t bytes; double ms; };
+int GameTexturesAlive();                          // the game's texture surfaces with a GPU texture now (rvk_surface.cpp)
+TextureWrites TakeTextureWrites();
 void RvkLog(const char* fmt, ...);
 void ParticleFrame();                             // each presented frame (rvk_particles.cpp)
+void WeatherFrame();                              // each presented frame (rvk_weather.cpp)
+void SmokeFrame();                                // each presented frame (rvk_smoke.cpp)
+void TimeFrame();                                 // each presented frame (rvk_time.cpp: RVK_TimeOfDay)
+void StatelFrame();                               // each presented frame (rvk_statels.cpp: the playfield's pack)
+// The free camera (rvk_freecam.cpp, Ctrl+Shift+C): toggled; each presented frame; the native scene's camera.
+void FreeCamToggle(HWND window);
+void FreeCamFrame(rvk::ThreadedDevice* device, HWND window);
+bool FreeCamOn();
+bool FreeCamWorld(const float game[16], float out[16]);
+bool PatchSlot(HMODULE module, uint32_t vtable, uint32_t slot, uint32_t expected, void* hook, void** original,
+               const char* what);                 // (rvk_particles.cpp) module-relative vtable, expected entry
+void* PatchImport(HMODULE module, const char* dll, const char* function, void* hook);   // (com_trace.cpp) the old target
 bool RvkBackend();                                // RANDYVK_DDRAW=rvk installed (com_trace.cpp)
 void CallLogFrame(uint64_t presented);            // each present (rvk_device.cpp: RANDYVK_CALLLOG)
 void SetInterfaceRate(float hz);                  // RVK_UiRate: interface redraws a second (0 = every frame)
@@ -187,6 +205,7 @@ public:
     std::vector<uint8_t> shadow;                   // CPU copy of this level (textures, plain surfaces)
     bool dirty = false;                            // shadow newer than the GPU copy
     bool anyDirty = false;                         // level 0 only: some level of the chain is dirty
+    bool gpuWhole = false;                         // this level went to the GPU whole since the texture was made
 
     uint32_t rdbType = 0, rdbId = 0;               // level 0: the RDB texture it holds (0 = unknown)
     rvk::Texture* materialsFor = nullptr;          // level 0: the rvk texture its material maps were attached to
@@ -197,6 +216,7 @@ public:
 
     rvk::Texture* RvkTexture();                    // creates/uploads as needed; null if not a GPU surface
     void Upload();                                 // shadow -> GPU for this level (if a device exists)
+    void UploadRows(uint32_t y0, uint32_t y1);     // only rows [y0, y1) changed (a Lock's rectangle): just them
     uint32_t Pitch() const;
     void EnsureShadow();
 

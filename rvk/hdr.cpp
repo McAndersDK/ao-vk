@@ -53,6 +53,12 @@ const uint32_t kVolumeSpirv[] = {
 const uint32_t kVolumeBlurSpirv[] = {
 #include "volume_blur.frag.inc"
 };
+const uint32_t kSandFogSpirv[] = {
+#include "sand_fog.frag.inc"
+};
+const uint32_t kSandFogBlurSpirv[] = {
+#include "sand_fog_blur.frag.inc"
+};
 const uint32_t kSsrSpirv[] = {
 #include "ssr.frag.inc"
 };
@@ -73,6 +79,9 @@ const uint32_t kUiGlassSpirv[] = {
 };
 const uint32_t kSharpenSpirv[] = {
 #include "sharpen.frag.inc"
+};
+const uint32_t kFxaaSpirv[] = {
+#include "fxaa.frag.inc"
 };
 const uint32_t kUiCompositeSpirv[] = {
 #include "ui_composite.frag.inc"
@@ -146,7 +155,9 @@ bool Device::CreateHdrResources(std::string* error)
         return Check(vkCreateDescriptorSetLayout(m_device, &sl, nullptr, out), "post set layout", error);
     };
     auto pipelineLayout = [&](VkDescriptorSetLayout set, VkPipelineLayout* out) {
-        VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 128};
+        // (256: the tone mapping's air (RVK_Atmos), sand haze and gusts - past Vulkan's guaranteed 128; desktop GPUs
+        // give 256.)
+        VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 256};   // (256: + the storm's distant gusts)
         VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         pl.setLayoutCount = 1;
         pl.pSetLayouts = &set;
@@ -154,18 +165,40 @@ bool Device::CreateHdrResources(std::string* error)
         pl.pPushConstantRanges = &push;
         return Check(vkCreatePipelineLayout(m_device, &pl, nullptr, out), "post pipeline layout", error);
     };
-    if (!setLayout(kTonemapInputs, &m_tonemapSetLayout) || !pipelineLayout(m_tonemapSetLayout, &m_tonemapLayout) ||
+    if (m_props.limits.maxPushConstantsSize < 192)
+        Log("post: this GPU allows %u bytes of push constants, the tone mapping needs 192 (RVK_Atmos, sand): expect errors",
+            m_props.limits.maxPushConstantsSize);
+    // (The tone mapping: its images and, at kTonemapInputs, the frame lights - the lightning's flash.)
+    auto tonemapSetLayout = [&](VkDescriptorSetLayout* out) {
+        VkDescriptorSetLayoutBinding b[kTonemapInputs + 2];
+        for (uint32_t i = 0; i < kTonemapInputs; ++i)
+            b[i] = {i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        b[kTonemapInputs] = {kTonemapInputs, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        // (16: the rain layer - rain.cpp m_rainNear.)
+        b[kTonemapInputs + 1] = {kTonemapInputs + 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        VkDescriptorSetLayoutCreateInfo sl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        sl.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+        sl.bindingCount = kTonemapInputs + 2;
+        sl.pBindings = b;
+        return Check(vkCreateDescriptorSetLayout(m_device, &sl, nullptr, out), "tone mapping set layout", error);
+    };
+    if (!tonemapSetLayout(&m_tonemapSetLayout) || !pipelineLayout(m_tonemapSetLayout, &m_tonemapLayout) ||
         !setLayout(4, &m_bloomSetLayout) || !pipelineLayout(m_bloomSetLayout, &m_bloomLayout))
         return false;
     {
-        // Volumetric light: depth, the sun shadow cascades, the frame lights (binding 4, as in the scene shaders).
-        VkDescriptorSetLayoutBinding b[3] = {
+        // Volumetric light: depth, the sun shadow cascades, the clouds' shadow map (clouds.cpp), the terrain's shade
+        // from a low sun (terrain_sun.cpp), the frame lights (binding 4, as in the scene shaders); the sand fog's
+        // shelter (binding 5, sand_map.cpp SandFogShelter).
+        VkDescriptorSetLayoutBinding b[6] = {
             {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
             {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-            {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
+            {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
         VkDescriptorSetLayoutCreateInfo sl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         sl.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-        sl.bindingCount = 3;
+        sl.bindingCount = 6;
         sl.pBindings = b;
         if (!Check(vkCreateDescriptorSetLayout(m_device, &sl, nullptr, &m_volumeSetLayout), "volume set layout", error) ||
             !pipelineLayout(m_volumeSetLayout, &m_volumeLayout))
@@ -242,7 +275,7 @@ bool Device::CreateHdrResources(std::string* error)
         gi.pColorBlendState = &cb;
         gi.pDynamicState = &ds;
         gi.layout = layout;
-        bool ok = Check(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &gi, nullptr, out), "post pipeline", error);
+        bool ok = Check(vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &gi, nullptr, out), "post pipeline", error);
         vkDestroyShaderModule(m_device, frag, nullptr);
         return ok;
     };
@@ -259,11 +292,14 @@ bool Device::CreateHdrResources(std::string* error)
               fullscreen(kEnvFilterSpirv, sizeof(kEnvFilterSpirv), hdrFormat, false, m_bloomLayout, &m_envFilterPipeline) &&
               fullscreen(kVolumeSpirv, sizeof(kVolumeSpirv), hdrFormat, false, m_volumeLayout, &m_volumePipeline) &&
               fullscreen(kVolumeBlurSpirv, sizeof(kVolumeBlurSpirv), hdrFormat, false, m_bloomLayout, &m_volumeBlurPipeline) &&
+              fullscreen(kSandFogSpirv, sizeof(kSandFogSpirv), hdrFormat, false, m_volumeLayout, &m_sandFogPipeline) &&
+              fullscreen(kSandFogBlurSpirv, sizeof(kSandFogBlurSpirv), hdrFormat, false, m_bloomLayout, &m_sandFogBlurPipeline) &&
               fullscreen(kSsrSpirv, sizeof(kSsrSpirv), hdrFormat, false, m_bloomLayout, &m_ssrPipeline) &&
               fullscreen(kContactSpirv, sizeof(kContactSpirv), GetFormatInfo(Format::RG16F).vk, false, m_bloomLayout,
                          &m_contactPipeline) &&
               fullscreen(kTaaSpirv, sizeof(kTaaSpirv), hdrFormat, false, m_bloomLayout, &m_taaPipeline) &&
               fullscreen(kSharpenSpirv, sizeof(kSharpenSpirv), kColorFormat, false, m_bloomLayout, &m_sharpenPipeline) &&
+              fullscreen(kFxaaSpirv, sizeof(kFxaaSpirv), kColorFormat, false, m_bloomLayout, &m_fxaaPipeline) &&
               fullscreen(kUiCompositeSpirv, sizeof(kUiCompositeSpirv), kColorFormat, 2, m_bloomLayout,
                          &m_uiCompositePipeline) &&
               fullscreen(kUiBlurDownSpirv, sizeof(kUiBlurDownSpirv), kColorFormat, 0, m_bloomLayout,
@@ -304,6 +340,13 @@ void Device::DestroyHdrResources()
     m_envReady = m_envEyeValid = false;
     for (Texture*& t : m_volumeTex)
         if (t) { DestroyTextureNow(t); t = nullptr; }
+    for (Texture*& t : m_sandFogTex)
+        if (t) { DestroyTextureNow(t); t = nullptr; }
+    if (m_sandFogShelter) { DestroyTextureNow(m_sandFogShelter); m_sandFogShelter = nullptr; }
+    if (m_rainCover) { DestroyTextureNow(m_rainCover); m_rainCover = nullptr; }
+    m_rainCoverGen = ~0u;
+    if (m_rainNear) { DestroyTextureNow(m_rainNear); m_rainNear = nullptr; }
+    m_sandFogShelterGen = ~0u;
     if (m_ssrTex) { DestroyTextureNow(m_ssrTex); m_ssrTex = nullptr; }
     for (Texture*& t : m_lut)
         if (t) { DestroyTextureNow(t); t = nullptr; }
@@ -312,6 +355,7 @@ void Device::DestroyHdrResources()
     for (Texture*& t : m_contactTex)
         if (t) { DestroyTextureNow(t); t = nullptr; }
     if (m_tonemapped) { DestroyTextureNow(m_tonemapped); m_tonemapped = nullptr; }
+    if (m_fxaaOut) { DestroyTextureNow(m_fxaaOut); m_fxaaOut = nullptr; }
     if (m_uiLayer) { DestroyTextureNow(m_uiLayer); m_uiLayer = nullptr; }
     for (Texture*& t : m_glassTex)
         if (t) { DestroyTextureNow(t); t = nullptr; }
@@ -323,8 +367,8 @@ void Device::DestroyHdrResources()
         if (*t) { DestroyTextureNow(*t); *t = nullptr; }
     for (VkPipeline* p : {&m_bloomDown, &m_bloomUp, &m_aoPipeline, &m_aoBlurPipeline, &m_giPipeline, &m_giBlurPipeline,
                           &m_envAccumPipeline, &m_envFilterPipeline,
-                          &m_volumePipeline, &m_volumeBlurPipeline, &m_ssrPipeline,
-                          &m_contactPipeline, &m_taaPipeline, &m_sharpenPipeline, &m_uiCompositePipeline,
+                          &m_volumePipeline, &m_volumeBlurPipeline, &m_sandFogPipeline, &m_sandFogBlurPipeline, &m_ssrPipeline,
+                          &m_contactPipeline, &m_taaPipeline, &m_sharpenPipeline, &m_fxaaPipeline, &m_uiCompositePipeline,
                           &m_glassDownPipeline, &m_glassUpPipeline, &m_glassPipeline,
                           &m_motionPipeline,
                           &m_tileMaxPipeline, &m_neighbourMaxPipeline, &m_objectBlurPipeline, &m_dofCompositePipeline,
@@ -409,6 +453,9 @@ void Device::EndScene()
     ProfileMark("scene");
     RenderGrassField(cmd);                       // RVK_GrassOn: our ground grass, over the scene (its own block)
     ProfileMark("ground grass");
+    RenderSmoke(cmd);                            // RVK_SmokeOn: the smoke's simulation, and it over the scene
+    RenderDebris(cmd);                           // RVK_StormDebris: a storm's blown leaves, straw and twigs
+    RenderRain(cmd);                             // RVK_WeatherOn: the rain, over all of it
     double cpu = ProfileCpu();
     Transition(cmd, m_scene, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     bool bloom = m_bloomStrength > 0.0f;
@@ -423,6 +470,8 @@ void Device::EndScene()
     ProfileMark("environment probe");
     bool volume = RenderVolume(cmd);
     ProfileMark("volumetric");
+    m_sandFogValid = RenderSandFog(cmd);
+    ProfileMark("sand fog");
     Transition(cmd, m_localFraction, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     bool ssr = RenderSsr(cmd);
     ProfileMark("reflections");
@@ -451,18 +500,38 @@ void Device::EndScene()
     bool taa = TaaParams(taaParams);
     float motion[24];
     bool blur = MotionBlurParams(motion);
-    if ((blur || taa) &&
+    bool fxaa = m_fxaa && !taa && m_fxaaPipeline;    // (TAA anti-aliases already)
+    if ((blur || taa || fxaa) &&
         (!m_tonemapped || m_tonemapped->m_width != m_ldrMain->m_width || m_tonemapped->m_height != m_ldrMain->m_height)) {
         if (m_tonemapped) DestroyTexture(m_tonemapped);
         m_tonemapped = CreateImage(m_ldrMain->m_width, m_ldrMain->m_height, Format::A8R8G8B8, 1, true);
         blur = blur && m_tonemapped;
         taa = taa && m_tonemapped;
+        fxaa = fxaa && m_tonemapped;
     }
-    Texture* toned = blur || taa ? m_tonemapped : m_ldrMain;
+    if (fxaa && blur &&
+        (!m_fxaaOut || m_fxaaOut->m_width != m_ldrMain->m_width || m_fxaaOut->m_height != m_ldrMain->m_height)) {
+        if (m_fxaaOut) DestroyTexture(m_fxaaOut);
+        m_fxaaOut = CreateImage(m_ldrMain->m_width, m_ldrMain->m_height, Format::A8R8G8B8, 1, true);
+        fxaa = fxaa && m_fxaaOut;
+    }
+    Texture* toned = blur || taa || fxaa ? m_tonemapped : m_ldrMain;
+    // With TAA the tone mapping's alpha says how much of each pixel additive effects made (taa.frag: those pixels
+    // take more of the new frame - sparks and spell effects, new each frame, were averaged away).
+    if (taa) params[7] = float(int(params[7]) | 16);
     TonemapInputsPass(cmd, toned, m_tonemapPipeline, scene, bloom, ao, gi, volume, params);
     ProfileMark("tonemap");
     if (taa)
         RenderTaa(cmd, blur ? m_tonemapped : m_ldrMain, taaParams);
+    if (fxaa) {
+        // Into the main target, or - with motion blur - into an image of its own that the blur then reads (the two
+        // swap: m_tonemapped is what the blur reads).
+        Transition(cmd, m_tonemapped, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        const float size[4] = {1.0f / float(m_tonemapped->m_width), 1.0f / float(m_tonemapped->m_height), 0.0f, 0.0f};
+        FullscreenPass(cmd, blur ? m_fxaaOut : m_ldrMain, m_fxaaPipeline, m_tonemapped->m_view, m_tonemapped->m_view,
+                       m_linearSampler, size, sizeof(size), false);
+        if (blur) std::swap(m_tonemapped, m_fxaaOut);
+    }
     ProfileMark("taa + sharpen");
     if (blur) {
         Transition(cmd, m_tonemapped, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -486,6 +555,50 @@ void Device::EndScene()
     m_constantsDirty = true;
     if (m_inFrame)
         BeginRenderingOn(m_target);
+    if (m_inFrame && m_target == m_ldrMain)
+        DrawHeldLabels();
+    m_heldLabels.clear();                        // (the scene ended elsewhere: not drawn this frame)
+}
+
+// The name labels held back during the scene (Draw), onto the final picture: each drawn as the game drew it - its
+// state put back for the draw, the game's current state after.
+void Device::DrawHeldLabels()
+{
+    if (m_heldLabels.empty())
+        return;
+    std::vector<HeldLabel> labels;
+    labels.swap(m_heldLabels);
+    const auto rs = m_rs;
+    const auto tss = m_tss;
+    const auto textures = m_textures;
+    const d3d::Matrix world = m_world, view = m_view, proj = m_proj;
+    const auto texMatrix = m_texMatrix;
+    const d3d::Viewport viewport = m_viewport;
+    m_drawingHeldLabels = true;
+    for (const HeldLabel& l : labels) {
+        if (!l.textures[0])
+            continue;                            // (its text freed since: nothing to draw)
+        m_rs = l.rs;
+        m_tss = l.tss;
+        m_textures = l.textures;
+        m_world = l.world;
+        m_view = l.view;
+        m_proj = l.proj;
+        m_texMatrix = l.texMatrix;
+        m_viewport = l.viewport;
+        m_constantsDirty = true;
+        Draw(l.primitive, l.fvf, l.vertices.data(), l.vertexCount, nullptr, 0);
+    }
+    m_drawingHeldLabels = false;
+    m_rs = rs;
+    m_tss = tss;
+    m_textures = textures;
+    m_world = world;
+    m_view = view;
+    m_proj = proj;
+    m_texMatrix = texMatrix;
+    m_viewport = viewport;
+    m_constantsDirty = true;
 }
 
 // The depth buffer, written by the scene, readable by the post passes (BeginRenderingOn makes it an attachment again).
@@ -507,6 +620,9 @@ void Device::TonemapInputsPass(VkCommandBuffer cmd, Texture* dst, VkPipeline pip
                                bool gi, bool volume, const float params[16])
 {
     Transition(cmd, dst, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    Transition(cmd, m_glow, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);   // (binding 12: the effects' share, for TAA)
+    if (m_rainNear && m_rainNearFrame == m_frameNumber)
+        Transition(cmd, m_rainNear, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);   // (binding 16: the rain layer)
     VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     color.imageView = dst->m_view;
     color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -542,9 +658,14 @@ void Device::TonemapInputsPass(VkCommandBuffer cmd, Texture* dst, VkPipeline pip
                                        {m_pointSampler, reflections->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                        {m_pointSampler, contact->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                        {m_linearSampler, m_lut[0]->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                       {m_linearSampler, m_lut[1]->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+                                       {m_linearSampler, m_lut[1]->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                       {m_pointSampler, m_glow->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                       {m_linearSampler, SmokeCoverValid() ? m_smokeHalf->m_view : m_scene->m_view,
+                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                       {m_pointSampler, m_sandFogValid ? m_sandFogTex[1]->m_view : m_scene->m_view,
+                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
     static_assert(sizeof(images) / sizeof(images[0]) == kTonemapInputs, "occlusion.glsl bindings");
-    VkWriteDescriptorSet w[kTonemapInputs] = {};
+    VkWriteDescriptorSet w[kTonemapInputs + 2] = {};
     for (uint32_t i = 0; i < kTonemapInputs; ++i) {
         w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[i].dstBinding = i;
@@ -552,10 +673,90 @@ void Device::TonemapInputsPass(VkCommandBuffer cmd, Texture* dst, VkPipeline pip
         w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         w[i].pImageInfo = &images[i];
     }
-    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_tonemapLayout, 0, kTonemapInputs, w);
-    vkCmdPushConstants(cmd, m_tonemapLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 64, params);
+    // The frame lights (tonemap.frag: the lightning's flash).
+    Frame& frame = m_frames[m_frameIndex];
+    FillFrameLights(static_cast<FrameLights*>(frame.postData), false);
+    VkDescriptorBufferInfo lights{frame.post, 0, sizeof(FrameLights)};
+    w[kTonemapInputs].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w[kTonemapInputs].dstBinding = kTonemapInputs;
+    w[kTonemapInputs].descriptorCount = 1;
+    w[kTonemapInputs].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    w[kTonemapInputs].pBufferInfo = &lights;
+    const bool rainNear = m_rainNear && m_rainNearFrame == m_frameNumber;   // (made readable before the rendering)
+    VkDescriptorImageInfo rainInfo{m_pointSampler, rainNear ? m_rainNear->m_view : m_scene->m_view,   // (unread without)
+                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    w[kTonemapInputs + 1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w[kTonemapInputs + 1].dstBinding = kTonemapInputs + 1;
+    w[kTonemapInputs + 1].descriptorCount = 1;
+    w[kTonemapInputs + 1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w[kTonemapInputs + 1].pImageInfo = &rainInfo;
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_tonemapLayout, 0, kTonemapInputs + 2, w);
+    float push[64] = {};
+    std::memcpy(push, params, 16 * sizeof(float));
+    if (depthView == m_depthView && m_aoProjValid) {
+        push[7] = float(int(push[7]) | 16);      // (the depth is the scene's: the grading's distance, the land's haze)
+        LandHaze(push + 16);
+    }
+    SandHaze(push + 40);                         // (wind.cpp: a sand or ash storm's air)
+    SandGusts(push + 48);                        // (... its distant gusts)
+    vkCmdPushConstants(cmd, m_tonemapLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), push);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRendering(cmd);
+}
+
+// The haze over the distant land (RVK_VolLand; tonemap.frag): out[0..3] its colour - the game's fog colour (what the
+// far land fades into) cooled and a little lighter, as the air's blue - and how much; out[4..7] the game's fog start
+// and end (view depth: from there the game's own fog takes over), 0 0 if none. Off (strength 0) without the fog.
+void Device::LandHaze(float out[24]) const
+{
+    for (int k = 0; k < 24; ++k) out[k] = 0.0f;
+    float fog[4], fogParams[4];
+    SceneFog(fog, fogParams);
+    const bool linear = fog[3] > 0.5f && uint32_t(fogParams[3]) == 3 && fogParams[1] > fogParams[0] && fogParams[1] > 1.0f;
+    if (m_landHaze <= 0.0f || !linear)
+        return;
+    const float l = 0.3f * fog[0] + 0.59f * fog[1] + 0.11f * fog[2];
+    const float cool[3] = {0.78f, 0.95f, 1.25f};
+    for (int k = 0; k < 3; ++k) out[k] = std::max(0.0f, fog[k] + (l * cool[k] - fog[k]) * 0.45f) * 1.08f;
+    out[3] = std::clamp(m_landHaze, 0.0f, 1.0f);
+    out[4] = fogParams[0];
+    out[5] = fogParams[1];
+    MistParams(out + 6);                         // (the valley mist: its top over the eye, its density)
+    // The air (RVK_Atmos; tonemap.frag Air): out[8..23]. Its density at the eye: about 45% hazed at the game's fog
+    // end on the level, more with the sky's cloud and rain (sky.cpp); its scale height; the sun's glow.
+    if (m_atmos) {
+        const auto& v = m_aoView.m;
+        const float vary = std::clamp(m_cloudParams.vary, 0.0f, 1.0f);
+        const float weather = (1.0f + (0.7f + 0.7f * SkyCloudiness() - 1.0f) * vary) * (1.0f + StormSky());
+        out[8] = m_aoProj.m[0][0];
+        out[9] = m_aoProj.m[1][1];
+        out[10] = 0.6f / fogParams[1] * weather;
+        out[11] = 150.0f;
+        // (D3D row vectors: a world direction's view-space form is d.x * row 0 + d.y * row 1 + d.z * row 2.)
+        for (int k = 0; k < 3; ++k) out[12 + k] = v[1][k];
+        out[15] = 0.35f;                         // (0.6 washed the far land out round a rising sun - user)
+        // Towards the sun, or by night the moon; their light through the air.
+        const bool moon = MoonOn() && m_frameSunColor[0] + m_frameSunColor[1] + m_frameSunColor[2] <= 0.0f;
+        float to[3], light[3];
+        for (int k = 0; k < 3; ++k) {
+            to[k] = moon ? -m_moonDir[k] : -m_trueSunDir[k];
+            light[k] = moon ? m_moonColour[k] : m_frameSunColor[k];
+        }
+        const float tl = std::max(std::sqrt(to[0] * to[0] + to[1] * to[1] + to[2] * to[2]), 1e-6f);
+        for (int k = 0; k < 3; ++k) to[k] /= tl;
+        for (int k = 0; k < 3; ++k) out[16 + k] = to[0] * v[0][k] + to[1] * v[1][k] + to[2] * v[2][k];
+        out[19] = 0.75f;
+        const float low = 1.0f - std::clamp(to[1] / 0.3f, 0.0f, 1.0f), low2 = low * low;
+        const float tint[3] = {1.0f, 1.0f - 0.35f * low2, 1.0f - 0.6f * low2};
+        // (A low sun's light through much air: a third of it at the horizon, all from ~17 degrees.)
+        const float through = 0.35f + 0.65f * std::clamp(to[1] / 0.3f, 0.0f, 1.0f);
+        // (The sun's glow in the air, as the eye stands: none under the mountains hiding a low sun - terrain_sun.cpp.)
+        const float terrain = moon ? 1.0f : 1.0f + (m_tsEye - 1.0f) * m_tsWeight;
+        for (int k = 0; k < 3; ++k) out[20 + k] = light[k] * tint[k] * (moon ? 1.0f : 0.5f * through) * terrain;
+    }
+    if (m_frameNumber % 600 == 3)
+        Log("land haze: colour %.2f %.2f %.2f x %.2f, the game's fog %.0f..%.0f", double(out[0]), double(out[1]),
+            double(out[2]), double(out[3]), double(out[4]), double(out[5]));
 }
 
 // Depth of field (dof_*.frag): the scene with its occlusion -> focus distance (1x1, eased) -> half resolution colour
@@ -839,7 +1040,9 @@ bool Device::RenderVolume(VkCommandBuffer cmd)
     push.size[2] = 32.0f;                                         // sun steps
     push.size[3] = m_aoProj.m[3][2];
     push.shafts[0] = 2.0f * m_volumeShafts;
-    push.shafts[1] = push.shafts[2] = push.shafts[3] = 0.0f;
+    push.shafts[1] = CloudShadowView() != m_blackTexture->m_view ? m_volumeRays : 0.0f;   // (clouds casting shadows)
+    push.shafts[2] = 3000.0f;                                     // the rays' reach
+    push.shafts[3] = 0.0f;
     static_assert(sizeof(push) <= 128, "push constant range");
 
     Texture* dst = m_volumeTex[0];
@@ -863,12 +1066,18 @@ bool Device::RenderVolume(VkCommandBuffer cmd)
     VkDescriptorImageInfo depth{m_pointSampler, m_depthView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkDescriptorImageInfo shadow{m_shadowSampler, m_shadowView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkDescriptorBufferInfo lights{frame.post, 0, sizeof(FrameLights)};
-    VkWriteDescriptorSet wr[3] = {};
+    VkDescriptorImageInfo clouds{m_linearSampler, CloudShadowView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    const bool terrainMap = m_terrainSunMap && m_terrainSunMap->m_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkDescriptorImageInfo terrain{m_linearSampler, terrainMap ? m_terrainSunMap->m_view : m_blackTexture->m_view,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet wr[5] = {};
     for (auto& x : wr) { x.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; x.descriptorCount = 1; }
     wr[0].dstBinding = 0; wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[0].pImageInfo = &depth;
     wr[1].dstBinding = 1; wr[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[1].pImageInfo = &shadow;
     wr[2].dstBinding = 4; wr[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; wr[2].pBufferInfo = &lights;
-    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_volumeLayout, 0, 3, wr);
+    wr[3].dstBinding = 2; wr[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[3].pImageInfo = &clouds;
+    wr[4].dstBinding = 3; wr[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[4].pImageInfo = &terrain;
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_volumeLayout, 0, 5, wr);
     vkCmdPushConstants(cmd, m_volumeLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRendering(cmd);
@@ -882,6 +1091,178 @@ bool Device::RenderVolume(VkCommandBuffer cmd)
     }
     std::swap(m_volumeTex[0], m_volumeTex[1]);    // the second pass wrote [0]
     Transition(cmd, m_volumeTex[1], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    return true;
+}
+
+// A sand or ash storm's air as a lit volume (sand_fog.frag, RVK_SandFog; docs/sand-fog-plan.md): marched at half
+// resolution, blurred both ways (sand_fog_blur.frag, depth-aware); m_sandFogTex[1] holds its light and transmittance
+// for the tone mapping (occlusion.glsl binding 14), in place of the flat haze.
+bool Device::RenderSandFog(VkCommandBuffer cmd)
+{
+    bool perspective = m_aoProjValid && m_aoProj.m[2][3] == 1.0f && m_aoProj.m[3][3] == 0.0f;
+    d3d::Matrix inverse;
+    if (!SandFogOn() || !perspective || !m_depth || !InvertMatrix(MulMatrix(m_aoView, m_aoProj), &inverse))
+        return false;
+    uint32_t w = std::max(1u, m_scene->m_width / 2), h = std::max(1u, m_scene->m_height / 2);
+    if (!m_sandFogTex[0] || m_sandFogTex[0]->m_width != w || m_sandFogTex[0]->m_height != h) {
+        for (Texture*& t : m_sandFogTex) {
+            if (t) DestroyTexture(t);
+            t = CreateImage(w, h, Format::RGBA16F, 1, true);
+        }
+        if (!m_sandFogTex[0] || !m_sandFogTex[1])
+            return false;
+    }
+    MakeDepthReadable(cmd);
+    Frame& frame = m_frames[m_frameIndex];
+    FillFrameLights(static_cast<FrameLights*>(frame.postData), false);
+
+    float gusts[16];
+    SandGusts(gusts);                            // (the eye's ground, the wind's frame and time; zeros without gusts)
+    struct {
+        d3d::Matrix invViewProj;
+        float eye[4], proj[4], dens[4], albedo[4], sky[4], terrain[4], wind[4], gusts[4], sun[4], shelter[4];
+    } push{};
+    static_assert(sizeof(push) <= 256, "push constant range");
+    push.invViewProj = inverse;
+    const auto& v = m_aoView.m;
+    for (int i = 0; i < 3; ++i) push.eye[i] = -(v[3][0] * v[i][0] + v[3][1] * v[i][1] + v[3][2] * v[i][2]);
+    push.eye[3] = 400.0f;                                         // the march's reach
+    push.proj[0] = m_aoProj.m[2][2];
+    push.proj[1] = m_aoProj.m[3][2];
+    push.proj[2] = float(m_scene->m_width);
+    push.proj[3] = float(m_scene->m_height);
+    // (Its density at the ground: the haze's - tonemap.frag's dust.w - so the distance is as buried. The dust: a storm
+    // wall 120 units high, the sky buried overhead too; a thunderstorm's rain mist deeper and with little high up.)
+    const StormAir air = StormAirNow();
+    const float rainShare = 1.0f - air.sandShare;
+    push.dens[0] = air.sigma;
+    push.dens[1] = air.height;
+    float ground;
+    push.dens[2] = gusts[3] != 0.0f ? gusts[3] : (GroundAt(push.eye[0], push.eye[2], &ground, nullptr, nullptr) ? ground : push.eye[1] - 2.0f);
+    push.dens[3] = std::max(m_sandClear, 0.0f);
+    if (m_terrainAmbient[3] > 0.5f) {
+        for (int i = 0; i < 3; ++i) push.sky[i] = m_terrainAmbient[i];
+    } else {
+        const uint32_t a = m_rs[d3d::RS_AMBIENT];
+        push.sky[0] = float((a >> 16) & 0xFF) / 255.0f;
+        push.sky[1] = float((a >> 8) & 0xFF) / 255.0f;
+        push.sky[2] = float(a & 0xFF) / 255.0f;
+    }
+    // The dust's colour: such that, as typically lit (sand_fog.frag: the sky's light, the moon's, the sun's through
+    // the dust above halfway up the thick layer and what it lost spread round), it is the haze's - the storm's
+    // colour, by night the haze's dimmer one. Its light and shade - the glow towards the sun, the dust shaded by
+    // dunes, a dusk - stay as variation about it. (Else, as the sim sand before storms40: a darker, greyer dust,
+    // and by night dark grey where the land is sandy - the user.)
+    float haze[8];
+    SandHaze(haze);
+    const bool moonShadow = m_shadowValid && m_shadowIsMoon;
+    const float sunUp = std::max(-m_frameSunDir[1], 0.02f);
+    const float kRedden[3] = {0.85f, 1.0f, 1.25f};               // (sand_fog.frag's: the dust takes blue first)
+    for (int i = 0; i < 3; ++i) {
+        const float through = std::exp(-kRedden[i] * push.dens[0] * (1.0f - air.upper) * push.dens[1] * 0.5f / sunUp);   // (the thick layer)
+        const float sun = m_shadowValid ? m_shadowSunColor[i] : m_frameSunColor[i];
+        const float moon = moonShadow ? 0.0f : m_moonColour[i] * 0.6f;
+        const float typical = std::max(push.sky[i] + moon + sun * (through + 0.8f * std::max(-m_frameSunDir[1], 0.0f) * (1.0f - through)), 0.02f);
+        push.albedo[i] = std::min(haze[i] / typical, 4.0f);
+    }
+    // (The rain mist: a light grey-blue as lit - its own light, not calibrated to a tint; the dust's share as above.)
+    const float kMist[3] = {0.5f, 0.53f, 0.6f};   // (a storm's distance dark grey, not a bright veil)
+    if (rainShare > 0.0f) {
+        float green[3], dust[3];
+        StormGreen(green);                       // (the mist cast green with the storm: RVK_StormGreen)
+        float mist[3];
+        for (int i = 0; i < 3; ++i) mist[i] = kMist[i] * green[i];
+        for (int i = 0; i < 3; ++i) dust[i] = air.sandShare > 0.0f ? push.albedo[i] : mist[i];
+        for (int i = 0; i < 3; ++i) push.albedo[i] = mist[i] + (dust[i] - mist[i]) * air.sandShare;
+    }
+    push.albedo[3] = float(m_frameNumber % 64) * 0.618034f;      // the march's offsets move on every frame
+    // Steps (the blur and TAA average the jitter): the sand 24, the rain mist - smooth, thin - 12.
+    push.sky[3] = std::round(12.0f + 12.0f * std::clamp(air.sandShare * 2.0f, 0.0f, 1.0f));
+    const bool terrainMap = m_terrainSunMap && m_terrainSunMap->m_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
+                            m_tsMadeFrame != ~0ull;
+    if (terrainMap) {
+        push.terrain[0] = m_tsMapOrigin[0];
+        push.terrain[1] = m_tsMapOrigin[1];
+        push.terrain[2] = 1.0f / (16.0f * float(m_terrainSunMap->m_width));   // (terrain_sun.cpp: 16 units a cell)
+        const float sunNow[3] = {-m_trueSunDir[0], -m_trueSunDir[1], -m_trueSunDir[2]};
+        const float l = std::sqrt(sunNow[0] * sunNow[0] + sunNow[1] * sunNow[1] + sunNow[2] * sunNow[2]);
+        const float dot = l > 1e-6f ? (sunNow[0] * m_tsSunUsed[0] + sunNow[1] * m_tsSunUsed[1] + sunNow[2] * m_tsSunUsed[2]) / l : 0.0f;
+        push.terrain[3] = dot > 0.999f ? 2.0f : 1.0f;             // (its sun shade only as made for this sun)
+    }
+    for (int i = 0; i < 4; ++i) push.wind[i] = gusts[12 + i];
+    if (m_frameNumber % 600 == 0)
+        Log("sand fog: density %.4f, scale height %.0f, ground %.1f (eye y %.1f), sky light %.2f %.2f %.2f, dust colour %.2f %.2f "
+            "%.2f (x the light), terrain map %.0f", double(push.dens[0]), double(push.dens[1]), double(push.dens[2]), double(push.eye[1]),
+            double(push.sky[0]), double(push.sky[1]), double(push.sky[2]), double(push.albedo[0]), double(push.albedo[1]),
+            double(push.albedo[2]), double(push.terrain[3]));
+    push.gusts[0] = gusts[10];
+    push.gusts[1] = gusts[11];
+    push.gusts[2] = m_sandEyeShelter;
+    // An ash storm (no glow towards the sun): forced so (RVK_SandAsh), or the game's storm grey rather than sand's
+    // orange (its colour's saturation: sand ~0.45, ash ~0.05).
+    const float hi = std::max({m_sandColour[0], m_sandColour[1], m_sandColour[2]});
+    const float lo = std::min({m_sandColour[0], m_sandColour[1], m_sandColour[2]});
+    const float saturation = hi > 1e-4f ? (hi - lo) / hi : 0.0f;
+    const float grey = 1.0f - std::clamp((saturation - 0.12f) / 0.18f, 0.0f, 1.0f);
+    push.gusts[3] = m_sandForce > 0.0f ? (m_sandAsh ? 1.0f : 0.0f) : grey * grey * (3.0f - 2.0f * grey);
+    push.gusts[3] = std::max(push.gusts[3] * air.sandShare, rainShare);   // (the rain mist: dull too, under cloud)
+    // RVK_SandSun: the sky round the sun seen through the dust's depth ^ this (1: as the rest of the sky - hidden).
+    push.sun[0] = 1.0f - 0.95f * std::clamp(m_sandSun, 0.0f, 1.0f);
+    push.sun[1] = air.upper;                                      // the tall column's share, its scale height
+    push.sun[2] = air.upperHeight;
+    push.sun[3] = rainShare;                                      // (sand_fog.frag: rain shafts, not billows; no reddening)
+    // The lee of walls and hills near the eye (the sand map's shelter): the dust there held off.
+    const bool shelterMap = SandFogShelter(push.shelter);
+
+    Texture* dst = m_sandFogTex[0];
+    Transition(cmd, dst, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    color.imageView = dst->m_view;
+    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    ri.renderArea = {{0, 0}, {w, h}};
+    ri.layerCount = 1;
+    ri.colorAttachmentCount = 1;
+    ri.pColorAttachments = &color;
+    vkCmdBeginRendering(cmd, &ri);
+    VkViewport viewport{0.0f, 0.0f, float(w), float(h), 0.0f, 1.0f};
+    VkRect2D scissor{{0, 0}, {w, h}};
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_sandFogPipeline);
+    VkDescriptorImageInfo depth{m_pointSampler, m_depthView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo shadow{m_shadowSampler, m_shadowView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorBufferInfo lights{frame.post, 0, sizeof(FrameLights)};
+    VkDescriptorImageInfo clouds{m_linearSampler, CloudShadowView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo terrain{m_linearSampler, terrainMap ? m_terrainSunMap->m_view : m_blackTexture->m_view,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo shelter{m_linearSampler, shelterMap ? m_sandFogShelter->m_view : m_blackTexture->m_view,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet wr[6] = {};
+    for (auto& x : wr) { x.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; x.descriptorCount = 1; }
+    wr[0].dstBinding = 0; wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[0].pImageInfo = &depth;
+    wr[1].dstBinding = 1; wr[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[1].pImageInfo = &shadow;
+    wr[2].dstBinding = 4; wr[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; wr[2].pBufferInfo = &lights;
+    wr[3].dstBinding = 2; wr[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[3].pImageInfo = &clouds;
+    wr[4].dstBinding = 3; wr[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[4].pImageInfo = &terrain;
+    wr[5].dstBinding = 5; wr[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[5].pImageInfo = &shelter;
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_volumeLayout, 0, 6, wr);
+    vkCmdPushConstants(cmd, m_volumeLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRendering(cmd);
+    ProfileMark("sand fog march");               // (the blur: the rest, "sand fog")
+
+    for (int pass = 0; pass < 2; ++pass) {
+        Texture* src = m_sandFogTex[pass];
+        Texture* out = m_sandFogTex[pass ^ 1];
+        Transition(cmd, src, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        float p[8] = {pass == 0 ? 1.0f : 0.0f, pass == 0 ? 0.0f : 1.0f, 2.0f, 0.0f, m_aoProj.m[2][2], m_aoProj.m[3][2], 0.0f, 0.0f};
+        FullscreenPass(cmd, out, m_sandFogBlurPipeline, src->m_view, m_depthView, m_pointSampler, p, sizeof(p), false);
+    }
+    std::swap(m_sandFogTex[0], m_sandFogTex[1]);    // the second pass wrote [0]
+    Transition(cmd, m_sandFogTex[1], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     return true;
 }
 
@@ -1086,7 +1467,10 @@ void Device::RenderBloom(VkCommandBuffer cmd)
         MakeDepthReadable(cmd);
     Texture* src = m_scene;
     for (size_t i = 0; i < m_bloomLevels.size(); ++i) {
-        float params[8] = {1.0f / float(src->m_width), 1.0f / float(src->m_height), m_bloomThreshold, i == 0 ? 1.0f : 0.0f,
+        // (By night (RVK_NightDark) the threshold lower: lamps and windows glow out of the darker night.)
+        const float nightGlow = NightAmount() * std::min(m_nightDark, 1.0f);
+        float params[8] = {1.0f / float(src->m_width), 1.0f / float(src->m_height),
+                           m_bloomThreshold * (1.0f - 0.25f * nightGlow), i == 0 ? 1.0f : 0.0f,
                            m_aoProj.m[2][2], m_aoProj.m[3][2], m_bloomDepth ? 1.0f : 0.0f, 0.0f};
         // The first pass adds the glow (additive effects) to the scene's light above the threshold.
         Texture* src2 = i == 0 ? m_glow : src;

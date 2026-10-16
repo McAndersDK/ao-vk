@@ -1,0 +1,52 @@
+#version 450
+// Clouds (rvk/clouds.cpp): their noise, made once - 64^3, tiling. r: billowy (value noise shaped by worley), g: worley
+// (4 cells a side and finer), b: finer worley, a: value noise.
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+layout(set = 0, binding = 0, rgba8) uniform writeonly image3D noiseOut;
+
+uint Hash(ivec3 c, int period, uint salt)
+{
+    uvec3 u = uvec3((c % period + period) % period);
+    uint x = u.x * 73856093u ^ u.y * 19349663u ^ u.z * 83492791u ^ salt * 2654435761u;
+    x ^= x >> 16u; x *= 0x7FEB352Du; x ^= x >> 15u; x *= 0x846CA68Bu; x ^= x >> 16u;
+    return x;
+}
+float H01(ivec3 c, int period, uint salt) { return float(Hash(c, period, salt) >> 8u) / 16777216.0; }
+
+float Value(vec3 p, int period, uint salt)
+{
+    ivec3 i = ivec3(floor(p));
+    vec3 f = p - vec3(i);
+    f = f * f * (3.0 - 2.0 * f);
+    float c[8];
+    for (int k = 0; k < 8; ++k)
+        c[k] = H01(i + ivec3(k & 1, (k >> 1) & 1, (k >> 2) & 1), period, salt);
+    return mix(mix(mix(c[0], c[1], f.x), mix(c[2], c[3], f.x), f.y), mix(mix(c[4], c[5], f.x), mix(c[6], c[7], f.x), f.y), f.z);
+}
+
+// 1 at a cell's point, falling to 0 a cell away.
+float Worley(vec3 p, int period, uint salt)
+{
+    ivec3 i = ivec3(floor(p));
+    float best = 1e9;
+    for (int z = -1; z <= 1; ++z)
+        for (int y = -1; y <= 1; ++y)
+            for (int x = -1; x <= 1; ++x) {
+                ivec3 c = i + ivec3(x, y, z);
+                vec3 point = vec3(c) + vec3(H01(c, period, salt), H01(c, period, salt + 1u), H01(c, period, salt + 2u));
+                vec3 d = p - point;
+                best = min(best, dot(d, d));
+            }
+    return 1.0 - clamp(sqrt(best), 0.0, 1.0);
+}
+
+void main()
+{
+    ivec3 id = ivec3(gl_GlobalInvocationID);
+    vec3 u = (vec3(id) + 0.5) / 64.0;
+    float v = 0.5 * Value(u * 4.0, 4, 1u) + 0.3 * Value(u * 8.0, 8, 2u) + 0.2 * Value(u * 16.0, 16, 3u);
+    float w = 0.6 * Worley(u * 4.0, 4, 5u) + 0.3 * Worley(u * 8.0, 8, 9u) + 0.1 * Worley(u * 16.0, 16, 13u);
+    float w2 = 0.6 * Worley(u * 8.0, 8, 17u) + 0.4 * Worley(u * 16.0, 16, 21u);
+    float billow = clamp(v * 0.55 + w * 0.65 - 0.1, 0.0, 1.0);
+    imageStore(noiseOut, id, vec4(billow, w, w2, v));
+}

@@ -10,7 +10,10 @@ struct Light {
 
 // The frame's active point / spot lights nearest the camera (Device::SetLightOverride). Replaces the game's
 // per-object choice of up to 8 lights, which drops lights on big objects such as the ground.
-layout(set = 0, binding = 4, std140) uniform FrameLights {
+#ifndef FL_BINDING
+#define FL_BINDING 4            // (the tone mapping reads it at 15)
+#endif
+layout(set = 0, binding = FL_BINDING, std140) uniform FrameLights {
     uvec4 info;                 // light count, pusher count
     mat4 shadowViewProj[4];     // world -> each sun shadow cascade (raw D3DMATRIX memory)
     vec4 cascadeTexel;          // world size of a texel of each cascade
@@ -29,5 +32,33 @@ layout(set = 0, binding = 4, std140) uniform FrameLights {
     vec4 pusherBorn[4];         // ... and seconds since each point was made (4 a vector)
     vec4 leaves;                // leaves (leaves.cpp): branch sway, sprig flutter, gusts, canopy core cut
     vec4 leafView;              // ... their distance (none beyond; thinning out from half of it), on, falling leaves
+    vec4 clouds;                // the clouds' shadow map (rvk clouds.cpp): corner x, z, 1 / size, its bindless image + 1 |
+                                // sampler << 20 (as the float's bits; 0 = none)
+    vec4 clouds2;               // ... the cloud layer's height (world y), the shadow's strength
+    vec4 cloudTint;             // the game's cloud sheets with the layer's light (cloud_light.glsl): their colour (w
+    vec4 cloudSky;              // brightness); the sky's light (w: the sheets' strength, 0 none); the air's colour (w:
+    vec4 cloudAir;              // the horizon's haze)
+    vec4 moon;                  // the moonlight (rvk night.cpp): its colour on the ground and grass (0 = none); w: 1 =
+                                // the shadow map is the moon's (sunDir: the moon's light), not the sun's
+    vec4 sunTrue;               // towards the sun, below the horizon too (the clouds' light); w: how much it is night
+    vec4 terrainSun;            // the terrain's shade from a low sun (rvk terrain_sun.cpp): map corner x, z, 1 / size,
+                                // bindless image + 1 | sampler << 20 (the float's bits; 0 = none)
+    vec4 terrainSun2;           // ... x: the eye's own (0 shaded .. 1), y: its weight (0 high sun .. 1 low)
+    vec4 windFrame;             // xy: the wind's patterns' frame (wind.glsl WindAxes, rvk Device::WindFrame); z: a sandstorm's spreading of the sun's light (0 .. 0.75)
+    // Lightning (rvk rain.cpp Lightning): this frame's flash - its light on the land (rgb; 0 none), w: the glow in the
+    // clouds round the strike, x; towards the strike in view space (xyz), w: how far (world units); the projection's
+    // m[0][0], m[1][1], m[2][2], m[3][2] (the tone mapping's view rays).
+    vec4 flash;
+    vec4 flashView;
+    vec4 flashProj;
+    vec4 flashWorld;            // ... the strike (world xyz: the storm's fog lit round it)
+    vec4 rainNear;              // x: 1 = the tone mapping's rain layer (binding 16) holds this frame's rain; y: how much a
+                                // thunderstorm hides the sun (rvk Device::StormOvercast: the land darker, shadows gone); z:
+                                // a storm's blowing (ffp.vert FallingLeaf: leaves torn off and carried far); w: 1 = the
+                                // screen-space reflections on (ffp_main's wet ground: its own sky sheen lighter)
+    vec4 wet;                   // the wet ground (rvk rain.cpp): x how soaked, y the puddles, z the rain's clock, w the
+                                // cover map's heights' reference (world y)
+    vec4 cover;                 // the rain's cover map (rvk sand_map.cpp RainCoverMap): corner x, z, 1 / size, bindless
+                                // image + 1 | sampler << 20 (the float's bits; 0 = none)
     Light lights[64];
 } FL;

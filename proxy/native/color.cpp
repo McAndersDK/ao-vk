@@ -80,7 +80,7 @@ Color* __fastcall Scale(Color* self, void*, Color* result, float scale)
 
 void Install(HMODULE orig)
 {
-    if (GetMode("Scene", Mode::Off) != Mode::On) return;
+    if (GetMode("Scene", Mode::On) != Mode::On) return;
     struct Entry {
         uint32_t rva;
         void* target;

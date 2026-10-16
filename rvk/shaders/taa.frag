@@ -3,7 +3,8 @@
 // frame; each pixel blends its new sample into its history - last frame's result where this surface was then (object
 // motion vectors, or the camera's reprojection for the sky and anything without) - after clipping that history to
 // the range of colours around the pixel now, so what moved or appeared doesn't leave ghosts.
-layout(set = 0, binding = 0) uniform sampler2D current;    // tone mapped scene (jittered)
+layout(set = 0, binding = 0) uniform sampler2D current;    // tone mapped scene (jittered); alpha: how much of it
+                                                            // additive effects made (tonemap.frag)
 layout(set = 0, binding = 1) uniform sampler2D history;    // last frame's result
 layout(set = 0, binding = 2) uniform sampler2D motion;     // screen motion since last frame, pixels (now - then)
 layout(set = 0, binding = 3) uniform sampler2D depthTex;
@@ -41,7 +42,9 @@ vec3 SampleHistory(vec2 uv)
 void main()
 {
     ivec2 p = ivec2(gl_FragCoord.xy), size = ivec2(P.size.xy);
-    vec3 c = texelFetch(current, p, 0).rgb;
+    vec4 cur = texelFetch(current, p, 0);
+    vec3 c = cur.rgb;
+    float effect = cur.a;                       // sparks, spell effects: new each frame, they would average away
     // The colours around this pixel now (YCoCg mean and spread), and the nearest surface among them, whose motion
     // the pixel takes - so edges move with the object in front.
     vec3 m1 = vec3(0.0), m2 = vec3(0.0);
@@ -82,7 +85,10 @@ void main()
     h = FromYCoCg(h);
     // Blend, weighting by inverse brightness (a bright sample doesn't dominate: less flicker); a little more of the
     // new frame while moving fast, where the history is blurred by resampling.
+    // Where effects are, mostly the new frame and no brightness weighting (it held their bright pixels back).
     float weight = clamp(P.params.x + length(move) * 0.002, P.params.x, 0.4);
-    float wc = weight / (1.0 + dot(c, vec3(0.3, 0.59, 0.11))), wh = (1.0 - weight) / (1.0 + dot(h, vec3(0.3, 0.59, 0.11)));
+    weight = mix(weight, 0.85, effect);
+    float lc = dot(c, vec3(0.3, 0.59, 0.11)) * (1.0 - effect), lh = dot(h, vec3(0.3, 0.59, 0.11)) * (1.0 - effect);
+    float wc = weight / (1.0 + lc), wh = (1.0 - weight) / (1.0 + lh);
     outColor = vec4((c * wc + h * wh) / (wc + wh), 1.0);
 }

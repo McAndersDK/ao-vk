@@ -253,15 +253,22 @@ inline bool DecodeAlbedoMap(const std::string& path, MipChain* out, std::string*
 // The files of one texture's material (empty = none).
 struct MaterialFiles {
     std::string normal, packed, parts[3], albedo, emissive;   // parts: occlusion, roughness, metallic
-    bool Any() const { return !normal.empty() || !packed.empty() || HasParts() || !albedo.empty() || !emissive.empty(); }
+    std::string leaves, leavesNormal;          // a tree canopy's own leaf art (_leaves.png, _leaves_n.png)
+    bool Any() const
+    {
+        return !normal.empty() || !packed.empty() || HasParts() || !albedo.empty() || !emissive.empty() || !leaves.empty();
+    }
     bool HasParts() const { return !parts[0].empty() || !parts[1].empty() || !parts[2].empty(); }
 };
 
 // A texture's maps, decoded (Decode) and ready to upload.
 struct Decoded {
-    MipChain normal, orm, albedo, emissive;
+    MipChain normal, orm, albedo, emissive, leaves, leavesNormal;
     std::string ormFrom, errors;               // what the material was read from; what couldn't be read
-    size_t Bytes() const { return normal.Bytes() + orm.Bytes() + albedo.Bytes() + emissive.Bytes(); }
+    size_t Bytes() const
+    {
+        return normal.Bytes() + orm.Bytes() + albedo.Bytes() + emissive.Bytes() + leaves.Bytes() + leavesNormal.Bytes();
+    }
 };
 
 // Reads and mips every map of a material. Thread-safe (no device calls).
@@ -296,7 +303,12 @@ inline Decoded Decode(const MaterialFiles& f)
         d.errors += error + "; ";
     if (!f.emissive.empty() && !DecodeAlbedoMap(f.emissive, &d.emissive, &error))   // (a colour map, filtered the same)
         d.errors += error + "; ";
-    for (MipChain* c : {&d.normal, &d.orm, &d.albedo, &d.emissive})
+    if (!f.leaves.empty() && !DecodeAlbedoMap(f.leaves, &d.leaves, &error))   // (a sprig atlas: colour + coverage)
+        d.errors += error + "; ";
+    NormalSpread leafSpread;
+    if (!f.leavesNormal.empty() && !DecodeNormalMap(f.leavesNormal, &d.leavesNormal, &leafSpread, &error))
+        d.errors += error + "; ";
+    for (MipChain* c : {&d.normal, &d.orm, &d.albedo, &d.emissive, &d.leaves, &d.leavesNormal})
         CapChain(*c, &d.errors);
     return d;
 }
@@ -330,6 +342,8 @@ void Attach(Dev& dev, Texture* texture, const Decoded& d)
         dev.SetMaterialMaps(texture, orm, albedo);
     if (Texture* emissive = Upload(dev, d.emissive))
         dev.SetEmissiveMap(texture, emissive);
+    if (Texture* leaves = Upload(dev, d.leaves))
+        dev.SetLeafArt(texture, leaves, Upload(dev, d.leavesNormal));
 }
 
 // As Attach, but the texture ends up with exactly these maps: one it had that d lacks is removed (hot reload).
@@ -339,6 +353,8 @@ void Replace(Dev& dev, Texture* texture, const Decoded& d)
     dev.SetNormalMap(texture, Upload(dev, d.normal));
     dev.SetMaterialMaps(texture, Upload(dev, d.orm), Upload(dev, d.albedo));
     dev.SetEmissiveMap(texture, Upload(dev, d.emissive));
+    Texture* leaves = Upload(dev, d.leaves);
+    dev.SetLeafArt(texture, leaves, leaves ? Upload(dev, d.leavesNormal) : nullptr);
 }
 
 }  // namespace rvk::maps

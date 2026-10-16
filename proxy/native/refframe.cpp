@@ -671,7 +671,7 @@ void __fastcall Archive(Frame* f, void*, void* archive)
 
 void Install(HMODULE orig)
 {
-    if (GetMode("Scene", Mode::Off) != Mode::On) return;
+    if (GetMode("Scene", Mode::On) != Mode::On) return;
     g_orig = orig;
     if (!serialize::Get().complete) {
         Log("frames: serialize.dll exports missing - not replaced");

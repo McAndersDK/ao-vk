@@ -91,7 +91,6 @@ bool Attach(const std::string& path, const char* name)
         FreeLibrary(module);
         return false;
     }
-    rnative::WatchModule(name);                     // (its faults in the crash log, from its attach on)
     AoVkPlugin plugin{};
     if (!attach(&kHost, &plugin) || plugin.size < sizeof(uint32_t) * 2) {
         RvkLog("plugins: %s refused to attach - unloaded", path.c_str());

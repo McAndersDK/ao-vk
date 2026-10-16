@@ -97,25 +97,6 @@ bool Chosen(uint32_t id)
     return false;
 }
 
-bool PatchSlot(HMODULE module, uint32_t vtable, uint32_t slot, uint32_t expected, void* hook, void** original,
-               const char* what)
-{
-    auto base = reinterpret_cast<uintptr_t>(module);
-    auto* entry = reinterpret_cast<uintptr_t*>(base + vtable + 4 * slot);
-    if (*entry != base + expected) {
-        RvkLog("particles: %s vtable slot is %p, expected %p - unknown client version, particles off", what,
-               (void*)*entry, (void*)(base + expected));
-        return false;
-    }
-    DWORD protect;
-    if (!VirtualProtect(entry, sizeof(*entry), PAGE_READWRITE, &protect))
-        return false;
-    *original = reinterpret_cast<void*>(*entry);
-    *entry = reinterpret_cast<uintptr_t>(hook);
-    VirtualProtect(entry, sizeof(*entry), protect, &protect);
-    return true;
-}
-
 uint32_t __fastcall StarsUpdate(void* self, void* /*edx*/)
 {
     uint32_t r = g_update(self);
@@ -204,6 +185,26 @@ uint32_t __fastcall DiaBillRender(void* self, void* /*edx*/, void* viewport)
 
 }  // namespace
 
+// Points slot `slot` of the vtable at module + vtable (expected: module + expected) at hook; the old entry in original.
+bool PatchSlot(HMODULE module, uint32_t vtable, uint32_t slot, uint32_t expected, void* hook, void** original,
+               const char* what)
+{
+    auto base = reinterpret_cast<uintptr_t>(module);
+    auto* entry = reinterpret_cast<uintptr_t*>(base + vtable + 4 * slot);
+    if (*entry != base + expected) {
+        RvkLog("%s: vtable slot is %p, expected %p - unknown client version, left alone", what,
+               (void*)*entry, (void*)(base + expected));
+        return false;
+    }
+    DWORD protect;
+    if (!VirtualProtect(entry, sizeof(*entry), PAGE_READWRITE, &protect))
+        return false;
+    *original = reinterpret_cast<void*>(*entry);
+    *entry = reinterpret_cast<uintptr_t>(hook);
+    VirtualProtect(entry, sizeof(*entry), protect, &protect);
+    return true;
+}
+
 // Each presented frame: installs the hooks once both modules are loaded (Gamecode.dll comes after the renderer).
 void ParticleFrame()
 {
@@ -225,13 +226,13 @@ void ParticleFrame()
     void* update = nullptr;
     if (!g_worldMatrix ||
         !PatchSlot(ds, kDiaBillVtable, kDiaBillRenderSlot, kDiaBillRender, reinterpret_cast<void*>(&DiaBillRender),
-                   &render, "GfxVisualDiaBill::Render")) {
+                   &render, "particles: GfxVisualDiaBill::Render")) {
         g_gaveUp = true;
         return;
     }
     g_render = reinterpret_cast<RenderFn>(render);
     if (!PatchSlot(gc, kStarsVtable, kStarsUpdateSlot, kStarsUpdate, reinterpret_cast<void*>(&StarsUpdate), &update,
-                   "_GfxControlStars_t::Update")) {
+                   "particles: _GfxControlStars_t::Update")) {
         g_gaveUp = true;                              // the render hook stays in, but no effect is ever chosen
         return;
     }

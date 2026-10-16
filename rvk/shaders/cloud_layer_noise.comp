@@ -1,0 +1,81 @@
+#version 450
+// The cloud layer's noise (rvk/clouds.cpp), made once, tiling. Mode 0, the shape (128^3): R Perlin-Worley (billowy
+// gradient noise, its low values carved by Worley cells), G B A Worley at 4, 8, 16 cells a side (their sum, weighted,
+// erodes R at the edges). Mode 1, the detail (64^3): R G B Worley fbm from 4, 8, 16 cells a side (many cells a tile:
+// one cell a tile repeats as a grid across the sky).
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+layout(set = 0, binding = 0, rgba8) uniform writeonly image3D noiseOut;
+
+layout(push_constant) uniform Params {
+    uint mode;          // 0 shape, 1 detail
+    uint size;          // cells a side of the image
+} P;
+
+uint Hash(ivec3 c, int period, uint salt)
+{
+    uvec3 u = uvec3((c % period + period) % period);
+    uint x = u.x * 73856093u ^ u.y * 19349663u ^ u.z * 83492791u ^ salt * 2654435761u;
+    x ^= x >> 16u; x *= 0x7FEB352Du; x ^= x >> 15u; x *= 0x846CA68Bu; x ^= x >> 16u;
+    return x;
+}
+float H01(ivec3 c, int period, uint salt) { return float(Hash(c, period, salt) >> 8u) / 16777216.0; }
+
+// Gradient (Perlin) noise, tiling every `period` cells: -1..1 about.
+float Gradient(vec3 p, int period, uint salt)
+{
+    ivec3 i = ivec3(floor(p));
+    vec3 f = p - vec3(i);
+    vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    float c[8];
+    for (int k = 0; k < 8; ++k) {
+        ivec3 o = ivec3(k & 1, (k >> 1) & 1, (k >> 2) & 1);
+        uint h = Hash(i + o, period, salt) % 12u;
+        // The 12 edge directions of a cube.
+        float s1 = (h & 1u) != 0u ? -1.0 : 1.0, s2 = (h & 2u) != 0u ? -1.0 : 1.0;
+        vec3 g = h < 4u ? vec3(s1, s2, 0.0) : h < 8u ? vec3(s1, 0.0, s2) : vec3(0.0, s1, s2);
+        c[k] = dot(g, f - vec3(o));
+    }
+    return mix(mix(mix(c[0], c[1], u.x), mix(c[2], c[3], u.x), u.y), mix(mix(c[4], c[5], u.x), mix(c[6], c[7], u.x), u.y), u.z);
+}
+
+// 1 at a cell's point, falling to 0 a cell away.
+float Worley(vec3 p, int period, uint salt)
+{
+    ivec3 i = ivec3(floor(p));
+    float best = 1e9;
+    for (int z = -1; z <= 1; ++z)
+        for (int y = -1; y <= 1; ++y)
+            for (int x = -1; x <= 1; ++x) {
+                ivec3 c = i + ivec3(x, y, z);
+                vec3 point = vec3(c) + vec3(H01(c, period, salt), H01(c, period, salt + 1u), H01(c, period, salt + 2u));
+                vec3 d = p - point;
+                best = min(best, dot(d, d));
+            }
+    return 1.0 - clamp(sqrt(best), 0.0, 1.0);
+}
+
+float WorleyFbm(vec3 u, int cells, uint salt)
+{
+    return Worley(u * float(cells), cells, salt) * 0.625 + Worley(u * float(cells * 2), cells * 2, salt + 7u) * 0.25 +
+           Worley(u * float(cells * 4), cells * 4, salt + 13u) * 0.125;
+}
+
+float Remap(float v, float lo, float hi, float a, float b) { return a + (v - lo) * (b - a) / max(hi - lo, 1e-5); }
+
+void main()
+{
+    ivec3 id = ivec3(gl_GlobalInvocationID);
+    if (any(greaterThanEqual(id, ivec3(int(P.size)))))
+        return;
+    vec3 u = (vec3(id) + 0.5) / float(P.size);
+    if (P.mode == 0u) {
+        // Perlin fbm (4, 8, 16 cells), 0..1; carved: Perlin remapped from the Worley fbm's inverse up (billows).
+        float g = Gradient(u * 4.0, 4, 1u) * 0.5 + Gradient(u * 8.0, 8, 2u) * 0.25 + Gradient(u * 16.0, 16, 3u) * 0.125;
+        g = clamp(g * 0.9 + 0.5, 0.0, 1.0);
+        float w = WorleyFbm(u, 4, 31u);
+        float pw = clamp(Remap(g, w - 1.0, 1.0, 0.0, 1.0), 0.0, 1.0);
+        imageStore(noiseOut, id, vec4(pw, WorleyFbm(u, 4, 41u), WorleyFbm(u, 8, 51u), WorleyFbm(u, 16, 61u)));
+    } else {
+        imageStore(noiseOut, id, vec4(WorleyFbm(u, 4, 71u), WorleyFbm(u, 8, 81u), WorleyFbm(u, 16, 91u), 1.0));
+    }
+}

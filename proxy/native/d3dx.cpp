@@ -225,7 +225,7 @@ int32_t __stdcall CreateTexture(void* device, uint32_t* flags, uint32_t* width, 
 
 void Install(HMODULE orig)
 {
-    if (GetMode("Device", Mode::Off) != Mode::On) return;
+    if (GetMode("Device", Mode::On) != Mode::On) return;
     g_orig = orig;
     struct Entry {
         uint32_t rva;

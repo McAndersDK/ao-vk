@@ -2,9 +2,11 @@
 #include "internal.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace rvk {
@@ -185,6 +187,7 @@ Device::~Device()
         if (f.imageAvailable) vkDestroySemaphore(m_device, f.imageAvailable, nullptr);
     }
     if (m_blackTexture) DestroyTextureNow(m_blackTexture);
+    if (m_blueNoise) DestroyTextureNow(m_blueNoise);
     if (m_flatNormal) DestroyTextureNow(m_flatNormal);
     for (auto& [key, sampler] : m_samplers) vkDestroySampler(m_device, sampler, nullptr);
     for (VkPipeline p : m_pipelines) if (p) vkDestroyPipeline(m_device, p, nullptr);
@@ -195,6 +198,7 @@ Device::~Device()
     for (VkPipeline p : m_tessPipelinesNoCut) if (p) vkDestroyPipeline(m_device, p, nullptr);
     if (m_prepassPipeline) vkDestroyPipeline(m_device, m_prepassPipeline, nullptr);
     if (m_prepassCutoutPipeline) vkDestroyPipeline(m_device, m_prepassCutoutPipeline, nullptr);
+    if (m_leafPrepassPipeline) vkDestroyPipeline(m_device, m_leafPrepassPipeline, nullptr);
     DestroyShadowResources();
     DestroyPointShadowResources();
     DestroyHdrResources();
@@ -204,7 +208,14 @@ Device::~Device()
     DestroyGrassResources();
     DestroyLeafResources();
     DestroyWaterResources();
+    DestroyRainResources();
+    DestroySmokeResources();
+    DestroyCloudResources();
     DestroyStaticGeometry();
+    DestroyStatels();
+    CollectGarbage();                            // (what those let go of: DestroyTexture defers - the device is idle)
+    SavePipelineCache("at exit");
+    if (m_pipelineCache) vkDestroyPipelineCache(m_device, m_pipelineCache, nullptr);
     if (m_pipelineLayout) vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
     if (m_setLayout) vkDestroyDescriptorSetLayout(m_device, m_setLayout, nullptr);
     if (m_bindlessPool) vkDestroyDescriptorPool(m_device, m_bindlessPool, nullptr);
@@ -228,14 +239,130 @@ bool Device::Init(HWND window, uint32_t width, uint32_t height, std::string* err
     m_width = width;
     m_height = height;
     m_viewport = {0, 0, width, height, 0.0f, 1.0f};
-    if (!CreateInstance(error) || !PickDevice(error) || !CreateLogicalDevice(error) || !CreateFrames(error) || !CreateProfiler(error) ||
-        !CreateMainTargets(error) || (window && !CreateSwapchain(error)) || !CreatePipelines(error))
+    // Each step timed, so the log says where a slow start goes (one line, below).
+    using Clock = std::chrono::steady_clock;
+    const Clock::time_point begin = Clock::now();
+    Clock::time_point mark = begin;
+    std::string timings;
+    bool ok = true;
+    auto step = [&](const char* name, auto&& run) {
+        if (!ok)
+            return;
+        ok = run();
+        char part[64];
+        std::snprintf(part, sizeof(part), "%s%s %d", timings.empty() ? "" : ", ", name,
+                      int(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - mark).count()));
+        timings += part;
+        mark = Clock::now();
+    };
+    step("instance", [&] { return CreateInstance(error); });
+    step("gpu", [&] { return PickDevice(error); });
+    step("device", [&] { return CreateLogicalDevice(error); });
+    step("cache", [&] { CreatePipelineCache(); return true; });
+    step("frames", [&] { return CreateFrames(error); });
+    step("profiler", [&] { return CreateProfiler(error); });
+    step("targets", [&] { return CreateMainTargets(error); });
+    step("swapchain", [&] { return !window || CreateSwapchain(error); });
+    step("pipelines", [&] { return CreatePipelines(error); });
+    if (ok)
+        SavePipelineCache("after the pipelines were made");
+    Log("startup: %s%s; total %d ms", timings.c_str(), ok ? "" : " (failed)",
+        int(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - begin).count()));
+    if (!ok)
         return false;
     uint32_t black = 0xFF000000;
     m_blackTexture = CreateTexture(1, 1, &black);
     uint32_t flat = 0xFF8080FF;                  // (0.5, 0.5, 1): the unbent normal
     m_flatNormal = CreateTexture(1, 1, &flat);
-    return m_blackTexture != nullptr && m_flatNormal != nullptr;
+    m_blueNoise = CreateBlueNoise();
+    return m_blackTexture != nullptr && m_flatNormal != nullptr && m_blueNoise != nullptr;
+}
+
+namespace {
+
+std::string g_pipelineCachePath;
+
+// Where the cache lives: what the proxy set, else RANDYVK_PIPELINE_CACHE ("off" = none).
+std::string PipelineCacheFile()
+{
+    if (!g_pipelineCachePath.empty())
+        return g_pipelineCachePath;
+    char path[MAX_PATH] = {};
+    if (GetEnvironmentVariableA("RANDYVK_PIPELINE_CACHE", path, sizeof(path)) == 0)
+        return {};
+    return _stricmp(path, "off") == 0 ? std::string() : std::string(path);
+}
+
+}  // namespace
+
+void SetPipelineCachePath(const char* path) { g_pipelineCachePath = path ? path : ""; }
+
+// The cache is a hint, never a requirement: no file, a file from another GPU or driver (the header says which), or any
+// failure just means the pipelines are built from scratch, as before.
+void Device::CreatePipelineCache()
+{
+    std::vector<uint8_t> data;
+    const std::string file = PipelineCacheFile();
+    if (!file.empty()) {
+        if (FILE* f = std::fopen(file.c_str(), "rb")) {
+            std::fseek(f, 0, SEEK_END);
+            long size = std::ftell(f);
+            std::fseek(f, 0, SEEK_SET);
+            if (size > 32 && size < (256l << 20)) {
+                data.resize(size_t(size));
+                if (std::fread(data.data(), 1, data.size(), f) != data.size())
+                    data.clear();
+            }
+            std::fclose(f);
+        }
+        // The header (Vulkan spec): size, version 1, vendor, device, the driver's cache UUID. Anything else is not ours.
+        uint32_t header[4] = {};
+        if (data.size() >= 32)
+            std::memcpy(header, data.data(), sizeof(header));
+        if (!data.empty() && (header[0] < 32 || header[1] != VK_PIPELINE_CACHE_HEADER_VERSION_ONE ||
+                              header[2] != m_props.vendorID || header[3] != m_props.deviceID ||
+                              std::memcmp(data.data() + 16, m_props.pipelineCacheUUID, VK_UUID_SIZE) != 0)) {
+            Log("pipeline cache %s is from another GPU or driver: starting afresh", file.c_str());
+            data.clear();
+        }
+    }
+    VkPipelineCacheCreateInfo ci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    ci.initialDataSize = data.size();
+    ci.pInitialData = data.empty() ? nullptr : data.data();
+    if (vkCreatePipelineCache(m_device, &ci, nullptr, &m_pipelineCache) != VK_SUCCESS) {
+        m_pipelineCache = VK_NULL_HANDLE;        // (VK_NULL_HANDLE is also what the pipelines were made with before)
+        return;
+    }
+    m_pipelineCacheSaved = data.size();
+    if (!file.empty())
+        Log("pipeline cache: %zu bytes loaded from %s", data.size(), file.c_str());
+}
+
+// Write the cache out if it holds more than the file does. Through a temporary file, so a crash can't leave half of one.
+void Device::SavePipelineCache(const char* why)
+{
+    const std::string file = PipelineCacheFile();
+    if (!m_pipelineCache || file.empty())
+        return;
+    size_t size = 0;
+    if (vkGetPipelineCacheData(m_device, m_pipelineCache, &size, nullptr) != VK_SUCCESS || size == 0 || size == m_pipelineCacheSaved)
+        return;
+    std::vector<uint8_t> data(size);
+    if (vkGetPipelineCacheData(m_device, m_pipelineCache, &size, data.data()) != VK_SUCCESS)
+        return;
+    data.resize(size);
+    const std::string temp = file + "." + std::to_string(GetCurrentProcessId()) + ".tmp";   // (two clients in one folder)
+    FILE* f = std::fopen(temp.c_str(), "wb");
+    if (!f)
+        return;
+    const bool written = std::fwrite(data.data(), 1, data.size(), f) == data.size();
+    std::fclose(f);
+    if (written && MoveFileExA(temp.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        m_pipelineCacheSaved = data.size();
+        Log("pipeline cache: %zu bytes saved (%s)", data.size(), why);
+    } else {
+        DeleteFileA(temp.c_str());
+    }
 }
 
 bool Device::CreateInstance(std::string* error)
@@ -365,6 +492,8 @@ bool Device::CreateLogicalDevice(std::string* error)
     vkGetPhysicalDeviceFeatures2(m_physical, &features);
     // Quad operations in fragment shaders (ffp_main.glsl: a 2x2 block of cut-out pixels stops before the lighting).
     VkPhysicalDeviceVulkan11Properties p11{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES};
+    VkPhysicalDeviceVulkan12Properties p12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES};
+    p11.pNext = &p12;
     VkPhysicalDeviceProperties2 props2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
     props2.pNext = &p11;
     vkGetPhysicalDeviceProperties2(m_physical, &props2);
@@ -380,7 +509,16 @@ bool Device::CreateLogicalDevice(std::string* error)
     // Bindless textures (M1): textures and samplers in descriptor arrays, indexed per draw.
     m_bindless = descIdx.shaderSampledImageArrayNonUniformIndexing && descIdx.descriptorBindingSampledImageUpdateAfterBind &&
                  descIdx.descriptorBindingPartiallyBound && rob2.nullDescriptor;
-    Log("bindless textures: %s", m_bindless ? "yes" : "no");
+    // Its image slots (kMaxBindlessImages, every texture alive has one: a big zone's are over 4,096) within what the
+    // GPU allows - the Vulkan minimum with these features is 500,000.
+    const uint32_t imageLimit = std::min(p12.maxPerStageDescriptorUpdateAfterBindSampledImages,
+                                         p12.maxDescriptorSetUpdateAfterBindSampledImages);
+    if (m_bindless && imageLimit < kMaxBindlessImages) {
+        Log("bindless textures: the GPU allows %u images, %u needed", imageLimit, kMaxBindlessImages);
+        m_bindless = false;
+    }
+    Log("bindless textures: %s (%u image slots; the GPU allows %u)", m_bindless ? "yes" : "no", kMaxBindlessImages,
+        imageLimit);
     if (!m_bindless) {
         // The scene shaders read their textures through set 1 now; there is no non-bindless path.
         if (error) *error = "required Vulkan features missing (descriptor indexing, robustness2 nullDescriptor)";
@@ -431,7 +569,15 @@ bool Device::CreateLogicalDevice(std::string* error)
     m_depthBounds = features.features.depthBounds;
     enabled.features.depthBounds = features.features.depthBounds;
     // Profiling: fragment shader invocations per scene class (profile.cpp, "scene shading" - the overdraw).
-    m_shadeQueries = features.features.pipelineStatisticsQuery;
+    // Only with RANDYVK_SCENE_PROFILE=1, as the scene's split by class (ProfileSceneClass): every class change ended
+    // the pending indirect batch and began a query - ~350 a frame over a city.
+    {
+        const char* v = std::getenv("RANDYVK_SCENE_PROFILE");
+        m_sceneProfile = v && *v == '1';
+        const char* o = std::getenv("RANDYVK_OPAQUE_BLEND");
+        m_opaqueBlend = !(o && *o == '0');
+    }
+    m_shadeQueries = features.features.pipelineStatisticsQuery && m_sceneProfile;
     enabled.features.pipelineStatisticsQuery = features.features.pipelineStatisticsQuery;
     Log("draw grouping (indirect firstInstance + multiDrawIndirect): %s", m_groupIndirect ? "yes" : "no");
 
@@ -813,7 +959,7 @@ bool Device::CreatePipelines(std::string* error)
         ci.layout = m_pipelineLayout;
         VkPipeline* dst = set ? (nc ? &m_pipelinesHdrNoCut[c] : &m_pipelinesHdr[c])
                               : (nc ? &m_pipelinesNoCut[c] : &m_pipelines[c]);
-        ok = Check(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &ci, nullptr, dst),
+        ok = Check(vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &ci, nullptr, dst),
                    "vkCreateGraphicsPipelines", error);
     }
     // Characters' Phong tessellation: triangles as 3-point patches, through ffp.tesc / ffp.tese (both targets).
@@ -852,7 +998,7 @@ bool Device::CreatePipelines(std::string* error)
             ci.pDynamicState = &ds;
             ci.layout = m_pipelineLayout;
             VkPipeline* dst = nc ? &m_tessPipelinesNoCut[set] : &m_tessPipelines[set];
-            ok = Check(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &ci, nullptr, dst),
+            ok = Check(vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &ci, nullptr, dst),
                        "tessellation pipeline", error);
         }
     }
@@ -882,7 +1028,7 @@ bool Device::CreatePipelines(std::string* error)
             ci.pDynamicState = &ds;
             ci.layout = m_pipelineLayout;
             std::string leafError;
-            if (!Check(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &ci, nullptr, &m_leafPipelines[set]),
+            if (!Check(vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &ci, nullptr, &m_leafPipelines[set]),
                        "leaf pipeline", &leafError))
                 m_leafPipelines[set] = VK_NULL_HANDLE;
         }
@@ -891,10 +1037,12 @@ bool Device::CreatePipelines(std::string* error)
                 if (p) vkDestroyPipeline(m_device, p, nullptr);
                 p = VK_NULL_HANDLE;
             }
-        vkDestroyShaderModule(m_device, leafVert, nullptr);
     }
     if (ok)
-        CreatePrepassPipeline(vert);             // not fatal: without it the scene draws as before
+        CreatePrepassPipeline(vert, m_leafPipelines[0] ? leafVert : VK_NULL_HANDLE);   // not fatal: without it the
+                                                                                      // scene draws as before
+    if (leafVert)
+        vkDestroyShaderModule(m_device, leafVert, nullptr);
     vkDestroyShaderModule(m_device, vert, nullptr);
     vkDestroyShaderModule(m_device, fragGlow, nullptr);
     vkDestroyShaderModule(m_device, frag, nullptr);
@@ -911,6 +1059,23 @@ bool Device::CreatePipelines(std::string* error)
             DestroyWaterResources();
         }
         UpdateWaterReady();
+    }
+    {
+        std::string rainError;                   // not fatal: no rain then (the game's stays)
+        if (!CreateRainResources(&rainError)) {
+            Log("rain: unavailable (%s)", rainError.c_str());
+            DestroyRainResources();
+        }
+        std::string smokeError;                  // nor this: no smoke then
+        if (!CreateSmokeResources(&smokeError)) {
+            Log("smoke: unavailable (%s)", smokeError.c_str());
+            DestroySmokeResources();
+        }
+        std::string cloudError;                  // nor this: the game's clouds then
+        if (!CreateCloudResources(&cloudError)) {
+            Log("clouds: unavailable (%s)", cloudError.c_str());
+            DestroyCloudResources();
+        }
     }
     char gpuSkin[8] = "";
     if (GetEnvironmentVariableA("RANDYVK_GPU_SKIN", gpuSkin, sizeof(gpuSkin)) && gpuSkin[0] == '0')
@@ -945,14 +1110,15 @@ bool Device::CreateFrames(std::string* error)
         VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
         ai.commandPool = m_pool;
         ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        ai.commandBufferCount = 4;
-        VkCommandBuffer cmds[4];
+        ai.commandBufferCount = 5;
+        VkCommandBuffer cmds[5];
         if (!Check(vkAllocateCommandBuffers(m_device, &ai, cmds), "vkAllocateCommandBuffers", error))
             return false;
         f.upload = cmds[0];
         f.main = f.mainA = cmds[1];
         f.prepass = cmds[2];                     // the depth pre-pass (prepass.cpp)
         f.mainB = cmds[3];
+        f.clouds = cmds[4];                      // the clouds' own pass (clouds.cpp)
         VkFenceCreateInfo fi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
         fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
         VkSemaphoreCreateInfo si{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
@@ -1130,12 +1296,15 @@ void Device::PrepareDrawArenas()
                                          : 0;
     VkDeviceSize bytes = VkDeviceSize(m_constCapacity) * sizeof(DrawConstants) +
                          VkDeviceSize(m_recordCapacity) * sizeof(DrawRecord) +
-                         VkDeviceSize(m_recordCapacity) * sizeof(VkDrawIndexedIndirectCommand) + shadowBytes + 64;
+                         2 * VkDeviceSize(m_recordCapacity) * sizeof(VkDrawIndexedIndirectCommand) + shadowBytes + 64;
     EnsureRingSpace(bytes);          // the caller reserved for it, but a flush may have restarted the ring since
     void* cpu;
     m_constsBase = Allocate(VkDeviceSize(m_constCapacity) * sizeof(DrawConstants), align, &cpu);
     m_recordsBase = Allocate(VkDeviceSize(m_recordCapacity) * sizeof(DrawRecord), align, &cpu);
     m_indirectBase = Allocate(VkDeviceSize(m_recordCapacity) * sizeof(VkDrawIndexedIndirectCommand), 4, &cpu);
+    m_prepassIndirectBase = Allocate(VkDeviceSize(m_recordCapacity) * sizeof(VkDrawIndexedIndirectCommand), 4, &cpu);
+    m_prepassIndirectCount = 0;
+    m_pre.groupCount = 0;                        // (flushed with the pre-pass before the ring restarted)
     m_shadowArenaCapacity = (m_shadows || m_pointShadows) ? kShadowRecordCapacity : 0;
     if (m_shadowArenaCapacity) {
         m_shadowRecordBase = Allocate(VkDeviceSize(m_shadowArenaCapacity) * sizeof(ShadowRecord), align, &cpu);
@@ -1195,11 +1364,11 @@ uint32_t Device::AppendConstant(const DrawConstants& c, size_t bytes)
 uint32_t Device::AppendRecord(uint32_t constIndex, const DrawTransform& d)
 {
     uint32_t index = m_recordCount++;
-    DrawRecord rec{};
-    rec.constIndex = constIndex;
-    rec.d = d;
-    std::memcpy(m_frames[m_frameIndex].ringData + m_recordsBase + VkDeviceSize(index) * sizeof(DrawRecord), &rec,
-                sizeof(rec));
+    // Straight into the ring (a record built and copied was two passes over ~250 bytes a draw).
+    uint8_t* dst = m_frames[m_frameIndex].ringData + m_recordsBase + VkDeviceSize(index) * sizeof(DrawRecord);
+    const uint32_t head[4] = {constIndex, 0u, 0u, 0u};
+    std::memcpy(dst, head, sizeof(head));
+    std::memcpy(dst + offsetof(DrawRecord, d), &d, sizeof(d));
     return index;
 }
 
@@ -1328,6 +1497,20 @@ void Device::SetRenderTarget(Texture* target)
 
 void Device::BeginFrame()
 {
+    // Indoors (a room's playfield: rooms drawn, no terrain) for 10 frames running, or out again: no weather in there
+    // (a forced storm went on raining and striking inside - the user). The weather goes at once, not eased.
+    {
+        const bool inside = m_frameRoomVisuals > 0 && m_frameTerrainVisuals == 0;
+        m_indoorRun = inside == m_indoors ? 0 : m_indoorRun + 1;
+        if (m_indoorRun >= 10) {
+            m_indoors = inside;
+            m_indoorRun = 0;
+            Log("weather: %s (rooms %u, terrain %u drawn)", inside ? "indoors - none" : "outdoors", m_frameRoomVisuals,
+                m_frameTerrainVisuals);
+            if (inside) m_rain = m_stormSky = m_sand = m_storm = 0.0f;
+        }
+        m_frameRoomVisuals = m_frameTerrainVisuals = 0;
+    }
     m_pickActive = m_pickArmed;                  // texture picking (RequestPick): this frame's draws
     m_pickArmed = false;
     m_pickBest = nullptr;
@@ -1391,7 +1574,9 @@ void Device::BeginFrame()
             Log("address space: %llu of %llu MB free (the game's process)", (unsigned long long)(mem.ullAvailVirtual >> 20),
                 (unsigned long long)(mem.ullTotalVirtual >> 20));
         Log("%s", GpuMemoryReport().c_str());
-        Log("opaque static fast path: %llu draws (last 600 frames)", (unsigned long long)m_opaqueDraws);
+        Log("opaque static fast path: %llu draws; %llu alpha-1 blended draws drawn unblended (last 600 frames)",
+            (unsigned long long)m_opaqueDraws, (unsigned long long)m_opaqueBlendDraws);
+        m_opaqueBlendDraws = 0;
         Log("foliage: %llu draws, %llu of them far (LOD) (last 600 frames)", (unsigned long long)m_foliageDraws,
             (unsigned long long)m_foliageLodDraws);
         Log("foliage survey: %.0f draws a frame (%.0f static, %.0f changing), %.0f vertices; box height %.2f .. %.2f",
@@ -1402,7 +1587,7 @@ void Device::BeginFrame()
             Log("ground grass: %llu frames drawn, %.0f blades a frame; tiles %llu, %llu built (%.2f ms each, %.0f%% of "
                 "their blades lit by the ground's lightmap), capture %.3f ms a frame; terrain ambient %.2f %.2f %.2f; "
                 "pushers now %llu max %u; trail cells %u; candidates left out: %llu clumps, %llu no grass ground, %llu steep, %llu "
-                "edge; %llu tiles waiting to build; %.0f blades a frame cast the sun's shadow (last 600 frames)",
+                "edge; %llu tiles waiting to build; %.0f blades a frame cast the sun's shadow, %.0f the point lights' (last 600 frames)",
                 (unsigned long long)m_grassDraws, double(m_grassBlades) / std::max<uint64_t>(m_grassDraws, 1),
                 (unsigned long long)m_grassTiles.size(), (unsigned long long)m_grassBuilds,
                 m_grassBuildMs / double(std::max<uint64_t>(m_grassBuilds, 1)),
@@ -1411,22 +1596,24 @@ void Device::BeginFrame()
                 (unsigned long long)m_framePushers.size(), m_pusherSeenMax, m_trailActive, (unsigned long long)m_grassLeftOut[0],
                 (unsigned long long)m_grassLeftOut[1], (unsigned long long)m_grassLeftOut[2],
                 (unsigned long long)m_grassLeftOut[3], (unsigned long long)GrassTilesWaiting(),
-                double(m_grassShadowBlades) / 600.0);
+                double(m_grassShadowBlades) / 600.0, double(m_grassPointShadowBlades) / 600.0);
         if (m_leaf.on)
-            Log("leaves: canopy draws a frame %.1f shrubs, %.1f trees, %.1f palms; %.1f leaf draws a frame, %.0f leaves a "
-                "frame; %zu sets, %u baked (%.2f ms each, %.0f leaves each); %.0f leaves a frame cast the sun's shadow "
-                "(last 600 frames)",
+            Log("leaves: canopy draws a frame %.1f shrubs, %.1f trees, %.1f palms; %.1f leaf draws a frame (%.1f in the "
+                "depth pre-pass), %.0f leaves a frame; %zu sets, %u baked (%.2f ms each, %.0f leaves each); %.0f leaves a "
+                "frame cast the sun's shadow (last 600 frames)",
                 double(m_canopyCount[1]) / 600.0, double(m_canopyCount[2]) / 600.0, double(m_canopyCount[3]) / 600.0,
-                double(m_leafDraws) / 600.0, double(m_leafDrawn) / 600.0, m_leafSets.size(), m_leafBakes,
+                double(m_leafDraws) / 600.0, double(m_leafPrepassed) / 600.0, double(m_leafDrawn) / 600.0,
+                m_leafSets.size(), m_leafBakes,
                 m_leafBakeMs / double(std::max<uint32_t>(m_leafBakes, 1)),
                 double(m_leafBakedLeaves) / double(std::max<uint32_t>(m_leafBakes, 1)),
                 double(m_leafShadowLeaves) / 600.0);
         for (uint64_t& n : m_canopyCount)
             n = 0;
-        m_leafDraws = m_leafDrawn = m_leafShadowLeaves = 0;
+        m_leafDraws = m_leafDrawn = m_leafShadowLeaves = m_leafPrepassed = 0;
         m_leafBakes = m_leafBakedLeaves = 0;
         m_leafBakeMs = 0.0;
         m_grassShadowBlades = 0;
+        m_grassPointShadowBlades = 0;
         m_grassLitBlades = m_grassBuiltBlades = 0;
         for (uint64_t& n : m_grassLeftOut)
             n = 0;
@@ -1454,16 +1641,25 @@ void Device::BeginFrame()
     ++m_frameNumber;
     ProfileBeginFrame(f.main);
     ProfileCpuAddMs("wait for the GPU (frame slot)", waitMs);
+    MakeCloudNoise(f.main);                      // (once: before any rendering opens)
+    if (!m_cloudPuffs.empty()) {
+        m_cloudPuffsLast.swap(m_cloudPuffs);
+        m_cloudPuffsLastFrame = m_frameNumber - 1;
+    }
+    m_cloudPuffs.clear();
+    m_cloudsDrawn = false;
     UpdatePushTrail();
     UpdateLeaves();
+    PruneObjects();                              // (the per-object cache: objects.cpp)
     m_tessCharsPrev.swap(m_tessChars);           // characters drawn last frame (their rigid parts: TessellateDraw)
     m_tessChars.clear();
+    if (m_frameNumber == 1200)
+        SavePipelineCache("after the first frames");   // (the pipelines made on demand since the start)
+    TickFixedClock();                            // (tests: SetFixedClock)
     CollectWaterBodies();                        // the water's ripples follow the characters of the last frame
-    m_windTimePrev = m_windTime;
     m_frameClock = SwayClock();
-    m_windTime = std::fmod(m_frameClock, 3600.0);
-    if (m_windTimePrev > m_windTime || m_windTime - m_windTimePrev > 0.25)
-        m_windTimePrev = m_windTime;             // wrapped, or the first frame after a pause
+    UpdateWind();                                // (m_windTime, m_windTimePrev: wind.cpp)
+    UpdateLightning();                           // (rain.cpp: the game's glow last frame)
     m_lightsPrev.swap(m_lightsCur);              // last frame's complete light set lights this frame
     m_lightsCur.clear();
     m_sunLuminance = 0.0f;
@@ -1479,6 +1675,8 @@ void Device::BeginFrame()
     m_profileConstBlocks += m_constCount;
     m_profileConstReused += m_constantsReused;
     m_groupCalls = m_groupDraws = m_singleDraws = m_constantsReused = 0;
+    std::memset(m_rewriteWhy, 0, sizeof(m_rewriteWhy));
+    std::memset(m_splitWhy, 0, sizeof(m_splitWhy));
     m_shadowGroupCalls = m_shadowGroupDraws = 0;
     m_casterViews.clear();
     m_frameLightsDirty = true;

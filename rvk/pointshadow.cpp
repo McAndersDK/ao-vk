@@ -245,6 +245,49 @@ void Device::FindCarriers()
         groupLowestOrigin[it.group] = std::min(groupLowestOrigin[it.group], it.world.m[3][1]);
     }
 
+    // The drawn items (this frame's casters, not remembered ones) on a grid of 1-unit cells by their origin, and by
+    // owner: every test below is within a unit of a point sideways, or of one owner - a light looked through all the
+    // frame's items four times (lights x items: ~5% of the render thread over a city at night). Candidates are taken
+    // in the items' order, so the same item wins a tie as before.
+    // (Buckets: a cell's items chained through m_carrierNext, newest first - a query sorts what it gathers.)
+    constexpr uint32_t kBuckets = 4096;
+    std::vector<int32_t>& head = m_carrierHead;
+    std::vector<int32_t>& chain = m_carrierNext;
+    std::vector<std::pair<uint32_t, uint32_t>>& byOwner = m_carrierOwners;
+    head.assign(kBuckets, -1);
+    chain.resize(m_shadowItems.size());
+    byOwner.clear();
+    auto cellOf = [](float v) { return int32_t(std::floor(v)); };
+    auto bucket = [](int32_t x, int32_t z) { return (uint32_t(x) * 73856093u ^ uint32_t(z) * 19349663u) & (kBuckets - 1); };
+    for (uint32_t i = 0; i < m_shadowItems.size(); ++i) {
+        const ShadowItem& it = m_shadowItems[i];
+        if (it.cached) continue;
+        const float x = it.world.m[3][0], z = it.world.m[3][2];
+        if (std::fabs(x) < 1e9f && std::fabs(z) < 1e9f) {
+            const uint32_t b = bucket(cellOf(x), cellOf(z));
+            chain[i] = head[b];
+            head[b] = int32_t(i);
+        }
+        if (it.owner) byOwner.push_back({it.owner, i});
+    }
+    std::sort(byOwner.begin(), byOwner.end());
+    std::vector<uint32_t>& nearby = m_carrierNear;
+    // The drawn items whose origin is within r sideways of (x, z) - a superset: the cells it touches - in item order.
+    auto gather = [&](float x, float z, float r, bool clear) {
+        if (clear) nearby.clear();
+        const int32_t x0 = cellOf(x - r), x1 = cellOf(x + r), z0 = cellOf(z - r), z1 = cellOf(z + r);
+        for (int32_t cx = x0; cx <= x1; ++cx)
+            for (int32_t cz = z0; cz <= z1; ++cz)
+                for (int32_t i = head[bucket(cx, cz)]; i >= 0; i = chain[size_t(i)]) {
+                    const auto& m = m_shadowItems[size_t(i)].world.m;
+                    if (cellOf(m[3][0]) == cx && cellOf(m[3][2]) == cz) nearby.push_back(uint32_t(i));
+                }
+    };
+    auto inOrder = [&] {
+        std::sort(nearby.begin(), nearby.end());
+        nearby.erase(std::unique(nearby.begin(), nearby.end()), nearby.end());
+    };
+
     const bool exact = m_sceneLightsFrame == m_frameNumber;   // the game's own lights with their carriers
     for (CapturedLight& c : m_lightsCur) {
         c.hasCarrier = false;
@@ -265,23 +308,28 @@ void Device::FindCarriers()
                 if (d2 < bestD2) { bestD2 = d2; owner = s.owner; }
             }
             c.owner = owner;
-            if (!owner)
-                continue;
-            std::vector<uint8_t> linked(groups, 0);
-            for (const ShadowItem& it : m_shadowItems) {
-                if (it.cached || it.owner != owner) continue;
-                linked[it.group] = 1;
-                if (!c.hasCarrier || it.world.m[3][1] < c.carrier[1]) {   // its feet: the lowest origin
-                    c.carrier[0] = it.world.m[3][0];
-                    c.carrier[1] = it.world.m[3][1];
-                    c.carrier[2] = it.world.m[3][2];
-                    c.carrierGroup = it.group;
+            if (owner) {
+                std::vector<uint8_t> linked(groups, 0);
+                auto from = std::lower_bound(byOwner.begin(), byOwner.end(), std::pair<uint32_t, uint32_t>{owner, 0u});
+                for (auto o = from; o != byOwner.end() && o->first == owner; ++o) {
+                    const ShadowItem& it = m_shadowItems[o->second];
+                    linked[it.group] = 1;
+                    if (!c.hasCarrier || it.world.m[3][1] < c.carrier[1]) {   // its feet: the lowest origin
+                        c.carrier[0] = it.world.m[3][0];
+                        c.carrier[1] = it.world.m[3][1];
+                        c.carrier[2] = it.world.m[3][2];
+                        c.carrierGroup = it.group;
+                    }
+                    c.hasCarrier = true;
                 }
-                c.hasCarrier = true;
+                for (uint32_t g = 0; g < groups; ++g)
+                    if (linked[g]) c.carrierGroups.push_back(g);
+                if (c.hasCarrier)
+                    continue;
             }
-            for (uint32_t g = 0; g < groups; ++g)
-                if (linked[g]) c.carrierGroups.push_back(g);
-            continue;
+            // (Not one of the game's lights this frame, or none of its owner's pieces cast: found as below, by
+            // where the character stands under it - the player's own light, seen without a carrier in a dump.)
+            c.owner = 0;
         }
         // The same light last frame (it moves with its character, a little per frame) and who carried it.
         const CapturedLight* prev = nullptr;
@@ -297,9 +345,12 @@ void Device::FindCarriers()
             }
         }
         float best = 1e30f;
-        for (const ShadowItem& it : m_shadowItems) {
-            if (it.cached)                       // remembered copies may stand where the character was
-                continue;
+        // (Only items within a unit of the light, or 0.3 of last frame's carrier, can match below.)
+        gather(p.x, p.z, 1.0f, true);
+        if (prev) gather(prev->carrier[0], prev->carrier[2], 0.3f, false);
+        inOrder();
+        for (uint32_t idx : nearby) {
+            const ShadowItem& it = m_shadowItems[idx];   // (drawn: remembered copies may stand where it was)
             float dy = it.world.m[3][1] - p.y;
             if (dy <= -2.6f || dy >= 0.3f)       // where IsCarrierPart looks for the carrier's parts
                 continue;
@@ -341,8 +392,11 @@ void Device::FindCarriers()
         // 0.6 above the body's origin; a character's body pieces have theirs at its feet, like the carrier's).
         std::vector<uint8_t> linked(groups, 0);
         linked[c.carrierGroup] = 1;
-        for (const ShadowItem& it : m_shadowItems) {
-            if (it.cached || linked[it.group]) continue;
+        gather(c.carrier[0], c.carrier[2], 0.25f, true);
+        inOrder();
+        for (uint32_t idx : nearby) {
+            const ShadowItem& it = m_shadowItems[idx];
+            if (linked[it.group]) continue;
             float extent = std::max(std::max(it.boundsMax[0] - it.boundsMin[0], it.boundsMax[1] - it.boundsMin[1]), it.boundsMax[2] - it.boundsMin[2]);
             if (extent >= 3.0f) continue;        // a floor or building whose origin happens to be there
             float dx = it.world.m[3][0] - c.carrier[0], dz = it.world.m[3][2] - c.carrier[2];
@@ -351,8 +405,9 @@ void Device::FindCarriers()
                 linked[it.group] = 1;
         }
         // The carrier's origin may be a head piece (sitting: right under the light); its feet are the lowest origin.
-        for (const ShadowItem& it : m_shadowItems) {
-            if (it.cached || !linked[it.group]) continue;
+        for (uint32_t idx : nearby) {            // (the same neighbourhood: within 0.25 of the carrier)
+            const ShadowItem& it = m_shadowItems[idx];
+            if (!linked[it.group]) continue;
             float dx = it.world.m[3][0] - c.carrier[0], dz = it.world.m[3][2] - c.carrier[2];
             if (dx * dx + dz * dz < 0.25f * 0.25f)
                 c.carrier[1] = std::min(c.carrier[1], it.world.m[3][1]);
@@ -602,6 +657,7 @@ void Device::RenderPointShadowMaps(VkCommandBuffer cmd)
         }
         pointScanMs += ProfileCpu() - scanStart;
         double drawStart = ProfileCpu();
+        const bool grassUp = !GrassBelow(pos, l.range);   // (+Y, face 2: only if some grass reaches above the light)
         for (int face = 0; face < 6; ++face) {
             VkRenderingAttachmentInfo depthAtt{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
             depthAtt.imageView = m_cubeFaceViews[k * 6 + face];
@@ -631,6 +687,14 @@ void Device::RenderPointShadowMaps(VkCommandBuffer cmd)
                 ++m_pointShadowDraws;
             }
             FlushShadowGroup(cmd);               // this face's batch (M4)
+            // Our ground grass casts too (grass.cpp). Its pipeline replaces the shadow pipelines' bindings: they are
+            // bound again for the next face, and the cube's depth bias set back.
+            if ((face != 2 || grassUp) && DrawGrassPointShadow(cmd, vp, pos, l.range)) {
+                bind = ShadowBind{};
+                m_shadowArenaBound = false;
+                BindShadowRecords(cmd);
+                vkCmdSetDepthBias(cmd, 1.0f, 0.0f, 1.5f);
+            }
             vkCmdEndRendering(cmd);
         }
         pointDrawMs += ProfileCpu() - drawStart;

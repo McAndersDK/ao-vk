@@ -1,5 +1,6 @@
 #define INITGUID                                // define the DirectDraw / Direct3D IIDs in this unit
 #include "com_trace.h"
+#include "rvk_backend.h"
 
 #include <atomic>
 #include <cstdio>
@@ -19,9 +20,7 @@ bool g_active;
 
 void LogLine(const char* fmt, ...)
 {
-    char path[MAX_PATH] = "randy-vk.log";
-    GetEnvironmentVariableA("RANDYVK_LOG", path, sizeof(path));
-    if (FILE* f = std::fopen(path, "a")) {
+    if (FILE* f = std::fopen(rvkproxy::LogPath(), "a")) {
         va_list args;
         va_start(args, fmt);
         std::vfprintf(f, fmt, args);
@@ -254,6 +253,8 @@ HRESULT WINAPI HookDirectDrawEnumerateExA(LPDDENUMCALLBACKEXA cb, LPVOID ctx, DW
     return g_realEnumerateExA(cb, ctx, flags);
 }
 
+}  // namespace
+
 // Points module's import of dll!function at hook; returns the previous target (or nullptr).
 void* PatchImport(HMODULE module, const char* dll, const char* function, void* hook)
 {
@@ -281,8 +282,6 @@ void* PatchImport(HMODULE module, const char* dll, const char* function, void* h
     }
     return nullptr;
 }
-
-}  // namespace
 
 unsigned ComMethodCount() { return kComMethodCount + 2; }
 

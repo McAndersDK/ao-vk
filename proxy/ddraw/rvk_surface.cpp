@@ -7,6 +7,7 @@
 #include "rvk_backend.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 
 namespace rvkproxy {
@@ -54,6 +55,13 @@ void FillGpu(RSurface* s, const RECT* rect, uint32_t flags, uint32_t argb, float
 
 }  // namespace
 
+namespace {
+int g_gameTextures;                              // texture surfaces (top levels) holding a GPU texture
+}  // namespace
+
+// (Logged with the renderer's own texture count: the game holding them, or textures outliving their surfaces.)
+int GameTexturesAlive() { return g_gameTextures; }
+
 RSurface::RSurface(Kind k, const DDSURFACEDESC2& d) : kind(k), desc(d)
 {
     top = this;
@@ -66,6 +74,8 @@ RSurface::~RSurface()
     if (palette) palette->Release();
     if (nextLevel) nextLevel->Release();
     ForgetMaterialMaps(this);
+    if (top == this && texture && kind == Kind::Texture)
+        --g_gameTextures;
     if (top == this && texture && g_rvk.device)
         g_rvk.device->DestroyTexture(texture);
     if (g_rvk.mainSurface == this)
@@ -220,9 +230,12 @@ rvk::Texture* RSurface::RvkTexture()
     RSurface* t = top;
     if (!t->texture) {
         t->texture = dev->CreateTexture(t->desc.dwWidth, t->desc.dwHeight, t->format, t->levels);
+        if (t->texture) ++g_gameTextures;
         AttachMaterialMaps(t);
-        for (RSurface* l = t; l; l = l->nextLevel)
+        for (RSurface* l = t; l; l = l->nextLevel) {
+            l->gpuWhole = false;                   // (a new image: its contents undefined until a whole upload)
             t->anyDirty |= (l->dirty = !l->shadow.empty());
+        }
     }
     if (t->anyDirty) {                             // SetTexture is hot: walk the chain only when needed
         t->anyDirty = false;
@@ -231,6 +244,41 @@ rvk::Texture* RSurface::RvkTexture()
                 l->Upload();
     }
     return t->texture;
+}
+
+namespace {
+TextureWrites g_writes;
+}  // namespace
+
+TextureWrites TakeTextureWrites()
+{
+    const TextureWrites w = g_writes;
+    g_writes = {};
+    return w;
+}
+
+// The rows a Lock rectangle covered, when only they need to go: an uncompressed level the GPU already has whole,
+// no CPU conversion. (A text window may rewrite a few lines of its texture at a time; the whole level went each
+// time.) A level not yet uploaded whole goes whole: the rest of a new image is undefined (a texture SetTexture made
+// before the game first wrote it). RANDYVK_PARTIAL_UPLOAD=0: always whole.
+void RSurface::UploadRows(uint32_t y0, uint32_t y1)
+{
+    static const bool partialOn = [] {
+        const char* e = std::getenv("RANDYVK_PARTIAL_UPLOAD");
+        return !(e && *e == '0');
+    }();
+    rvk::ThreadedDevice* dev = g_rvk.device;
+    const uint32_t h = desc.dwHeight;
+    y1 = std::min(y1, h);
+    if (!partialOn || !dev || !top->texture || !gpuWhole || dirty || shadow.empty() || convert24 || palettized ||
+        rvk::FormatIsCompressed(format) || y0 >= y1 || (y0 == 0 && y1 == h)) {
+        Upload();
+        return;
+    }
+    ++g_writes.partial;
+    g_writes.bytes += uint64_t(y1 - y0) * Pitch();
+    dirty = false;
+    dev->UpdateTexture(top->texture, level, 0, y0, desc.dwWidth, y1 - y0, shadow.data() + size_t(y0) * Pitch(), Pitch());
 }
 
 void RSurface::Upload()
@@ -247,10 +295,15 @@ void RSurface::Upload()
     if (!t->texture) {
         t->texture = dev->CreateTexture(t->desc.dwWidth, t->desc.dwHeight, t->format, t->levels);
         if (!t->texture) return;
+        ++g_gameTextures;
         AttachMaterialMaps(t);
+        for (RSurface* l = t; l; l = l->nextLevel)
+            l->gpuWhole = false;
     }
     dirty = false;
+    gpuWhole = true;
     uint32_t w = desc.dwWidth, h = desc.dwHeight;
+    g_writes.bytes += uint64_t(Pitch()) * rvk::FormatRows(format, h);
     if (convert24 || palettized) {
         std::vector<uint32_t> argb(size_t(w) * h);
         const PALETTEENTRY* pal = t->palette ? t->palette->entries : nullptr;
@@ -580,7 +633,13 @@ HRESULT RSurface::DoUnlock(LPRECT)
     if (m_lockFlags & DDLOCK_READONLY)
         return DD_OK;
     if (kind == Kind::Texture) {
-        Upload();
+        LARGE_INTEGER t0, t1, freq;
+        QueryPerformanceCounter(&t0);
+        UploadRows(uint32_t(std::max<LONG>(m_lockRect.top, 0)), uint32_t(std::max<LONG>(m_lockRect.bottom, 0)));
+        QueryPerformanceCounter(&t1);
+        QueryPerformanceFrequency(&freq);
+        ++g_writes.locks;
+        g_writes.ms += double(t1.QuadPart - t0.QuadPart) * 1000.0 / double(freq.QuadPart);
     } else if (IsGpu(this)) {
         static bool logged;
         if (!logged) { logged = true; RvkLog("writes to a render target through Lock are ignored"); }

@@ -1,4 +1,5 @@
 #version 450
+#include "dither.glsl"
 // Camera motion blur (hdr.cpp), on the tone mapped scene before the interface: each pixel's motion since the last
 // frame from its depth and the two frames' cameras, scaled to a fixed exposure time (the same blur at any frame
 // rate). Pixels near the camera - the player's character, which the camera follows - aren't blurred, and aren't
@@ -41,5 +42,5 @@ void main()
         sum += texelFetch(colour, q, 0).rgb;
         weight += 1.0;
     }
-    outColor = vec4(sum / weight, centre.a);
+    outColor = vec4(Dither8(sum / weight, gl_FragCoord.xy, 0.0), centre.a);
 }

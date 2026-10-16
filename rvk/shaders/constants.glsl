@@ -20,7 +20,7 @@ struct DrawTransform {
     uvec4 leafSet;              // ... its leaves in the pool: first, drawn now | falling-leaf slots << 16, all; the
                                 // ground under it (world y, float bits: where its fallen leaves lie)
 };
-const uint MAT_PBR = 1u, MAT_BASE = 2u, MAT_ALBEDO = 4u, MAT_EMISSIVE = 8u, MAT_PICKED = 16u;   // D.mat.z: the draw has an
+const uint MAT_PBR = 1u, MAT_BASE = 2u, MAT_ALBEDO = 4u, MAT_EMISSIVE = 8u, MAT_PICKED = 16u, MAT_SKY = 32u, MAT_CLOUDSHEET = 64u;   // D.mat.z: the draw has an
                                 // ORM map; it is the ground base texture's; stage 0 draws an albedo map; it has an
                                 // emissive map; its texture was picked (Ctrl+Shift+I: flashes yellow)
 
@@ -65,7 +65,7 @@ uint gRecord;
 
 // Bindless textures (M1): one array of every texture and one of every sampler; a draw names the four it uses by
 // index. TEX0/TEX1 are the game's two texture stages, BUMPTEX the ground's base texture, NORMALTEX its normal map.
-layout(set = 1, binding = 0) uniform texture2D texImages[4096];
+layout(set = 1, binding = 0) uniform texture2D texImages[65536];   // (Device::kMaxBindlessImages: a big zone has over 4,096 textures)
 layout(set = 1, binding = 1) uniform sampler bindlessSamplers[256];
 #define TEX0 sampler2D(texImages[D.texIdx.x], bindlessSamplers[D.sampIdx.x])
 #define TEX1 sampler2D(texImages[D.texIdx.y], bindlessSamplers[D.sampIdx.y])

@@ -78,7 +78,7 @@ image for the full size.
 
 ### West Bank
 
-Sun shadows, HDR, colour grading and the ground grass.
+Sun shadows, tone mapping, colour grading and the ground grass.
 
 ![West Bank by day](docs/screenshots/west-bank.jpg)
 
@@ -119,10 +119,10 @@ Spell effects with GPU particles, and depth of field.
 - Light override: every nearby light lights every surface (the game picks at most 8 lights per object, so the
   ground and big objects often missed the lights around you). Up to 64 lights a frame.
 - Separate intensity sliders for lamps and for the lights characters carry (your own included).
-- Generated surface relief: normal maps derived from each texture's brightness, the ground included.
+- Generated bump maps: normal maps derived from each texture's brightness, the ground included.
 - Side-loaded material maps for individual game textures (`randy-vk\materials\`, see `docs/materials.md`): normal
-  maps, PBR materials (roughness / metallic / occlusion: GGX highlights, metals, reflections) and replacement
-  textures.
+  maps, PBR materials (roughness / metallic / occlusion: GGX highlights, metals, reflections) and enhanced
+  textures (the Renderer tab's **Materials** section).
 - Sunlight shining through leaves and grass.
 - Anisotropic filtering.
 
@@ -133,18 +133,46 @@ Spell effects with GPU particles, and depth of field.
 - Point light shadows: lamps and character lights cast real shadows (up to 16 at once, resolution 256-2048),
   fading in and out smoothly as lights come and go.
 - The game's round blob shadows are replaced while sun shadows are on.
+- Shadows of things out of view: what stood in view and stands still is remembered as a shadow caster, so walls,
+  trees and rocks behind you still cast. With a placed-objects pack for the playfield (`randy-vk\statels\`, made by
+  the ao-assets tools, not yet published), every placed object casts, seen or not; without one, objects cast as
+  they are drawn.
+- Moonlight at night lights the land and casts shadows.
+- Shadows fade out as the sun nears the horizon, and a low sun no longer lights what the hills hide from it (valleys
+  under mountains stay in shade; on by default).
 
-**HDR and effects**
-- HDR rendering with tone mapping and exposure control.
+**Effects**
+- The scene is drawn off-screen with colours brighter than white, then tone mapped (with exposure control)
+  into the normal 8-bit picture - nothing to do with HDR monitors. Every effect is drawn in that off-screen scene;
+  `RVK_Hdr` (ini only) switches it off for troubleshooting, and every effect with it.
 - Bloom (depth-aware, so halos don't bleed through objects in front) and glow on spell and fire effects.
 - Night glow: lit windows, signs and screens glow after dark.
 - Ambient occlusion and screen-space indirect light (bounce light).
 - Volumetric light: sun shafts through haze.
 - Screen-space reflections on water, glossy surfaces and optionally wet-looking floors.
-- Motion blur (camera and per object), temporal anti-aliasing with sharpening.
+- Motion blur (camera and per object), temporal anti-aliasing with sharpening (particles and spell effects stay
+  bright through it), or FXAA when TAA is off.
 - Depth of field with bokeh, focused on your character by default.
 - Colour grading: saturation, contrast, warmth, a cooler night tint, vignette, and your own `.cube` look-up tables
   (`randy-vk-day.cube`, `randy-vk-night.cube` next to `randy-vk.ini`).
+
+**Sky, air and night** (on by default)
+- The air: haze that thickens with height and turns bluer far off, the sun's glow around it, haze over the distant
+  land, and light rays through gaps in the clouds.
+- Valley mist at night and at dawn, burning off as the sun climbs.
+- The suns drawn anew in the game's style (a white-hot core, a soft glow, rays), dimmed by cloud in front of them;
+  low suns bigger and spread along the horizon. Dawn and dusk in the game's colours.
+- Darker nights, lit by the moon, with lamps and windows glowing (`RVK_NightDark`: 0 as the game, 1 moonlit, 2 dark).
+- The ships over the cities hazed into the distance instead of cut off.
+
+**Clouds, rain and smoke** (on by default; sections Sky, Weather and Smoke)
+- Volumetric clouds: a cloud layer over the sky that follows the game's own clouds and weather, from scattered
+  clouds on dry days to overcast and a low grey deck in rain, each zone with its own climate (deserts clearer,
+  coasts and forests cloudier), lit by the sun and the moon, sunset-coloured, casting drifting shadows on the
+  ground, the grass and the water.
+- Rain drawn anew: streaks, splashes where it lands and rings on the water.
+- Smoke as a simulated fluid: the game's smoke effects become rising plumes with puffs and wisps, carried by the
+  wind and stirred by characters walking through them.
 
 **Plants**
 - Real grass on the ground: fields of individual blades grow wherever the ground's texture is grass, as bright as
@@ -153,17 +181,17 @@ Spell effects with GPU particles, and depth of field.
 - Waves of wind run through the grass, with gusts sweeping over it as lighter bands.
 - Sunlight on the blades: backlit tips when you look towards the sun, a sheen, rounded shading.
 - The blades cast sun shadows onto the ground, each other and paths, softened so that fields stay as bright as
-  before.
+  before; near lamps and the lights characters carry they cast those lights' shadows too.
 - Grass bends around characters walking through it and stays trodden for a few seconds behind them.
 - Grass, bushes and trees sway in the wind.
 - Grass and plants bend out of the way of characters walking through them, then spring back.
 - Big plant quads are split near characters so they bend smoothly instead of tilting as one piece.
 - Distant foliage is shaded more cheaply (a level of detail), for speed in grassy areas.
 - No grass grows under objects lying on the ground (platforms, floors, road pieces).
-- Leaves on trees, shrubs and palms (Experimental section, off by default): sprigs of leaves flutter on the branches,
+- Leaves on trees, shrubs and palms (on by default): sprigs of leaves flutter on the branches,
   catch the sun, cast shadows, and fall in gusts.
 
-**Water** (Experimental section, off by default; needs HDR)
+**Water** (on by default)
 - The game's flat water is replaced by a real surface: waves (a gentle ripple on ponds, a swell on the open sea),
   small ripples, refraction of what is under it, water that gets deeper in colour the deeper it is, caustics on the
   bottom, reflections of the scene and the sky with a sun glint, foam along shores, and the game's fog.
@@ -173,11 +201,14 @@ Spell effects with GPU particles, and depth of field.
   not at all, and jumping in makes a big splash with rings spreading out from it. Wake strength, visibility,
   duration, speed, treading water and splash each have a slider.
 - One slider from "the game's water made richer" (its own colour and texture) to realistic water; halfway by
-  default. Needs HDR.
+  default.
+- Waterfalls: our own falling sheet over each of the game's falls, with strands, sparkles of sun and lamplight, spray
+  and mist at the foot, and churn and foam where they land.
 
 **Presets**
 - One click in the Renderer tab: **Original** (every enhancement off), **Classic+** (the game's look, lit and
-  shadowed better), **Modern** (the defaults) or **Ultra** (everything turned up). Changing any setting by hand
+  shadowed better; the new clouds, weather, smoke, water, leaves and grass off), **Modern** (the defaults) or **Ultra**
+  (Modern's look with cloud, smoke and water quality, shadows, AO and grass turned up). Changing any setting by hand
   makes it **Custom**. To keep a setup of your own, back up `randy-vk.ini`.
 
 **Characters**
@@ -193,7 +224,18 @@ Spell effects with GPU particles, and depth of field.
   100-character test crowd the game thread's renderer work drops from 8.4 to about 0.9 ms a frame.
 - Caches (mesh fingerprints, shadow casters, shared vertex buffers) keep the per-frame cost down; in big crowds the
   game's own CPU work, not the renderer, is usually the limit.
+- Per-object caches and batched drawing on the render thread: in West Bank's city the frame rate went from about 95
+  to about 139 FPS here (4,000 draws a frame).
+- Decoded images and converted textures are kept, so the planet map opens quickly after the first time.
 - A built-in profiler that measures what each enhancement costs where you stand (Ctrl+Shift+O, see below).
+
+**Stability and diagnostics**
+- Crash reports: a fault in any module is written to `randy-vk.log` with where it happened and the stack, even when
+  it happens inside Windows' own memory manager.
+- Hang reports: if no frame comes for 20 seconds, every thread's place is written to the log (wait that long before
+  closing a frozen game, then send the log).
+- Slow frames (over 50 ms) are logged with the time of day, so a stutter can be matched to what you were doing.
+- Two clients running from one folder each get their own log.
 
 ## Performance
 
@@ -239,7 +281,8 @@ measures what each costs where you stand.
 
 ao-vk started as a layer under the game's renderer. It is now replacing that renderer too: Randy's own code (the
 original `randy31_orig.dll`, about 1,900 functions) is being rewritten function by function as native code in
-`proxy/native/`, with the goal of no longer loading the original at all. Each part is switched on in `randy-vk.ini`:
+`proxy/native/`, with the goal of no longer loading the original at all. Each part has a switch in `randy-vk.ini`,
+and all of them are on by default:
 
 ```ini
 [Native]
@@ -256,8 +299,10 @@ Direct=on     ; with Device=on: render state reaches the renderer directly, one 
 Retain=on     ; (default) with Device, Scene and Direct on: static meshes kept on the GPU and drawn by handle
 ```
 
-All of them but `Direct` default to `off` (the original code). They have been played with in game; if something misbehaves,
-turning the one key back off brings the original back for that part.
+All of them default to `on` since 0.5 (the first start of 0.5 also switches on any part an earlier version left
+`off`). Native parts are part of how ao-vk gets its frame rate (characters skinned on the GPU, static meshes kept on
+the GPU). If something misbehaves, setting one key to `off` brings the original back for that part - and please
+report it, with `randy-vk.log`.
 
 Every part is checked against the original before it is switched on: computations side by side on random input
 (`tools/native-check.sh`), drawing with a log of every Direct3D call of a frame, which must be identical with the
@@ -292,7 +337,8 @@ You need up to two files from a [release](../../releases) (or your own build, se
    ao-vk loads it and lets the game's renderer code do its usual work; it must sit in the same folder.
 3. **Copy ao-vk's `randy31.dll`** into the client folder.
 4. Optional: **copy AOReloaded's `version.dll`** into the client folder for the in-game settings tab
-   (Options, F10, **Renderer** tab). Without it, settings are changed in `randy-vk.ini` or with the hotkeys.
+   (Options, F10, **Renderer** and **Advanced** tabs). Without it, settings are changed in `randy-vk.ini` or with
+   the hotkeys.
 5. **Start the game as usual** (launcher or `AnarchyOnline.exe`). ao-vk creates `randy-vk.ini` (settings) and
    `randy-vk.log` (log) in the client folder on the first start.
 
@@ -315,12 +361,13 @@ Delete ao-vk's `randy31.dll`, rename `randy31_orig.dll` back to `randy31.dll`, a
 
 All settings live in `randy-vk.ini` (section `[Renderer]`; the native code's switches in `[Native]`, above) and are
 saved whenever they change. With AOReloaded they
-appear in the game's options window (F10) under **Renderer**: the presets first, then every feature as an on/off
-checkbox, its
-sliders and choices further down, grouped by feature. New, unfinished features sit in their own **Experimental**
-block just under the feature switches, off by default. Changes apply immediately. Edits to the `[Renderer]` section of
+appear in the game's options window (F10) in two tabs. **Renderer**: the presets first, then every feature as an
+on/off checkbox, by section. **Advanced**, right after it: every slider and choice, grouped by feature. Changes apply immediately. Edits to the `[Renderer]` section of
 `randy-vk.ini` made while the game runs apply too, within half a second (the options window shows them once
-reopened).
+reopened). A few debugging switches are set in `randy-vk.ini` only and don't appear in the window:
+`RVK_PbrDebug` (also Ctrl+Shift+K), `RVK_ShadowView`, `RVK_Occlusion`, `RVK_TimeOfDay` and `RVK_TimeSpeed`.
+So are minor switches and most of the clouds', weather's, smoke's, water's and leaves' tuning (`kHidden` in `proxy/ddraw/rvk_settings.cpp`):
+the window keeps one switch per feature and the sliders that matter; the rest still work from `randy-vk.ini`.
 
 Some useful ones:
 
@@ -332,9 +379,9 @@ Some useful ones:
 | `RVK_PtShadows` / `RVK_PtRes` | 8 / 512 | how many lights cast point shadows, and their resolution |
 | `RVK_PtLight` | 0.3 | brightness of lamps, fires and other lights |
 | `RVK_CharLight` | 0.25 | brightness of lights characters carry (your own included) |
-| `RVK_TessOn`, `RVK_Tess*` | on | rounder characters: roundness, detail, distance |
+| `RVK_TessOn`, `RVK_Tess*` | on | tessellation (rounder characters): roundness, detail, distance |
 | `RVK_FoliageLod` | 35 | distance from which foliage is shaded cheaply |
-| `RVK_GrassOn` | 1 | our own ground grass: procedural blades over the terrain (off = the game's foliage only; needs HDR) |
+| `RVK_GrassOn` | 1 | our own ground grass: procedural blades over the terrain (off = the game's foliage only) |
 | `RVK_GrassTex` | 1 | grass only where the ground's own texture is green (not on sand, brick, roads) |
 | `RVK_GrassDist` / `RVK_GrassBlades` / `RVK_GrassHeight` | 40 / 8 / 0.3 | how far the grass reaches (world units), blades a patch, blade height |
 | `RVK_GrassWidth` | 0.75 | blade width (0.25–3) |
@@ -346,7 +393,7 @@ Some useful ones:
 | `RVK_GrassTrail` | 1 | grass trodden by characters stays down a few seconds behind them (needs `RVK_PushOn`) |
 | `RVK_GrassShadow` | 1 | grass blades cast the sun's shadow near the camera, onto the ground and each other (needs `RVK_SunShadow`) |
 | `RVK_GrassEven` | 1 | an even grass colour: one green (1) rather than the colours of the ground under each blade (0) |
-| `RVK_WaterOn` | 0 | the new water (off = the game's own; needs HDR). Experimental: off by default |
+| `RVK_WaterOn` | 1 | the new water (off = the game's own) |
 | `RVK_WaterStyle` | 0.5 | 0 = the game's water made richer, 1 = realistic |
 | `RVK_WaterQual` | 2 | 1 low, 2 medium, 3 high: surface detail and reflection quality |
 | `RVK_WaterWaves` / `RVK_WaterRipple` | 0.3 / 1 | wave height, small ripples |
@@ -355,6 +402,20 @@ Some useful ones:
 | `RVK_WakeSplash` | 1 | the big ripple of a character jumping into the water (0 = none) |
 | `RVK_WaterRefl` / `RVK_WaterRefr` / `RVK_WaterClear` | 1 / 1 / 1 | reflections, refraction, how far one sees into it |
 | `RVK_WaterFoam` / `RVK_WaterCaust` / `RVK_WaterTex` | 0 / 1 / 0.5 | shore and crest foam, caustics, the game's water texture on it |
+| `RVK_WaterSheen` / `RVK_WaterSpark` | 1 / 1 | waterfalls: how much their clear water reflects (up to 2), their sparkles of sunlight and lamplight (0 = none) |
+| `RVK_WaterSpray` / `RVK_WaterChurn` | 1 / 1 | waterfalls: the spray and mist at their foot, the pool churned and foaming where they land (0 = none) |
+| `RVK_WaterSpeed` | 1.75 | waterfalls: how fast the water falls (1 = as fast as real water would for the game's units in metres) |
+| `RVK_WeatherOn` | 1 | the new weather: rvk draws the game's rain instead of it |
+| `RVK_RainForce` / `RVK_RainAmount` / `RVK_RainSplash` | 0 / 1 / 1 | rain this hard whatever the game's weather (0 = the game's; for trying it), how many drops, how many splashes where it lands; rain rings on water come with it |
+| `RVK_RainBright` | 1 | how bright the rain and its splashes are |
+| `RVK_SmokeOn` | 1 | simulated smoke: a fluid simulated round each smoke source, lit by the sun and the lamps |
+| `RVK_SmokeQual` / `RVK_SmokeRes` / `RVK_SmokeThick` | 2 / 12 / 1 | its grid: cells per world unit of a source's box (a long-lived source's taller box gets more), at most 64 / 96 / 128 a side (quality 1 / 2 / 3); how thick it is (up to 8) |
+| `RVK_SmokeLife` | 1 | how long the smoke lasts, times the game's (0.25 - 4): longer is taller and thicker |
+| `RVK_SmokeStir` | 1 | how much characters stir it: walking through pushes it aside and leaves eddies (0: not at all) |
+| `RVK_SmokeWisps` | 1 | fine wisps finer than its grid, carried along by the simulated flow (0: none) |
+| `RVK_SmokeBright` | 1 | how light the smoke is (0.25 - 3) |
+| `RVK_SmokeOpaque` | 1 | how opaque it is drawn (0.05 - 8), its shape and shading kept (unlike the density): below 1 see-through as a whole; above 1 its cover as if that many times as thick - its dense parts hide what is behind them |
+| `RVK_SmokeGame` | 0 | the game's own smoke sprites drawn as well (1) |
 
 ### Hotkeys (Ctrl+Shift + key)
 
@@ -362,7 +423,7 @@ Some useful ones:
 | --- | --- | --- | --- |
 | E | all enhancements on / off | F10 | per-pixel lighting |
 | F8 | light override | F7 | sun shadows |
-| F6 | point light shadows | F5 | HDR |
+| F6 | point light shadows | F5 | all effects (`RVK_Hdr`) |
 | F4 | bloom | F3 | ambient occlusion |
 | F2 | generated relief | F1 | anisotropic filtering |
 | G | indirect light | V | volumetric light |
@@ -385,7 +446,11 @@ feature costs exactly where you are.
 | --- | --- |
 | `RANDYVK_DDRAW` | `rvk` (default): render with ao-vk. `off`: the game's stock renderer, ao-vk passing everything through. `trace`: the stock renderer, counting its Direct3D calls |
 | `RANDYVK_THREADED` | `0` runs the Vulkan work on the game's thread (for comparison) |
-| `RANDYVK_LOG` | log file path (default `randy-vk.log` in the client folder; moved to `randy-vk.old.log` once over 8 MB) |
+| `RANDYVK_PIPELINE_CACHE` | path of the pipeline cache when the proxy sets none (the game keeps it as `randy-vk.cache` in the client folder; delete the file to rebuild it, `off` disables it here) |
+| `RANDYVK_LOG` | log file path (default `randy-vk.log` in the client folder; moved to `randy-vk.old.log` once over 8 MB; a second client running from the same folder writes `randy-vk-2.log`) |
+| `RANDYVK_HANG_SECONDS` | seconds without a frame before the hang report (every thread's place, into the log; default 20). `RANDYVK_NO_WATCHDOG=1` turns the watchdog off |
+| `RANDYVK_TEXTURE_CACHE` | `0` turns off the caches of decoded images and converted textures (they make the planet map and revisited zones load faster) |
+| `RANDYVK_INSPECT_EVERY` | capture a frame for the frame inspector every N seconds (default: only on Ctrl+Shift+F12) |
 
 ## Known limitations
 
@@ -395,7 +460,8 @@ feature costs exactly where you are.
 - In very large crowds the game's own CPU work (its interface, game logic) still limits the frame rate; the native
   character code (below) takes the renderer's share of it off the game's thread.
 - Shadows are drawn from the untessellated characters.
-- Ground grass and the new water need HDR (`RVK_Hdr`): with it off they don't show.
+- The game's ground render mode must be **Shadows** (video options): the grass, the valley mist and the terrain's
+  lighting read the ground as that mode draws it (the Renderer tab says so).
 - The water's reflections are screen-space: what is off screen reflects as sky.
 
 ## How it works

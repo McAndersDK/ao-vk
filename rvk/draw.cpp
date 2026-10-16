@@ -144,7 +144,19 @@ void Device::SetTransform(uint32_t type, const d3d::Matrix& m)
     d3d::Matrix* target = nullptr;
     switch (type) {
     case d3d::World: m_world = m; return;
-    case d3d::View: target = &m_view; break;
+    case d3d::View: {
+        m_gameView = m;
+        if (m.m[3][0] != 0.0f || m.m[3][1] != 0.0f || m.m[3][2] != 0.0f) {
+            m_gameMainView = m;
+            m_gameMainValid = true;
+        }
+        if (m_freeCam) {
+            ApplyFreeCam();
+            return;
+        }
+        target = &m_view;
+        break;
+    }
     case d3d::Projection: target = &m_proj; break;
     case d3d::Texture0: target = &m_texMatrix[0]; break;
     case d3d::Texture1: target = &m_texMatrix[1]; break;
@@ -153,7 +165,68 @@ void Device::SetTransform(uint32_t type, const d3d::Matrix& m)
     if (std::memcmp(target, &m, sizeof(m)) != 0) {
         *target = m;
         m_constantsDirty = true;
+        if (type == d3d::View || type == d3d::Projection) ++m_cameraGen;
     }
+}
+
+// The free camera's view: each view the game sets taken back out of its main camera's and into the free one's - the main
+// view becomes the free camera's own, a view without position (the sky's) keeps its relation to it.
+void Device::ApplyFreeCam()
+{
+    const float cy = std::cos(m_freeYaw), sy = std::sin(m_freeYaw), cp = std::cos(m_freePitch), sp = std::sin(m_freePitch);
+    const float f[3] = {cp * sy, sp, cp * cy};
+    float r[3] = {f[2], 0.0f, -f[0]};            // (left-handed: the world's up x forward)
+    const float rl = std::hypot(r[0], r[2]);
+    r[0] /= rl; r[2] /= rl;
+    const float u[3] = {f[1] * r[2] - f[2] * r[1], f[2] * r[0] - f[0] * r[2], f[0] * r[1] - f[1] * r[0]};
+    d3d::Matrix F = Identity();
+    for (int i = 0; i < 3; ++i) {
+        F.m[i][0] = r[i];
+        F.m[i][1] = u[i];
+        F.m[i][2] = f[i];
+    }
+    const float* e = m_freePos;
+    F.m[3][0] = -(r[0] * e[0] + r[1] * e[1] + r[2] * e[2]);
+    F.m[3][1] = -(u[0] * e[0] + u[1] * e[1] + u[2] * e[2]);
+    F.m[3][2] = -(f[0] * e[0] + f[1] * e[1] + f[2] * e[2]);
+    d3d::Matrix inv;
+    if (!InvertMatrix(m_gameMainView, &inv))
+        return;
+    m_view = MulMatrix(MulMatrix(m_gameView, inv), F);
+    m_constantsDirty = true;
+    ++m_cameraGen;
+}
+
+void Device::SetFreeCam(const FreeCamInput& in)
+{
+    if (!in.on) {
+        if (m_freeCam) {                         // (back to the game's)
+            m_freeCam = false;
+            m_view = m_gameView;
+            m_constantsDirty = true;
+            ++m_cameraGen;
+            Log("free camera: off");
+        }
+        return;
+    }
+    if (!m_freeCam) {                            // on: where the game's camera is, looking its way
+        d3d::Matrix inv;
+        if (!m_gameMainValid || !InvertMatrix(m_gameMainView, &inv))
+            return;
+        for (int i = 0; i < 3; ++i) m_freePos[i] = inv.m[3][i];
+        m_freeYaw = std::atan2(inv.m[2][0], inv.m[2][2]);
+        m_freePitch = std::asin(std::clamp(inv.m[2][1], -1.0f, 1.0f));
+        m_freeCam = true;
+        Log("free camera: on at (%.1f %.1f %.1f)", double(m_freePos[0]), double(m_freePos[1]), double(m_freePos[2]));
+    }
+    m_freeYaw += in.look[0];
+    m_freePitch = std::clamp(m_freePitch + in.look[1], -1.55f, 1.55f);
+    const float cy = std::cos(m_freeYaw), sy = std::sin(m_freeYaw), cp = std::cos(m_freePitch), sp = std::sin(m_freePitch);
+    const float f[3] = {cp * sy, sp, cp * cy}, r[3] = {cy, 0.0f, -sy};
+    const float step = in.speed * std::clamp(in.dt, 0.0f, 0.1f);
+    for (int i = 0; i < 3; ++i)
+        m_freePos[i] += (r[i] * in.move[0] + (i == 1 ? in.move[1] : 0.0f) + f[i] * in.move[2]) * step;
+    ApplyFreeCam();
 }
 
 void Device::SetMaterial(const d3d::Material& m)
@@ -177,6 +250,7 @@ void Device::SetLight(uint32_t index, const d3d::Light& light)
         return;
     }
     ++slot.version;
+    ++m_lightsGen;
     slot.light = light;
     slot.cosHalfTheta = std::cos(light.theta * 0.5f);
     slot.cosHalfPhi = std::cos(light.phi * 0.5f);
@@ -194,6 +268,7 @@ void Device::LightEnable(uint32_t index, bool enable)
     if (slot.enabled != enable) {
         slot.enabled = enable;
         m_constantsDirty = true;
+        ++m_lightsGen;
     }
     if (enable)
         CaptureLight(slot);
@@ -281,36 +356,91 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
         fl->cascadeTexel[i] = m_cascadeTexel[i];
         fl->cascadeDepth[i] = m_cascadeDepth[i];
     }
-    // Night: the sun's light on flat ground (smoothed) below a tenth of full day.
-    float night = 1.0f - std::clamp(m_daylight / 0.35f, 0.0f, 1.0f);
+    // Night: the sun's light on flat ground (smoothed) below a tenth of full day; lifted by the game's dawn ambient.
+    float night = NightAmount();
     fl->effects[0] = m_leafLight;
     fl->effects[1] = m_hdr ? m_nightGlow * night : 0.0f;
     fl->effects[2] = m_sunSoftness;
     fl->effects[3] = m_grassPush;
     Wind(fl->wind);
+    WindFrame(fl->windFrame);
+    Lightning(fl->flash, fl->flashView, fl->flashProj, fl->flashWorld);
+    fl->rainNear[0] = m_rainNearFrame == m_frameNumber && m_rainNear ? 1.0f : 0.0f;
+    fl->rainNear[1] = StormOvercast();
+    fl->rainNear[2] = std::clamp(m_storm * std::max(m_windStormScale, 0.0f), 0.0f, 1.0f) * std::clamp(m_stormDebris, 0.0f, 2.0f);
+    fl->rainNear[3] = m_ssr > 0.0f ? 1.0f : 0.0f;
+    // The wet ground and the rain's cover map (its bindless slot packed as the terrain's sun map's).
+    // (Deferred - the user, 2026-10-16: the wet look flickered at an even beat in game; off whatever RVK_RainWet says
+    // until that is found. Suspects: the environment probe's ping-pong update, the puddles' ripple clock.)
+    constexpr bool kWetGround = false;
+    fl->wet[0] = kWetGround && !m_indoors ? m_wetness : 0.0f;
+    fl->wet[1] = kWetGround && !m_indoors ? m_puddles : 0.0f;
+    fl->wet[2] = float(std::fmod(m_rainClock, 3600.0));
+    fl->wet[3] = m_rainCoverOut[3];
+    for (int i = 0; i < 4; ++i) fl->cover[i] = 0.0f;
+    if (m_rainCover && m_rainCoverOut[2] > 0.0f && m_rainCover->m_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        const uint32_t image = BindlessImage(m_rainCover), sampler = FixedSamplerSlot(2, m_linearSampler);
+        if (image != ~0u && image < (1u << 20) - 1 && sampler < 256) {
+            const uint32_t slot = (image + 1) | sampler << 20;
+            fl->cover[0] = m_rainCoverOut[0];
+            fl->cover[1] = m_rainCoverOut[1];
+            fl->cover[2] = m_rainCoverOut[2];
+            std::memcpy(&fl->cover[3], &slot, 4);
+        }
+    }
     FillPushers(fl, eye);
     fl->leaves[0] = m_leaf.on ? m_leaf.wind : 0.0f;
     fl->leaves[1] = m_leaf.on ? m_leaf.flutter : 0.0f;
-    fl->leaves[2] = std::max(m_grassGusts, 0.0f);
+    fl->leaves[2] = Gusts();
     fl->leaves[3] = m_leaf.on ? m_leaf.core : 0.0f;
     fl->leafView[0] = std::max(m_leaf.distance, 1.0f);
     fl->leafView[1] = m_leaf.on ? 1.0f : 0.0f;
     fl->leafView[2] = m_leaf.on ? m_leaf.fall : 0.0f;
-    fl->leafView[3] = 0.0f;
+    fl->leafView[3] = std::clamp(m_crownShade, 0.0f, 1.0f);   // (the crown shading, ffp.vert)
     fl->taa[0] = TaaActive() ? m_taaJitter[0] : 0.0f;
     fl->taa[1] = TaaActive() ? m_taaJitter[1] : 0.0f;
     fl->taa[2] = FrameNoise();                   // noise patterns move on each frame (averaged by the TAA)
     fl->taa[3] = float(m_windTimePrev);         // the wind's time last frame (plants' motion vectors)
     fl->shadowParams[0] = m_shadowValid ? 1.0f : 0.0f;
-    fl->shadowParams[1] = m_shadowStrength;
-    fl->shadowParams[2] = float(m_cascadeCount);
+    fl->shadowParams[1] = m_shadowValid && m_shadowIsMoon ? 0.8f * m_shadowStrength : m_shadowStrength;
+    // Fading out as the light nears the horizon (full from ~10 degrees up, none at the ~3 degrees where the map stops):
+    // that low, the shadows of things on a ridge lie hundreds of metres down the slopes facing the light, in the far
+    // cascade's coarse texels - dark blocks on the mountains, switching off at once at the cut (user, 2026-10-13).
+    if (m_shadowValid) {
+        const float* d = m_shadowSunDir;
+        const float up = -d[1] / std::max(std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]), 1e-6f);
+        const float t = std::clamp((up - 0.05f) / (0.17f - 0.05f), 0.0f, 1.0f);
+        fl->shadowParams[1] *= t * t * (3.0f - 2.0f * t);
+    }
+    fl->shadowParams[2] = m_shadowValid ? float(m_cascadeCount) : 0.0f;   // (none: no map - the terrain's shade alone)
     fl->shadowParams[3] = PointShadowStrength();
     // The sun the shadow map was drawn with (shadows lag a frame), or without shadows this frame's.
     const float* sunDir = m_shadowValid ? m_shadowSunDir : m_frameSunDir;
     fl->sunDir[0] = sunDir[0]; fl->sunDir[1] = sunDir[1]; fl->sunDir[2] = sunDir[2];
     fl->sunDir[3] = m_hdr ? m_hdrHeadroom : m_lightHeadroom;
     for (int i = 0; i < 3; ++i) fl->sunColor[i] = m_shadowValid ? m_shadowSunColor[i] : m_frameSunColor[i];
-    fl->sunColor[3] = 0.0f;
+    fl->sunColor[3] = m_frameSunLuma;            // (the clouds' light: not dimmed by the clouds hiding the sun)
+    // A thunderstorm's deck hides the sun: its light on the grass, the clouds, the air and the water mostly gone
+    // (lighting.glsl and the ground's shade take the rest - FL.rainNear.y).
+    const float overcast = StormOvercast();
+    for (int i = 0; i < 3; ++i) fl->sunColor[i] *= 1.0f - 0.65f * overcast;
+    // The moon's light on the ground and grass (night.cpp); whether the shadow map is its. The sun's true direction
+    // (below the horizon too) for the clouds' light.
+    for (int i = 0; i < 3; ++i) fl->moon[i] = m_moonColour[i];
+    fl->moon[3] = m_shadowValid && m_shadowIsMoon ? 1.0f : 0.0f;
+    {
+        // (This frame's sun once seen, else the last frame's - never the shadow light's: by night that's the moon.)
+        const float* d = m_sunLuminance > 0.0f ? m_sunDir : m_trueSunDir;
+        const float l = std::max(std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]), 1e-6f);
+        for (int i = 0; i < 3; ++i) fl->sunTrue[i] = -d[i] / l;
+        fl->sunTrue[3] = night;
+    }
+    {
+        float ts[8];
+        TerrainSunLights(ts);
+        std::memcpy(fl->terrainSun, ts, sizeof(fl->terrainSun));
+        std::memcpy(fl->terrainSun2, ts + 4, sizeof(fl->terrainSun2));
+    }
     fl->pbr[0] = m_pbr.specular;
     fl->pbr[1] = m_pbr.ambient;
     fl->pbr[2] = m_ssr > 0.0f ? m_pbr.reflections : 0.0f;
@@ -327,6 +457,34 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
             env = (image + 1) | sampler << 20 | uint32_t(std::lround(std::clamp(m_pbr.probe, 0.0f, 1.0f) * 15.0f)) << 28;
     }
     std::memcpy(&fl->pbr2[3], &env, 4);
+    // The clouds' shadow map (clouds.cpp), when made this frame or the last.
+    uint32_t clouds = 0;
+    std::memset(fl->clouds, 0, sizeof(fl->clouds) + sizeof(fl->clouds2));
+    if (m_cloudShadowMap && m_cloudShadowFrame + 1 >= m_frameNumber && m_cloudParams.enable && m_cloudParams.shadow > 0.0f) {
+        const uint32_t image = BindlessImage(m_cloudShadowMap), sampler = FixedSamplerSlot(2, m_linearSampler);
+        if (image != ~0u && image < (1u << 20) - 1 && sampler < 256) {
+            clouds = (image + 1) | sampler << 20;
+            fl->clouds[0] = m_cloudShadowArea[0];
+            fl->clouds[1] = m_cloudShadowArea[1];
+            fl->clouds[2] = 1.0f / m_cloudShadowArea[2];
+            fl->clouds2[0] = m_cloudShadowArea[3];
+            fl->clouds2[1] = std::clamp(m_cloudParams.shadow, 0.0f, 1.0f);
+        }
+    }
+    std::memcpy(&fl->clouds[3], &clouds, 4);
+    // The game's sunlight on its clouds: its hue (cloud_light.glsl SunLight), when seen lately.
+    if (m_cloudGameHueFrame != ~0ull && m_cloudGameHueFrame + 600 >= m_frameNumber) {
+        uint32_t hue = 0;
+        for (int j = 0; j < 3; ++j)
+            hue |= uint32_t(std::lround(std::clamp(m_cloudGameHue[j], 0.0f, 1.0f) * 255.0f)) << (8 * j);
+        std::memcpy(&fl->clouds2[2], &hue, 4);
+        fl->clouds2[3] = 1.0f;
+    }
+    // The game's cloud sheets (RVK_CloudSheet), coloured as the layer's clouds.
+    std::memcpy(fl->cloudTint, m_sheetTint, sizeof(fl->cloudTint));
+    std::memcpy(fl->cloudSky, m_sheetSky, sizeof(fl->cloudSky));
+    std::memcpy(fl->cloudAir, m_sheetAir, sizeof(fl->cloudAir));
+    fl->cloudSky[3] = CloudSheetsOn() && m_sheetTint[3] > 0.0f ? std::min(m_cloudParams.sheet, 2.0f) * m_skySheets : 0.0f;
     fl->prevView = m_prevView;                   // the world camera last frame (motion vectors)
     fl->prevProj = m_prevProj;
     m_frameLightIndices.clear();
@@ -354,19 +512,32 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
     BuildLightGrid();
 }
 
-// Identity of a ground chunk within a frame: its sizes and a sample of its vertices (base and lighting passes draw
-// the same vertices).
-uint64_t Device::TerrainChunkKey(const void* vertices, uint32_t vertexCount, uint32_t stride, uint32_t indexCount)
+// Identity of a ground chunk within a frame: its sizes, its vertices - a static snapshot's serial and place, else a
+// sample of them - and a sample of its indices (base and lighting passes draw the same). The game draws its ground as
+// small index lists into big static vertex buffers: by sizes and vertices alone, the chunks of one buffer with the
+// same index count were one chunk (one base texture; the grass captured under the first of them only).
+uint64_t Device::TerrainChunkKey(const void* vertices, uint32_t vertexCount, uint32_t stride, const uint16_t* indices,
+                                 uint32_t indexCount) const
 {
     uint64_t h = 1469598103934665603ull ^ (uint64_t(vertexCount) << 32) ^ indexCount;
-    const uint8_t* v = static_cast<const uint8_t*>(vertices);
-    uint32_t step = vertexCount > 32 ? vertexCount / 32 : 1;
-    for (uint32_t i = 0; i < vertexCount; i += step) {   // the position as three words, not twelve bytes
-        uint32_t w[3];
-        std::memcpy(w, v + size_t(i) * stride, sizeof(w));
-        h = (h ^ w[0]) * 1099511628211ull;
-        h = (h ^ w[1]) * 1099511628211ull;
-        h = (h ^ w[2]) * 1099511628211ull;
+    if (m_drawStaticBuffer) {
+        h = (h ^ m_drawStaticSerial) * 1099511628211ull;
+        h = (h ^ m_drawStaticOffset) * 1099511628211ull;
+    } else {
+        const uint8_t* v = static_cast<const uint8_t*>(vertices);
+        uint32_t step = vertexCount > 32 ? vertexCount / 32 : 1;
+        for (uint32_t i = 0; i < vertexCount; i += step) {   // the position as three words, not twelve bytes
+            uint32_t w[3];
+            std::memcpy(w, v + size_t(i) * stride, sizeof(w));
+            h = (h ^ w[0]) * 1099511628211ull;
+            h = (h ^ w[1]) * 1099511628211ull;
+            h = (h ^ w[2]) * 1099511628211ull;
+        }
+    }
+    if (indices) {
+        uint32_t step = indexCount > 16 ? indexCount / 16 : 1;
+        for (uint32_t i = 0; i < indexCount; i += step)
+            h = (h ^ (indices[i] | uint64_t(i) << 16)) * 1099511628211ull;
     }
     return h;
 }
@@ -379,7 +550,17 @@ bool Device::MotionVectorDraw(uint32_t fvf) const
     return ((m_motionMode == 1 && m_motionBlur > 0.0f) || TaaActive()) && m_prevViewProjValid && m_target == m_scene &&
            m_aoProjValid &&
            (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZRHW && m_rs[d3d::RS_ZENABLE] && m_rs[d3d::RS_ZWRITEENABLE] &&
-           std::memcmp(&m_proj, &m_aoProj, sizeof(m_proj)) == 0 && std::memcmp(&m_view, &m_aoView, sizeof(m_view)) == 0;
+           AoCamera();
+}
+
+bool Device::AoCamera() const
+{
+    if (m_aoCameraGen != m_cameraGen) {
+        m_aoCameraSame = std::memcmp(&m_proj, &m_aoProj, sizeof(m_proj)) == 0 &&
+                         std::memcmp(&m_view, &m_aoView, sizeof(m_view)) == 0;
+        m_aoCameraGen = m_cameraGen;
+    }
+    return m_aoCameraSame;
 }
 
 // A mesh's identity across frames, independent of where it is and of its (CPU-skinned) vertices: format, sizes,
@@ -760,6 +941,11 @@ bool Device::FoliageFar() const
 // through the matrix's magnitudes).
 void Device::DrawWorldBox(float c[3], float e[3]) const
 {
+    if (m_drawObject) {                          // (kept with the object: objects.cpp)
+        std::memcpy(c, m_drawObject->boxCentre, 12);
+        std::memcpy(e, m_drawObject->boxExtent, 12);
+        return;
+    }
     const auto& w = m_world.m;
     float mc[3], me[3];
     for (int i = 0; i < 3; ++i) {
@@ -1026,12 +1212,10 @@ bool Device::WaterWritesDepth(uint32_t fvf) const
 // Wind: a slowly turning direction; the vertex shaders add waves and gusts (sway.glsl).
 void Device::Wind(float out[4]) const
 {
-    double t = m_windTime;
-    float angle = 0.6f + 0.4f * float(std::sin(t * 0.013));
-    out[0] = std::cos(angle);
-    out[1] = std::sin(angle);
-    out[2] = float(t);
-    out[3] = m_sway;
+    out[0] = m_windDir[0];                       // (the shared wind: wind.cpp UpdateWind)
+    out[1] = m_windDir[1];
+    out[2] = float(m_windTime);
+    out[3] = m_sway * m_windStrength;
 }
 
 // The frame lights into a coarse x/z grid of light masks: each light's bit in every cell its sphere covers.
@@ -1110,10 +1294,13 @@ void Device::FrameLightMask(uint32_t fvf, uint32_t stride, const void* vertices,
             for (int j = 0; j < 3; ++j) { mn[j] = std::min(mn[j], p[j]); mx[j] = std::max(mx[j], p[j]); }
         }
     }
-    // The model box through the world matrix (centre and half extents).
+    // The model box through the world matrix (centre and half extents); kept with the object (objects.cpp).
     float wmn[3], wmx[3];
     const auto& m = m_world.m;
-    for (int j = 0; j < 3; ++j) {
+    if (m_drawObject) {
+        std::memcpy(wmn, m_drawObject->lightMin, sizeof(wmn));
+        std::memcpy(wmx, m_drawObject->lightMax, sizeof(wmx));
+    } else for (int j = 0; j < 3; ++j) {
         float c = m[3][j], e = 0.0f;
         for (int i = 0; i < 3; ++i) {
             c += 0.5f * (mn[i] + mx[i]) * m[i][j];
@@ -1294,6 +1481,7 @@ void Device::DrawMeshInfo(uint32_t fvf, uint32_t stride, const void* vertices, u
     }
     info.indexHash = indices && indexCount ? HashBytes(indices, size_t(indexCount) * 2, indexCount) : 0;
     info.firstFrame = info.lastFrame = m_frameNumber;
+    HashMeshId(info, fvf, stride, vertices, vertexCount, indices, indexCount);   // (mesh ids: a static piece's)
     MeshInfo* placed = &m_meshInfo.emplace(key, info).first->second;
     m_drawMesh = placed;
     if (m_drawSlot && m_drawStaticBuffer) { m_drawSlot->mesh = placed; m_drawSlot->meshKey = key; }
@@ -1356,7 +1544,7 @@ uint32_t Device::CarriedLight(uint32_t fvf, const void* vertices, uint32_t verte
     }
     for (uint32_t k = 0; k < m_frameLightIndices.size(); ++k) {
         const CapturedLight& c = m_lightsPrev[m_frameLightIndices[k]];
-        if (m_drawOwner && (c.owner || m_sceneLightsFrame + 1 >= m_frameNumber)) {   // known: exactly
+        if (m_drawOwner && c.owner) {            // known: exactly (else found by where it stands: FindCarriers)
             if (c.owner == m_drawOwner)
                 return k + 1;
             continue;
@@ -1370,9 +1558,43 @@ uint32_t Device::CarriedLight(uint32_t fvf, const void* vertices, uint32_t verte
 void Device::SetDrawVisual(uint32_t kind, const char* className, uint32_t owner, uint32_t visual)
 {
     m_drawVisualKind = kind;
+    if (VisualKind(kind) == VisualKind::Terrain) ++m_frameTerrainVisuals;
+    else if (VisualKind(kind) == VisualKind::Room) ++m_frameRoomVisuals;
     m_drawVisualName = className ? className : "";
+    // (A sky visual is named by its class chain, "VisualSingleCloud_t<...".)
+    m_drawIsCloudPuff = className && std::strncmp(className, "VisualSingleCloud_t", 19) == 0 &&
+                        (className[19] == 0 || className[19] == '<');
+    if (VisualKind(kind) == VisualKind::Sky)
+        m_skySeenFrame = m_frameNumber;
+    m_drawIsSkyMesh = VisualKind(kind) == VisualKind::Sky && className &&
+                      std::strncmp(className, "GenericMeshObject_t", 19) == 0;
     m_drawOwner = owner;
     m_drawVisual = visual;
+}
+
+// The fog for a draw after the scene's: the ground's this frame (or lately), else the render states'.
+void Device::SceneFog(float colour[4], float params[4]) const
+{
+    if (m_sceneFogFrame != ~0ull && m_sceneFogFrame + 30 >= m_frameNumber) {
+        std::memcpy(colour, m_sceneFogColour, sizeof(m_sceneFogColour));
+        std::memcpy(params, m_sceneFogParams, sizeof(m_sceneFogParams));
+        return;
+    }
+    RenderStateFog(colour, params);
+}
+
+// The render states' fog: colour (w: on); start, end, density, mode.
+void Device::RenderStateFog(float colour[4], float params[4]) const
+{
+    const uint32_t c = m_rs[d3d::RS_FOGCOLOR];
+    colour[0] = float((c >> 16) & 0xFF) / 255.0f;
+    colour[1] = float((c >> 8) & 0xFF) / 255.0f;
+    colour[2] = float(c & 0xFF) / 255.0f;
+    colour[3] = m_rs[d3d::RS_FOGENABLE] ? 1.0f : 0.0f;
+    StormHue(colour);                            // (a thunderstorm's: its air dark yellow-green)
+    uint32_t bits[3] = {m_rs[d3d::RS_FOGSTART], m_rs[d3d::RS_FOGEND], m_rs[d3d::RS_FOGDENSITY]};
+    std::memcpy(params, bits, sizeof(bits));
+    params[3] = float(m_rs[d3d::RS_FOGTABLEMODE] ? m_rs[d3d::RS_FOGTABLEMODE] : m_rs[d3d::RS_FOGVERTEXMODE]);
 }
 
 void Device::SetSceneLights(const SceneLight* lights, uint32_t count)
@@ -1661,10 +1883,12 @@ void Device::ApplyDynamicState(uint32_t primitive, uint32_t fvf, uint32_t stride
         }
     }
 
+    // The attachments' blend enables changed here are set together below (one call for the range, not one each: the
+    // statics' blend toggling set three of them ~900 times a frame over a city).
+    uint32_t blendDirty = 0;
     if (hdrTarget && !c.glowBlendSet) {
         // The glow attachment always adds: what each additive effect contributes (others write 0).
-        VkBool32 on = VK_TRUE;
-        vkCmdSetColorBlendEnableEXT(cmd, 1, 1, &on);
+        blendDirty |= 2u;
         VkColorBlendEquationEXT eq{VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD,
                                    VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD};
         vkCmdSetColorBlendEquationEXT(cmd, 1, 1, &eq);
@@ -1675,7 +1899,7 @@ void Device::ApplyDynamicState(uint32_t primitive, uint32_t fvf, uint32_t stride
     const bool uiLayer = m_uiLayerActive && m_target == m_uiLayer;
     VkBool32 blend = m_rs[d3d::RS_ALPHABLENDENABLE] != 0 || uiLayer;
     if (c.blendEnable != blend) {
-        vkCmdSetColorBlendEnableEXT(cmd, 0, 1, &blend);
+        blendDirty |= 1u;
         c.blendEnable = blend;
     }
     uint32_t src = m_rs[d3d::RS_SRCBLEND], dst = m_rs[d3d::RS_DESTBLEND];
@@ -1714,8 +1938,7 @@ void Device::ApplyDynamicState(uint32_t primitive, uint32_t fvf, uint32_t stride
         // Attachment 3, the motion vectors: written by solid (depth-writing) geometry, kept by everything else.
         uint32_t keep = m_rs[d3d::RS_ZENABLE] && m_rs[d3d::RS_ZWRITEENABLE] ? 0u : 1u;
         if (c.motionKeep != keep) {
-            VkBool32 e = keep;
-            vkCmdSetColorBlendEnableEXT(cmd, 3, 1, &e);
+            blendDirty |= 8u;
             VkColorBlendEquationEXT eq{VK_BLEND_FACTOR_ZERO, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD,
                                        VK_BLEND_FACTOR_ZERO, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD};
             vkCmdSetColorBlendEquationEXT(cmd, 3, 1, &eq);
@@ -1728,8 +1951,7 @@ void Device::ApplyDynamicState(uint32_t primitive, uint32_t fvf, uint32_t stride
         if (blend && IsMultiplyPass()) { fSrc = d3d::BLEND_ONE; fDst = d3d::BLEND_ZERO; }
         else if (blend && dst == d3d::BLEND_ONE) { fSrc = d3d::BLEND_ZERO; fDst = d3d::BLEND_ONE; }
         if (c.fractionEnable != fEnable) {
-            VkBool32 e = fEnable;
-            vkCmdSetColorBlendEnableEXT(cmd, 2, 1, &e);
+            blendDirty |= 4u;
             c.fractionEnable = fEnable;
         }
         if (c.fractionSrc == ~0u || (fEnable && (c.fractionSrc != fSrc || c.fractionDst != fDst))) {
@@ -1747,7 +1969,7 @@ void Device::ApplyDynamicState(uint32_t primitive, uint32_t fvf, uint32_t stride
                         dst == d3d::BLEND_SRCCOLOR || dst == d3d::BLEND_INVSRCCOLOR;
         if (blend && (IsMultiplyPass() || byTarget || dst == d3d::BLEND_ONE)) { aSrc = d3d::BLEND_ZERO; aDst = d3d::BLEND_ONE; }
         if (c.albedoEnable != blend) {
-            vkCmdSetColorBlendEnableEXT(cmd, 4, 1, &blend);
+            blendDirty |= 16u;
             c.albedoEnable = blend;
         }
         if (c.albedoSrc == ~0u || (blend && (c.albedoSrc != aSrc || c.albedoDst != aDst))) {
@@ -1784,6 +2006,26 @@ void Device::ApplyDynamicState(uint32_t primitive, uint32_t fvf, uint32_t stride
                                     VK_COLOR_COMPONENT_A_BIT;
         vkCmdSetColorWriteMaskEXT(cmd, 0, 1, &all);          // 8-bit targets: their one attachment
         c.writeMask[0] = all;
+    }
+    if (blendDirty) {
+        // From the first changed attachment to the last, when every one between is known; else each run of changed.
+        const uint32_t now[5] = {c.blendEnable, c.glowBlendSet ? 1u : ~0u, c.fractionEnable, c.motionKeep, c.albedoEnable};
+        const int lo = std::countr_zero(blendDirty), hi = 31 - std::countl_zero(blendDirty);
+        bool known = true;
+        for (int i = lo; i <= hi; ++i) known = known && now[i] != ~0u;
+        VkBool32 e[5];
+        for (int i = 0; i < 5; ++i) e[i] = now[i] == 1u ? VK_TRUE : VK_FALSE;
+        if (known) {
+            vkCmdSetColorBlendEnableEXT(cmd, uint32_t(lo), uint32_t(hi - lo + 1), e + lo);
+        } else {
+            for (int i = lo; i <= hi;) {
+                if (!(blendDirty >> i & 1u)) { ++i; continue; }
+                int j = i;
+                while (j + 1 <= hi && (blendDirty >> (j + 1) & 1u)) ++j;
+                vkCmdSetColorBlendEnableEXT(cmd, uint32_t(i), uint32_t(j - i + 1), e + i);
+                i = j + 1;
+            }
+        }
     }
 
     if (c.fvf != fvf) {
@@ -1959,6 +2201,92 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
 {
     if (!m_inFrame || !vertexCount)
         return;
+    m_drawObject = nullptr;                      // (found below for a static mesh)
+    struct ObjectScope {                         // ... and none once the draw is done (DrawWorldBox, FrameLightMask
+        Device* d;                               // read it: outside a draw they must work from the matrix)
+        ~ObjectScope() { d->m_drawObject = nullptr; }
+    } objectScope{this};
+    // The game's storm tint (a sandstorm's, an ash storm's): a screen-sized blended sprite a few units ahead, drawn over
+    // everything with depth writes (an in-game dump: RSprite, 8 x 8 texture, ZFUNC ALWAYS). A flat sheet over the
+    // frame: with the new weather it's left out (RVK_StormTint brings it back) - our storms draw the air themselves.
+    std::vector<uint8_t> steadySheet;            // (the sheet drawn: its vertices with its alpha eased - below)
+    if (m_rs[d3d::RS_ALPHABLENDENABLE] && m_rs[d3d::RS_ZFUNC] == d3d::CMP_ALWAYS && m_rs[d3d::RS_ZENABLE] &&
+        m_rs[d3d::RS_ZWRITEENABLE] && (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZRHW && m_textures[0] &&
+        m_textures[0]->m_width <= 16 && m_textures[0]->m_height <= 16 && vertices && vertexCount <= 64) {
+        const FvfLayout layout = DecodeFvf(fvf);  // (its colour and strength: our storm's air, wind.cpp SandHaze)
+        uint32_t colour = 0;
+        if (layout.offset[2] >= 0)
+            std::memcpy(&colour, static_cast<const uint8_t*>(vertices) + layout.offset[2], 4);
+        // A black one is no storm: the game's fade in from black after a load (the same sprite) - drawn as it is.
+        const uint32_t brightest = std::max({(colour >> 16) & 0xFFu, (colour >> 8) & 0xFFu, colour & 0xFFu});
+        if (brightest > 0x10) {
+            if (m_weatherParams.enable && !m_stormTint && m_target == m_scene) {
+                ++m_stormTintSkipped;
+                m_stormTintColour = colour;
+                m_stormTintSeen = m_frameClock;
+                return;
+            }
+            // Drawn (RVK_StormTint, or the game's own look): the game sets its alpha afresh each frame at random about
+            // its strength (a run of frame dumps: 26..63 frame to frame) - the whole screen flickers in its storms, a
+            // native AO effect (the user). Its alpha eased (~1 s) instead: the storm's strength drifts, no flicker.
+            const float target = float(colour >> 24);
+            const double now = m_frameClock;
+            const float dt = float(std::clamp(now - m_stormSheetTime, 0.0, 1.0));
+            m_stormSheetAlpha = now - m_stormSheetTime > 2.0 ? target
+                                                             : m_stormSheetAlpha + (target - m_stormSheetAlpha) * (1.0f - std::exp(-dt / 1.0f));
+            m_stormSheetTime = now;
+            const uint32_t stride = FvfStride(fvf);
+            if (stride && layout.offset[2] >= 0) {
+                steadySheet.assign(static_cast<const uint8_t*>(vertices), static_cast<const uint8_t*>(vertices) + size_t(stride) * vertexCount);
+                const uint32_t a = uint32_t(std::clamp(m_stormSheetAlpha + 0.5f, 0.0f, 255.0f));
+                for (uint32_t i = 0; i < vertexCount; ++i) {
+                    uint32_t c;
+                    std::memcpy(&c, steadySheet.data() + size_t(i) * stride + layout.offset[2], 4);
+                    c = (c & 0x00FFFFFFu) | (a << 24);
+                    std::memcpy(steadySheet.data() + size_t(i) * stride + layout.offset[2], &c, 4);
+                }
+                vertices = steadySheet.data();
+                m_drawStaticBuffer = VK_NULL_HANDLE;     // (from these vertices, not a retained copy)
+                m_drawStaticIndexBuffer = VK_NULL_HANDLE;
+            }
+        }
+    }
+    // The game's lightning glow (VisualCloudlight_t: a big additive mesh at the clouds' height, its vertex colours
+    // pulsing with each strike - the whole sky flickers; an in-game run of frame dumps): with the new weather left out
+    // (RVK_StormFlash brings it back). The bolts (VisualLightning_t) stay.
+    if (m_weatherParams.enable && std::strncmp(m_drawVisualName, "VisualCloudlight_t", 18) == 0) {
+        // (How bright it flares - additive: its colours x their alpha - and where: our flash's strike, rain.cpp.)
+        const FvfLayout layout = DecodeFvf(fvf);
+        if (vertices && layout.offset[0] >= 0 && layout.offset[2] >= 0) {
+            const uint8_t* base = static_cast<const uint8_t*>(vertices);
+            float bright = 0.0f, mid[3] = {0, 0, 0};
+            for (uint32_t i = 0; i < vertexCount; ++i) {
+                const uint8_t* vtx = base + size_t(i) * layout.stride;
+                uint32_t c;
+                std::memcpy(&c, vtx + layout.offset[2], 4);
+                const float a = float(c >> 24) / 255.0f;
+                const float l = (0.3f * float((c >> 16) & 0xFF) + 0.59f * float((c >> 8) & 0xFF) + 0.11f * float(c & 0xFF)) / 255.0f;
+                bright = std::max(bright, a * l);
+                float p[3];
+                std::memcpy(p, vtx + layout.offset[0], 12);
+                for (int k = 0; k < 3; ++k) mid[k] += p[k];
+            }
+            if (bright > m_glowSeen) {
+                m_glowSeen = bright;
+                const auto& w = m_world.m;
+                for (int k = 0; k < 3; ++k) mid[k] /= float(vertexCount);
+                for (int k = 0; k < 3; ++k)
+                    m_glowPos[k] = mid[0] * w[0][k] + mid[1] * w[1][k] + mid[2] * w[2][k] + w[3][k];
+            }
+        }
+        if (!m_stormFlash) {
+            ++m_stormFlashSkipped;
+            return;
+        }
+    }
+    // The game's bolts (VisualLightning_t): left out while we draw our own (RVK_StormBolt; rain.cpp MakeBolt).
+    if (m_weatherParams.enable && m_stormBolt > 0.0f && std::strncmp(m_drawVisualName, "VisualLightning_t", 17) == 0)
+        return;
     ++m_frameDraw;
     // GPU profiling: which class of scene draw this is (splits the "scene" block; see ProfileSceneClass).
     m_drawSceneClass = 0;
@@ -2009,6 +2337,7 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
                 m_aoProj = m_proj;
                 m_aoView = m_view;
                 m_aoProjValid = true;
+                m_aoCameraGen = 0;               // (AoCamera: asked again)
             }
         } else if (m_sceneSaw3D && IsInterfaceDraw(fvf)) {
             m_sceneEndDraw = m_dumpDraw;
@@ -2016,6 +2345,22 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
             EndScene();
         }
     }
+    // RVK_CloudsOn: the game's cloud puffs taken instead of drawn; drawn as volumes where the sky ends - before the
+    // frame's first 3D draw after them that isn't the sky's.
+    // Looking down or away the game draws no puffs: with the layer, the last ones seen (a few seconds), so its shadows
+    // on the ground stay (they had gone, and the weather with them).
+    if (m_cloudPuffs.empty() && !m_cloudsDrawn && !m_cloudPuffsLast.empty() && m_cloudParams.enable &&
+        m_cloudParams.layer && m_cloudPuffsLastFrame + 300 >= m_frameNumber && m_scenePhase && m_target == m_scene &&
+        !m_external && VisualKind(m_drawVisualKind) != VisualKind::Sky &&
+        (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZRHW)
+        m_cloudPuffs = m_cloudPuffsLast;
+    if (!m_cloudPuffs.empty() && !m_cloudsDrawn && m_scenePhase && m_target == m_scene && !m_external &&
+        VisualKind(m_drawVisualKind) != VisualKind::Sky && (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZRHW)
+        DrawClouds(m_frames[m_frameIndex].main);
+    // The suns' glow over the clouds (sun.cpp, RVK_SunBleed): at the sky's end, after the cloud layer.
+    if (m_sunDrawnFrame == m_frameNumber && m_sunOverFrame != m_frameNumber && m_scenePhase && m_target == m_scene &&
+        !m_external && VisualKind(m_drawVisualKind) != VisualKind::Sky && (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZRHW)
+        DrawSunOver();
     double since = (m_frameNumber & 15) == 0 ? ProfileCpu() : 0.0;   // per-draw CPU sections (profiling)
     m_drawIsLabel = !m_external && IsLabel(primitive, fvf, vertexCount);
     // The interface hidden (screenshots): its draws - pre-transformed, onto the frame or into the interface layer,
@@ -2024,27 +2369,86 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
         (m_drawIsLabel || (IsInterfaceDraw(fvf) && (m_target == m_main || m_target == m_uiLayer) &&
                            !(m_scenePhase && m_target == m_scene))))
         return;
-    if (m_dumpFile && !m_external)
+    // A name label in the scene: held back, drawn after the post passes (DrawHeldLabels).
+    if (m_drawIsLabel && m_scenePhase && m_target == m_scene && vertices && !m_drawingHeldLabels) {
+        const uint32_t stride = FvfStride(fvf);
+        const auto* v = static_cast<const uint8_t*>(vertices);
+        m_heldLabels.push_back({primitive, fvf, vertexCount, std::vector<uint8_t>(v, v + size_t(stride) * vertexCount), m_rs,
+                                m_tss, m_textures, m_world, m_view, m_proj, m_texMatrix, m_viewport});
+        return;
+    }
+    if (m_dumpFile && !m_external) {
         DumpDraw(primitive, fvf, m_drawGpu ? nullptr : vertices, vertexCount, indices, indexCount);
+        // (Its vertex colours, averaged - what a draw-by-draw comparison of frames can't see otherwise: a colour
+        // pulsing frame to frame.)
+        const FvfLayout layout = DecodeFvf(fvf);
+        const uint32_t stride = FvfStride(fvf);
+        if (vertices && !m_drawGpu && layout.offset[2] >= 0 && stride && vertexCount) {
+            double sum[4] = {};
+            for (uint32_t i = 0; i < vertexCount; ++i) {
+                uint32_t c;
+                std::memcpy(&c, static_cast<const uint8_t*>(vertices) + size_t(i) * stride + layout.offset[2], 4);
+                for (int k = 0; k < 4; ++k) sum[k] += double((c >> (24 - 8 * k)) & 0xFFu);
+            }
+            std::fprintf(m_dumpFile, "  vc %u: argb %.0f %.0f %.0f %.0f\n", m_dumpDraw - 1, sum[0] / vertexCount,
+                         sum[1] / vertexCount, sum[2] / vertexCount, sum[3] / vertexCount);
+        }
+    }
     if (!m_external && !m_drawGpu && IsBlobShadow(primitive, fvf, vertices, vertexCount, indexCount))
         return;                                  // replaced by sun shadows
+    if (m_drawIsCloudPuff && CaptureCloudPuff(fvf, vertices, vertexCount, indices, indexCount))
+        return;                                  // replaced by a volume (DrawClouds)
+    if (m_drawIsSkyMesh && !m_external && !m_drawGpu)
+        NoteSkyMesh(fvf, vertices, vertexCount);   // the moons (night.cpp)
+    // The sun's disc (sun.cpp): where the game draws its sun's ray sprites - in the sky, before its cloud sheets.
+    if (VisualKind(m_drawVisualKind) == VisualKind::Sky && std::strncmp(m_drawVisualName, "VisualSunRays_t", 15) == 0 &&
+        m_scenePhase && !m_external) {
+        DrawSun();                               // (once: the suns as the game drew them last frame)
+        NoteSunSprite(fvf, m_drawGpu ? nullptr : vertices, vertexCount, m_drawGpu ? nullptr : indices, indexCount);
+        if (!m_gameSun)
+            return;                              // (RVK_GameSun off: our disc alone)
+    }
     if (IsTerrain(fvf) && IsMultiplyPass())
         m_terrainLitPassCur = true;
+    // (The terrain's base pass: its light pass multiplies, its fog white - not the scene's fog colour.)
+    if (IsTerrain(fvf) && !IsMultiplyPass() && m_scenePhase && m_target == m_scene && !m_external && !m_drawGpu)
+        NoteTerrainHeights(fvf, vertices, vertexCount);   // (the valley mist's low ground: mist.cpp)
+    if (IsTerrain(fvf) && !IsMultiplyPass() && m_scenePhase && m_target == m_scene && !m_external && !m_drawGpu)
+        NoteTerrainSun(fvf, vertices, vertexCount);   // (the terrain's shade from a low sun: terrain_sun.cpp)
+    if (IsTerrain(fvf) && !IsMultiplyPass() && m_scenePhase && m_target == m_scene && !m_external) {
+        RenderStateFog(m_sceneFogColour, m_sceneFogParams);
+        m_sceneFogFrame = m_frameNumber;
+        if (m_sceneAmbientFrame != m_frameNumber) {   // (once a frame: eased - a zone's change shouldn't pop)
+            const uint32_t a = m_rs[d3d::RS_AMBIENT];
+            const float luma = (0.3f * float((a >> 16) & 0xFF) + 0.59f * float((a >> 8) & 0xFF) + 0.11f * float(a & 0xFF)) / 255.0f;
+            m_sceneAmbient = m_sceneAmbient < 0.0f ? luma : m_sceneAmbient + (luma - m_sceneAmbient) * 0.05f;
+            m_sceneAmbientFrame = m_frameNumber;
+        }
+    }
     Frame& f = m_frames[m_frameIndex];
     VkCommandBuffer cmd = f.main;
     // Ground grass (RVK_GrassOn): the blades are opaque and write depth, so they must go in before the game's first
     // blended draw of the frame. The game's grass and foliage blend without writing depth; drawn after them (as at the
     // end of the scene), our grass would pass the depth test against the ground behind them and cover them however far
     // away it is. Before their pass, their fragments depth-test against ours and blend over us only where they are
-    // nearer - the right order.
+    // nearer - the right order. (Not at the sky's blended draws - its stars, layers: the sky is drawn first, and what
+    // is drawn where it ends, RVK_CloudsOn's clouds, would cover the blades.)
     if (m_grassOn && !m_grassDrawnThisFrame && m_scenePhase && m_target == m_scene && !m_external && vertexCount &&
-        (fvf & d3d::FVF_POSITION_MASK) == d3d::FVF_XYZ && m_rs[d3d::RS_ALPHABLENDENABLE] && !IsTerrain(fvf))
+        (fvf & d3d::FVF_POSITION_MASK) == d3d::FVF_XYZ && m_rs[d3d::RS_ALPHABLENDENABLE] && !IsTerrain(fvf) &&
+        VisualKind(m_drawVisualKind) != VisualKind::Sky)
         DrawGrassTiles(cmd);
+    ProfileDrawSection("draw: setup (sky, terrain notes, grass tiles)", since);
     FvfLayout layout = DecodeFvf(fvf);
     // RVK_GrassOn: the terrain's ground heights feed the procedural grass (grass.cpp CaptureTerrain / RenderGrassField).
     if (m_grassOn && !m_external && vertices && IsTerrain(fvf))
         CaptureTerrain(primitive, layout, vertices, vertexCount, indices, indexCount);
     DrawMeshInfo(fvf, layout.stride, vertices, vertexCount, indices, indexCount);
+    ProfileDrawSection("draw: setup (mesh info)", since);
+    NoteMeshPiece();                             // (mesh ids: which mesh the object drawing is)
+    // The object's entry in the per-object cache (objects.cpp): a static mesh at its world matrix.
+    if (m_objectCache && m_drawMesh && m_drawMeshStatic && !m_external && !m_drawSkin && !m_drawGpu)
+        m_drawObject = FindObject();
+    ProfileDrawSection("draw: setup (mesh ids)", since);
     // (A GPU-skinned character has no vertices here: DrawSkinned hands the pick its CPU-skinned ones.)
     if (m_pickActive && !m_external && (vertices || m_pickSkinned) && (m_textures[0] || m_drawVisual) &&
         (m_target == m_scene || m_target == m_main) && (fvf & d3d::FVF_POSITION_MASK) == d3d::FVF_XYZ &&
@@ -2062,6 +2466,7 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
             CaptureCover(primitive, layout, vertices, vertexCount, indices, indexCount);
     }
     PushCandidateDraw(fvf);
+    ProfileDrawSection("draw: setup (pick, grass cover)", since);
     // A canopy (leaves.cpp): its leaves, baked the first time it is seen, drawn just before it (DrawLeaves). A solid
     // draw may be a tree's trunk (where its fallen leaves lie).
     CanopyParams(primitive, fvf, layout, vertices, vertexCount, indices, indexCount);
@@ -2078,6 +2483,28 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
             m_drawStaticBuffer = VK_NULL_HANDLE;     // split into new geometry: through the ring
         if (vertices != before || indices != indicesBefore)
             m_drawStaticIndexBuffer = VK_NULL_HANDLE;
+    }
+    ProfileDrawSection("draw: setup (canopy, plants)", since);
+    // Blended SRCALPHA / INVSRCALPHA with an alpha provably 1 (AlphaOneCheck) - most of the game's statics - blends to
+    // exactly its own colour, in every attachment: drawn unblended from here (its constants, batch and blend state
+    // an opaque draw's: blend toggling split the batches and set the blend state ~900 times a frame over a city). After
+    // the grass tiles' trigger above (the first blended draw: where they go stays the game's order); not the sky, the
+    // cloud sheets or a canopy with leaves (they change the alpha in the shader), nor a translucent material (not a
+    // shadow caster). The render state is put back when the draw ends.
+    struct BlendRestore {
+        Device* d;
+        bool on;
+        ~BlendRestore() { if (on) d->m_rs[d3d::RS_ALPHABLENDENABLE] = 1; }
+    } blendRestore{this, false};
+    if (m_opaqueBlend && m_rs[d3d::RS_ALPHABLENDENABLE] == 1 && m_rs[d3d::RS_SRCBLEND] == d3d::BLEND_SRCALPHA &&
+        m_rs[d3d::RS_DESTBLEND] == d3d::BLEND_INVSRCALPHA && m_rs[d3d::RS_ZENABLE] && m_rs[d3d::RS_ZWRITEENABLE] &&
+        !m_rs[d3d::RS_ALPHATESTENABLE] && !m_external && !m_drawIsLabel && !m_drawLeaves && !m_drawIsCloudPuff &&
+        VisualKind(m_drawVisualKind) != VisualKind::Sky && (m_target == m_scene || m_target == m_main) &&
+        (fvf & d3d::FVF_POSITION_MASK) == d3d::FVF_XYZ && !IsTerrain(fvf) &&
+        !(m_rs[d3d::RS_LIGHTING] && m_material.diffuse.a < 0.5f) && AlphaOneCheck(fvf) == kPreIn) {
+        m_rs[d3d::RS_ALPHABLENDENABLE] = 0;
+        blendRestore.on = true;
+        ++m_opaqueBlendDraws;
     }
     // Retained indices only with the retained vertices (one static draw path).
     const VkBuffer staticIb = m_drawStaticBuffer && indices ? m_drawStaticIndexBuffer : VK_NULL_HANDLE;
@@ -2116,7 +2543,7 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     bool reserveArenas = m_arenaGeneration != m_ringGeneration;
     VkDeviceSize arenaBytes = reserveArenas ? VkDeviceSize(m_constWanted) * sizeof(DrawConstants) +
                                                   VkDeviceSize(m_recordWanted) * sizeof(DrawRecord) +
-                                                  VkDeviceSize(m_recordWanted) * sizeof(VkDrawIndexedIndirectCommand) +
+                                                  2 * VkDeviceSize(m_recordWanted) * sizeof(VkDrawIndexedIndirectCommand) +
                                                   ((m_shadows || m_pointShadows) ? VkDeviceSize(kShadowRecordCapacity) *
                                                                    (sizeof(ShadowRecord) +
                                                                     sizeof(VkDrawIndexedIndirectCommand))
@@ -2128,7 +2555,8 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     PrepareDrawArenas();
     // The arrays are full (a frame with more unique states or draws than reserved): submit what is recorded, wait,
     // and start over. Rare; the targets double for the next frames.
-    if (m_constCount >= m_constCapacity || m_recordCount + 2 > m_recordCapacity) {   // (two-pass foliage: 2 records)
+    if (m_constCount >= m_constCapacity || m_recordCount + 3 > m_recordCapacity) {   // (two-pass foliage: 2 records;
+                                                                                   // a tree's own canopy: 1 more)
         m_constWanted = std::min(m_constWanted * 2u, kMaxDrawConstCapacity);
         m_recordWanted = std::min(m_recordWanted * 2u, kMaxDrawRecordCapacity);
         FlushDrawArenas();
@@ -2155,7 +2583,8 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
         dt.leaf[2] = m_drawLeaves->centre[2];
         dt.leaf[3] = m_drawLeaves->kind == Canopy::Palm ? -m_drawLeaves->radius : m_drawLeaves->radius;
         dt.leafSet[0] = m_drawLeaves->first;
-        dt.leafSet[1] = m_drawLeafCount | m_drawLeafFall << 16;
+        dt.leafSet[1] = m_drawLeafCount | m_drawLeafFall << 16 | (m_drawLeaves->art ? 0x80000000u : 0u);   // (bit 31:
+                                                 // our own canopy - its cards fade out, ffp.vert)
         dt.leafSet[2] = m_drawLeaves->count;
         std::memcpy(&dt.leafSet[3], &m_drawLeafGround, 4);
     }
@@ -2188,7 +2617,12 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     FrameLightMask(fvf, layout.stride, vertices, vertexCount, dt.lightMask);
     dt.lightMask[2] = swaying && m_grassPush > 0.0f ? PusherMask(1.4f * std::sqrt(m_grassPush) + 0.1f) : 0u;
     ProfileDrawSection("draw: light mask", since);
-    if (motion) {
+    if (motion && m_drawObject && m_drawObject->seenLastFrame) {
+        // An object drawn last frame at this very matrix (the per-object cache): it stood still - its last matrix is
+        // this one (as below's search finds), and it needn't be looked up or kept for the next frame's search. (A
+        // still object that starts moving is a new entry, which searches - and finds nothing of it for that first
+        // frame: no motion vector for one frame.)
+    } else if (motion) {
         // Motion vectors: the same object last frame - same mesh, nearest to where this one is (within 3 units). Not
         // found (new, or a different level of detail): its current matrix, i.e. it moved with the world.
         uint64_t key = MotionKey(primitive, fvf, vertexCount, indices, indexCount);
@@ -2276,9 +2710,9 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     m_drawBumpBase = nullptr;
     if (terrain && m_textures[0]) {
         if (!m_rs[d3d::RS_LIGHTING] && !m_rs[d3d::RS_ALPHABLENDENABLE]) {
-            m_terrainBases[TerrainChunkKey(vertices, vertexCount, layout.stride, indexCount)] = m_textures[0];
+            m_terrainBases[TerrainChunkKey(vertices, vertexCount, layout.stride, indices, indexCount)] = m_textures[0];
         } else if (m_rs[d3d::RS_LIGHTING] && IsMultiplyPass()) {
-            auto it = m_terrainBases.find(TerrainChunkKey(vertices, vertexCount, layout.stride, indexCount));
+            auto it = m_terrainBases.find(TerrainChunkKey(vertices, vertexCount, layout.stride, indices, indexCount));
             if (it != m_terrainBases.end() &&
                 (m_bump > 0.0f || (m_normalMaps && m_pixelLighting && it->second->m_normalMap) ||
                  (m_pbr.enabled && m_pixelLighting && it->second->m_ormMap)))
@@ -2316,12 +2750,25 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     // The foliage level of detail depends on the draw's distance, not the render state: part of the block's key, or
     // a run of plants with the same state would all get the first one's (flickering as the camera moves).
     uint32_t foliageLod = FoliageFar() ? (m_drawSway[3] > 0.5f ? 2u : 1u) : 0u;
+    const bool skyScenery = m_drawMesh && m_drawMesh->skyScenery;   // (mesh ids: the ships over the cities)
     bool rewrite = m_constantsDirty || m_constantsGeneration != m_ringGeneration || m_constantsFvf != fvf ||
                    m_constantsTexMask != texMask || m_constantsTerrain != terrain || m_constantsLabel != m_drawIsLabel ||
                    m_constantsCarrier != carrier || m_constantsBumpBase != m_drawBumpBase ||
                    m_constantsFoliageLod != foliageLod || m_constantsNormalMap != normalMap ||
                    m_constantsCharacter != m_drawIsCharacter || m_constantsOpaque != cutoutTexture ||
-                   m_constantsHoles != textureHoles;
+                   m_constantsHoles != textureHoles || m_constantsSkyScenery != skyScenery ||
+                   m_constantsBlend != m_rs[d3d::RS_ALPHABLENDENABLE];
+    if (m_dumpFile && rewrite) {                 // (frame dump: what made it so)
+        const bool why[kRewhy] = {m_constantsDirty, m_constantsGeneration != m_ringGeneration, m_constantsFvf != fvf,
+                                  m_constantsTexMask != texMask, m_constantsTerrain != terrain,
+                                  m_constantsLabel != m_drawIsLabel, m_constantsCarrier != carrier,
+                                  m_constantsBumpBase != m_drawBumpBase, m_constantsFoliageLod != foliageLod,
+                                  m_constantsNormalMap != normalMap, m_constantsCharacter != m_drawIsCharacter,
+                                  m_constantsOpaque != cutoutTexture, m_constantsHoles != textureHoles,
+                                  m_constantsSkyScenery != skyScenery,
+                                  m_constantsBlend != m_rs[d3d::RS_ALPHABLENDENABLE]};
+        for (int i = 0; i < kRewhy; ++i) m_rewriteWhy[i] += why[i];
+    }
     uint32_t constIndex = m_constIndex;
     bool sameArena = m_constantsGeneration == m_ringGeneration && m_constIndex < m_constCount;   // m_constIndex valid
     if (rewrite) {
@@ -2334,6 +2781,8 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     m_constantsCarrier = carrier;
     m_constantsBumpBase = m_drawBumpBase;
     m_constantsFoliageLod = foliageLod;
+    m_constantsSkyScenery = skyScenery;
+    m_constantsBlend = m_rs[d3d::RS_ALPHABLENDENABLE];
     m_constantsCharacter = m_drawIsCharacter;
     m_constantsOpaque = cutoutTexture;
     m_constantsHoles = textureHoles;
@@ -2353,10 +2802,13 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     Copy4(c.matEmissive, m_material.emissive);
     ArgbToFloat(m_rs[d3d::RS_AMBIENT], c.ambient);
     ArgbToFloat(m_rs[d3d::RS_FOGCOLOR], c.fogColor);
+    StormHue(c.fogColor);                        // (a thunderstorm's: its air dark yellow-green)
     c.fogParams[0] = AsFloat(m_rs[d3d::RS_FOGSTART]);
     c.fogParams[1] = AsFloat(m_rs[d3d::RS_FOGEND]);
     c.fogParams[2] = AsFloat(m_rs[d3d::RS_FOGDENSITY]);
     c.fogParams[3] = 0.0f;
+    if (skyScenery)                              // (the far sky's haze: exponential below)
+        c.fogParams[2] = 1.0f / kSkySceneryHaze;
     ArgbToFloat(m_rs[d3d::RS_TEXTUREFACTOR], c.tfactor);
     c.misc[0] = m_material.power;
     c.misc[1] = float(m_rs[d3d::RS_ALPHAREF] & 0xFF);
@@ -2386,6 +2838,15 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
             if (m_rs[d3d::RS_SPECULARENABLE] && m_material.power > 0.0f) reflectivity = m_ssrGloss;
             wet = m_ssrWet;
         }
+    }
+    // (+ 2: this draw may get wet in the rain - the world's own surfaces drawn into the scene; not the interface, water,
+    // the sky, characters, additive effects. ffp_main WetGround.)
+    {
+        const VisualKind kind = VisualKind(m_drawVisualKind);
+        const bool additive = m_rs[d3d::RS_ALPHABLENDENABLE] && m_rs[d3d::RS_DESTBLEND] == d3d::BLEND_ONE;
+        if (m_target == m_scene && !IsWater(fvf) && (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZRHW && !skyScenery &&
+            kind != VisualKind::Sky && kind != VisualKind::Character && kind != VisualKind::CharacterPart && !additive && !IsMultiplyPass())
+            wet += 2.0f;
     }
     std::memcpy(&c.vtx[2], &reflectivity, 4);
     std::memcpy(&c.vtx[3], &wet, 4);
@@ -2463,6 +2924,13 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     c.flags[0] = flags;
     c.flags[1] = m_rs[d3d::RS_FOGVERTEXMODE];
     c.flags[2] = m_rs[d3d::RS_FOGTABLEMODE];
+    // The sky's scenery (mesh ids: the ships over the cities, kilometres out): hazed as the far sky - exponentially, in
+    // the fog's colour, never wholly (the ground's linear fog made them flat fog-coloured shapes; none at all left
+    // them hard and dark against a hazy sky): ~37% of their colour left at 2 km, 14% at 4 km, a trace at 9 km.
+    if (skyScenery && m_rs[d3d::RS_FOGENABLE]) {
+        c.flags[1] = 1;                          // D3DFOG_EXP
+        c.flags[2] = 0;
+    }
     // (Bit 8: in the interface layer, a draw replacing what is there - blended ONE, ZERO - covers it fully, whatever
     // its alpha: on the frame it would. The PF map's light-map tiles have alpha 0; as coverage they left the map's
     // black parts see-through.)
@@ -2499,6 +2967,15 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
         c.stageB[s][3] = t[d3d::TSS_TEXTURETRANSFORMFLAGS];
     }
     uint32_t lightCount = 0, localLights = 0;
+    // The block's lights (FillGpuLight each): the last list made again while the lights (their generation), the frame
+    // (the moon, the lights' scales) and what decides the list - lit, the override, the ground, the sky - are the same.
+    const uint32_t lightKind = ((flags & F_LIGHTING) ? 1u : 0u) | (override ? 2u : 0u) | (terrain ? 4u : 0u) |
+                               (VisualKind(m_drawVisualKind) == VisualKind::Sky ? 8u : 0u);
+    if (m_lightListGen == m_lightsGen && m_lightListFrame == m_frameNumber && m_lightListKind == lightKind) {
+        lightCount = m_lightListCount;
+        localLights = m_lightListLocal;
+        std::memcpy(c.lights, m_lightList.data(), size_t(lightCount) * sizeof(GpuLight));
+    } else {
     if (flags & F_LIGHTING)
         for (const LightSlot& slot : m_lights) {
             if (!slot.enabled || lightCount == kMaxLights)
@@ -2510,9 +2987,26 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
             // saturates the ground's lighting pass and local lights (the player's) vanish on it.
             if (override && terrain && slot.light.type == d3d::LIGHT_DIRECTIONAL)
                 continue;
-            FillGpuLight(slot.light, slot.cosHalfTheta, slot.cosHalfPhi, c.lights[lightCount++], LightScale(slot.light));
+            // By night the game's light from under the ground fades out as the moon's comes in (night.cpp).
+            d3d::Light scaled;
+            const bool night = override && slot.light.type == d3d::LIGHT_DIRECTIONAL &&
+                               VisualKind(m_drawVisualKind) != VisualKind::Sky && MoonScaledGameLight(slot.light, &scaled);
+            FillGpuLight(night ? scaled : slot.light, slot.cosHalfTheta, slot.cosHalfPhi, c.lights[lightCount++],
+                         LightScale(slot.light));
             if (slot.light.type != d3d::LIGHT_DIRECTIONAL) ++localLights;
         }
+    // ... and the moon's light (the ground too, which the game keeps directional light off).
+    if ((flags & F_LIGHTING) && override && MoonOn() && VisualKind(m_drawVisualKind) != VisualKind::Sky &&
+        lightCount < kMaxLights)
+        FillGpuLight(MoonAsLight(), 0.0f, 0.0f, c.lights[lightCount++], 1.0f);
+    m_lightListGen = m_lightsGen;
+    m_lightListFrame = m_frameNumber;
+    m_lightListKind = lightKind;
+    m_lightListCount = lightCount;
+    m_lightListLocal = localLights;
+    m_lightList.assign(reinterpret_cast<const uint8_t*>(c.lights),
+                       reinterpret_cast<const uint8_t*>(c.lights) + size_t(lightCount) * sizeof(GpuLight));
+    }
     c.lightInfo[0] = lightCount;
     c.lightInfo[1] = localLights;
     c.lightInfo[2] = override ? carrier : 0;   // frame light (index + 1) this draw carries: it doesn't light it
@@ -2687,9 +3181,25 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
              uint64_t(m_rs[d3d::RS_ZWRITEENABLE] != 0) << 9 | uint64_t(m_rs[d3d::RS_ALPHABLENDENABLE] != 0) << 10 |
              uint64_t(m_drawMayDiscard) << 11 | uint64_t(m_drawIsLabel) << 12 | uint64_t(m_drawOverbright2x) << 13 |
              uint64_t(m_drawTerrainBase) << 14 | uint64_t(m_drawTerrainLight) << 15 |
-             uint64_t(m_rs[d3d::RS_ZFUNC]) << 16 | uint64_t(m_rs[d3d::RS_SRCBLEND]) << 32 |
-             uint64_t(m_rs[d3d::RS_DESTBLEND]) << 48);
+             uint64_t(m_rs[d3d::RS_ZFUNC]) << 16 |   // (the blend factors only while blending: they aren't set else)
+             (m_rs[d3d::RS_ALPHABLENDENABLE] ? uint64_t(m_rs[d3d::RS_SRCBLEND]) << 32 |
+                                                   uint64_t(m_rs[d3d::RS_DESTBLEND]) << 48 : 0));
         groupKey = k ? k : 1;
+        if (m_dumpFile) {                        // (frame dump: which parts ended the batch)
+            const uint64_t parts[kSplitParts] = {
+                constIndex, pipelineClass, primitive, fvf, uint64_t(vb), uint64_t(ib), uint64_t(prevPositionsBuffer) ^ prevPositionsOffset ^ prevPositionsBytes,
+                uint64_t(smoothBuffer) ^ smoothOffset ^ smoothBytes, frameLightsOffset, m_drawPrepassed ? 1u : 0u,
+                m_drawBackdrop ? 1u : 0u, m_rs[d3d::RS_CULLMODE], uint64_t(m_rs[d3d::RS_ZWRITEENABLE] != 0) | uint64_t(m_rs[d3d::RS_ZFUNC]) << 8,
+                m_rs[d3d::RS_ALPHABLENDENABLE], uint64_t(m_drawMayDiscard) | uint64_t(m_drawIsLabel) << 1 | uint64_t(m_drawOverbright2x) << 2,
+                uint64_t(m_drawTerrainBase) | uint64_t(m_drawTerrainLight) << 1};
+            if (m_group.active && groupKey != m_group.key)
+                for (int i = 0; i < kSplitParts; ++i) m_splitWhy[i] += parts[i] != m_lastGroupParts[i];
+            else if (!m_group.active)
+                ++m_splitWhy[kSplitParts];       // (the batch was ended elsewhere: a flush, edges, a pass)
+            std::memcpy(m_lastGroupParts, parts, sizeof(parts));
+        }
+    } else if (m_dumpFile) {
+        ++m_splitWhy[kSplitParts + 1];           // (not batchable)
     }
     if (m_group.active && (groupKey == 0 || groupKey != m_group.key))
         FlushGroup();                                // the pending group's state is about to change
@@ -2725,6 +3235,10 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     if (m_textures[0] && texStage0 == m_textures[0]->m_albedoMap) dt.mat[2] |= kMatAlbedo;   // (debug view 7)
     if (m_pickHighlight && m_textures[0] == m_pickHighlight)
         dt.mat[2] |= kMatPicked;                 // (texture picking: flashes)
+    if (VisualKind(m_drawVisualKind) == VisualKind::Sky || (m_drawMesh && m_drawMesh->skyScenery))
+        dt.mat[2] |= kMatSky;                    // (the sky and its scenery: kept inside the far plane, ffp.vert)
+    if (m_drawIsCloudPuff && CloudSheetsOn())
+        dt.mat[2] |= kMatCloudSheet;             // (the game's cloud sheets, lit as the cloud layer: ffp_main.glsl)
     if (m_drawEmissive) {                        // (sampled with the ORM map's sampler, set either way)
         dt.mat[3] = BindlessImage(m_drawEmissive);
         dt.mat[2] |= kMatEmissive;
@@ -2734,6 +3248,17 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     // GPU-driven M2: this draw's record, and the frame's two arrays (bindings 0 = constants, 12 = records) pushed
     // once per frame's command buffer. The record index travels in firstInstance (gl_InstanceIndex).
     uint32_t recordIndex = AppendRecord(constIndex, dt);
+    // A tree's own canopy (leaves.cpp): its sprigs drawn with the type's atlas - their own record, the canopy's but for
+    // the textures (its material maps are laid on the game's cards, not on the atlas).
+    uint32_t leafRecord = recordIndex;
+    if (m_drawLeafCount && m_drawLeaves->art) {
+        DrawTransform ld = dt;
+        ld.texIdx[0] = BindlessImage(m_drawLeaves->art);
+        Texture* artNormal = m_textures[0] ? m_textures[0]->m_leafArtNormal : nullptr;   // (the canopy texture's)
+        ld.texIdx[3] = BindlessImage(artNormal ? artNormal : m_flatNormal);
+        ld.mat[2] &= ~(kMatPbr | kMatAlbedo | kMatEmissive);
+        leafRecord = AppendRecord(constIndex, ld);
+    }
     if (m_drawSplit) {                           // the edges, queued: the same draw, its own record (motion.w = 2)
         DrawTransform edge = dt;
         edge.motion[3] = 2.0f;
@@ -2815,13 +3340,14 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
 
     // A canopy's leaves (leaves.cpp), before the canopy itself: its state is set up now; DrawLeaves puts it back.
     if (m_drawLeafCount)
-        DrawLeaves(cmd, recordIndex, primitive, fvf, layout.stride, frameLightsOffset, prevPositionsBuffer,
+        DrawLeaves(cmd, leafRecord, primitive, fvf, layout.stride, frameLightsOffset, prevPositionsBuffer,
                    prevPositionsOffset, prevPositionsBytes, smoothBuffer, smoothOffset, smoothBytes);
 
     // Would an instanced batch cover this draw together with the one before it? Only static snapshots share their
     // vertex data across draws; ring copies are unique per draw, so those never merge.
+    // (A statistic of the frame dump's alone: worked out only while one is written.)
     uint64_t batchKey = 0;
-    if (m_drawStaticBuffer && !m_external && !m_drawGpu) {
+    if (m_dumpFile && m_drawStaticBuffer && !m_external && !m_drawGpu) {
         uint64_t k = 0x9E3779B97F4A7C15ull;
         auto mix = [&k](uint64_t x) { k = (k ^ x) * 0xFF51AFD7ED558CCDull; k ^= k >> 32; };
         mix(uint64_t(m_drawStaticBuffer));

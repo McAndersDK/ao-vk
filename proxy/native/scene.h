@@ -42,6 +42,9 @@ void SetLightSink(LightSinkFn sink);
 // The visual being rendered right now (null outside RViewPort_t::Render), and what it is.
 const void* CurrentVisual();
 VisualInfo Describe(const void* visual);
+// The visual's class and those of the frames above it ("GenericMeshObject_t<VisualGloomySky_t<..."; up to 4): for the
+// sky, whose meshes are generic and whose objects (clouds, stars, gloom) are known by what holds them. A lasting string.
+const char* ClassChain(const void* visual);
 // The render list being drawn (0 the sky and environment: docs/frame.md), or -1 outside RViewPort_t::Render.
 int32_t CurrentList();
 

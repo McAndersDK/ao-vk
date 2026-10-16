@@ -5,6 +5,7 @@
 #include <cstring>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace rnative::scene {
@@ -226,6 +227,29 @@ int32_t CurrentList()
     return g_viewport && g_renderInstance && *g_renderInstance ? At<int32_t>(*g_renderInstance, 0x288) : -1;
 }
 
+const char* ClassChain(const void* visual)
+{
+    static std::unordered_map<const void*, std::pair<const void*, const char*>> cache;   // visual -> (vtable, chain)
+    static std::unordered_set<std::string> chains;                                      // never cleared: handed out
+    if (!visual)
+        return "";
+    const void* vtable = SafeRead(visual, 0);
+    auto found = cache.find(visual);
+    if (found != cache.end() && found->second.first == vtable)
+        return found->second.second;
+    std::string chain = ClassName(visual);
+    const void* frame = SafeRead(visual, kParent);
+    for (int depth = 0; frame && depth < 4; ++depth, frame = SafeRead(frame, kParent)) {
+        chain += '<';
+        chain += ClassName(frame);
+    }
+    const char* out = chains.insert(chain).first->c_str();
+    if (cache.size() > 20000)
+        cache.clear();
+    cache[visual] = {vtable, out};
+    return out;
+}
+
 VisualInfo Describe(const void* visual)
 {
     ForgetPages();
@@ -271,11 +295,11 @@ void AfterProcess()
 
 void Install(HMODULE orig)
 {
-    if (GetMode("Visuals", Mode::Off) != Mode::On)
+    if (GetMode("Visuals", Mode::On) != Mode::On)
         return;
     g_renderInstance = reinterpret_cast<void* const*>(GetProcAddress(orig, "?m_pcInstance@render_t@@0PAV1@A"));
     g_lightsBegin = reinterpret_cast<const void* const*>(reinterpret_cast<uint8_t*>(orig) + kLightListRva);
-    if (GetMode("Scene", Mode::Off) == Mode::On) {  // viewport.cpp's native Render / Process call in
+    if (GetMode("Scene", Mode::On) == Mode::On) {  // viewport.cpp's native Render / Process call in
         g_active = true;
         Log("visuals: on, lights from the scene (through the native viewport)");
         return;

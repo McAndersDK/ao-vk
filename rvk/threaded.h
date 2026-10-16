@@ -46,7 +46,7 @@ public:
     bool InFrame() const { return m_inFrame; }
     bool ReadPixels(Texture* target, void* out);
     void RequestScreenshot(const std::string& bmpPath);
-    void RequestFrameDump(const std::string& path);
+    void RequestFrameDump(const std::string& path, int frames = 1);
 
     void Clear(uint32_t flags, uint32_t argb, float z) { Clear(0, nullptr, flags, argb, z); }
     void Clear(uint32_t count, const Device::Rect* rects, uint32_t flags, uint32_t argb, float z);
@@ -96,6 +96,10 @@ public:
     void SetBloomOverNearer(float keep);
     void SetGrading(float saturation, float contrast, float warmth, float lutAmount, float nightTint, float vignette);
     void SetColorLut(uint32_t slot, uint32_t size, const uint8_t* rgba);   // copied
+    void LoadMeshIds(const char* path);                                       // (the path copied)
+    void LoadStatels(const char* path, uint32_t playfield);                   // (the path copied)
+    void SetStatelMode(uint32_t mode);
+    void SetSkyPlayfield(uint32_t playfield);
     void SetSway(float strength);
     void SetGrassPush(float strength);
     void SetPlantDetail(float detail);
@@ -122,21 +126,58 @@ public:
     void SetPointLightIntensity(float lights, float characters);
     void SetTessellation(float shape, float distance, uint32_t level);
     void SetTaa(bool enable, float sharpen);
+    void SetFxaa(bool enable);
+    void SetWindStorm(float scale);
+    void SetStormTint(bool on);
+    void SetStormFlash(bool on);
+    void SetLightning(float s);
+    void SetRainFog(float s);
+    void SetStormGreen(float s);
+    void SetRainVeils(float s);
+    void SetStormDark(float s);
+    void SetRainWet(float s);
+    void SetStormBolt(float s);
+    void SetStormDebris(float s);
+    void SetSandHaze(float amount);
+    void SetSandBlow(float amount);
+    void SetSandProcedural(bool on);
+    void SetSandContrast(float k);
+    void SetSandClear(float d);
+    void SetSandGusts(float s);
+    void SetSandFog(float s);
+    void SetSandSun(float s);
+    void SetSandTint(float s);
+    void SetSandForce(float amount, bool ash);
     void ProfileWindow(bool start, const std::string& label);
     void ProfileManualEnd();
     void SetSunSoftness(float s);
     void SetLeafLight(float s);
     void SetNightGlow(float s);
+    void SetMoonLight(float s);
+    void SetNightDark(float s);
+    void SetAtmos(bool on);
+    void SetMist(float s);
+    void SetSun(float s);
+    void SetGameSun(bool on);
+    void SetSunSize(float s);
+    void SetSunBleed(float s);
+    void SetShadowMemory(uint32_t mode);
+    void SetHillShade(bool on);
+    void SetShadowView(bool on);
     void SetContactShadows(float s);
     void SetAo(float strength, float radius);
     void SetGi(float strength, float radius);
-    void SetVolume(float strength, float haze, float shafts);
+    void SetVolume(float strength, float haze, float shafts, float rays = 1.0f, float land = 0.4f);
     void SetSsr(float strength, float water, float gloss, float wet);
     void SetBump(float strength);
     void SetNormalMaps(bool enable, float strength);
     void SetNormalMap(Texture* texture, Texture* normal);   // the device owns `normal` from here on
     void SetMaterialMaps(Texture* texture, Texture* orm, Texture* albedo);   // ... and these
+    void SetTextureRdbId(Texture* texture, uint32_t id);
     void SetEmissiveMap(Texture* texture, Texture* emissive);               // ... and this
+    void SetLeafArt(Texture* texture, Texture* atlas, Texture* normal);     // ... and these
+    void SetCrownShade(float amount);
+    void SetFreeCam(const Device::FreeCamInput& in);
     void RequestPick(float x, float y);
     Device::PickResult LastPick() const { return m_device.LastPick(); }   // (thread-safe)
     void SetPickHighlight(Texture* t);
@@ -163,6 +204,11 @@ public:
     void EndParticleEmitter();
     // The water (Device::DrawWater): vertices and indices copied.
     void SetWaterParams(const Device::WaterParams& params);
+    void SetWeatherParams(const Device::WeatherParams& params);
+    void SetWeather(const Device::WeatherState& state);
+    void SetSmokeParams(const Device::SmokeParams& params);
+    void SetCloudParams(const Device::CloudParams& params);
+    void SmokeSourceFrame(uint64_t key, const Device::SmokeSource& source);
     void DrawWater(const Device::WaterVertex* vertices, uint32_t vertexCount, const uint16_t* indices, uint32_t indexCount);
     bool WaterReady() const { return m_device.WaterReady(); }
     void SetTexture(uint32_t stage, Texture* texture);

@@ -1,0 +1,89 @@
+// Light on clouds, shared by the cloud layer (cloud_layer.frag) and the game's cloud sheets drawn with it
+// (ffp_main.glsl, MAT_CLOUDSHEET). The includer declares the frame lights (FL).
+
+// The game's sunlight on its own clouds (rvk clouds.cpp NoteCloudGameLight: its hue - amber at dawn, white by day), when
+// known: our clouds lit in it keep to the game's palette (user, 2026-10-13: pink dawn clouds over a world the game
+// lit gold stood out).
+bool GameCloudHue(out vec3 hue)
+{
+    hue = unpackUnorm4x8(floatBitsToUint(FL.clouds2.z)).rgb;
+    return FL.clouds2.w > 0.5 && max(hue.r, max(hue.g, hue.b)) > 0.0;
+}
+
+// The sunlight reaching the clouds: in the game's hue for its clouds when known (it reddens them itself at dawn and
+// dusk), else reddened low in the sky (orange, then pink near the horizon); fading a little after it sets. At dawn and
+// dusk the game's level light stays the frame's sun (rvk shadow.cpp: no shadows under ~3 degrees).
+vec3 SunLight(vec3 sunL)
+{
+    float low = 1.0 - smoothstep(0.0, 0.35, sunL.y);
+    low *= low;                                  // (golden first; pink only in its last few degrees)
+    vec3 tint = mix(vec3(1.0), mix(vec3(1.0, 0.8, 0.58), vec3(1.0, 0.6, 0.5), smoothstep(0.75, 1.0, low)), low);
+    vec3 hue;
+    if (GameCloudHue(hue)) {
+        // (FL.sunColor.w: the sun's brightness before a low sun is dimmed for the ground by the clouds hiding it)
+        float strength = FL.sunColor.w / max(dot(hue, vec3(0.3, 0.59, 0.11)), 0.05);
+        return hue * strength * smoothstep(-0.12, 0.1, sunL.y);
+    }
+    float luma = dot(FL.sunColor.rgb, vec3(0.3, 0.59, 0.11));
+    vec3 sun = luma > 1e-4 ? FL.sunColor.rgb * (FL.sunColor.w / luma) : vec3(FL.sunColor.w);
+    return sun * tint * smoothstep(-0.12, 0.1, sunL.y);
+}
+
+// The glow under the clouds round sunset: their undersides lit by the light low in the sky (most with the sun at the
+// horizon and a little after) - in the game's hue for its clouds, faint (a strong pink one stood out); else pink.
+vec3 Afterglow(vec3 sunL)
+{
+    float g = smoothstep(-0.14, -0.02, sunL.y) * (1.0 - smoothstep(0.02, 0.12, sunL.y));
+    vec3 hue;
+    return GameCloudHue(hue) ? hue * g * 0.35 : vec3(1.0, 0.5, 0.55) * g;
+}
+
+// How much it is night for the clouds' light: 0 with the sun up .. 1 with it ~11 degrees down - by the sun's true
+// height (FL.sunTrue), not its light: that goes out with the sun still 3 degrees up (where its shadows end), and the
+// night's brightening then came on at once under a dusk sky still near daylight - clouds blown out white (user).
+float Night()
+{
+    return 1.0 - smoothstep(-0.2, 0.03, normalize(FL.sunTrue.xyz + vec3(0.0, 1e-6, 0.0)).y);
+}
+
+// How much the sky's light is raised at night (1 by day): lit only by the sky, cloud dimmed inside to 0.4 came out a
+// third as light as the game's own night clouds (user: brightness 3 to look right) - the sky's light then carries the
+// game's colour on its own.
+float NightSky()
+{
+    return mix(1.0, 3.4, Night());               // (user: 1.7 x the first 2.0 in game)
+}
+
+// Low in the sky, the horizon's band (up to ~12 degrees), as much as the game fogs its clouds (amount): 0 .. amount.
+float HorizonBand(vec3 dir, float amount)
+{
+    float low = 1.0 - smoothstep(0.0, 0.22, dir.y);
+    return amount * low * low * (3.0 - 2.0 * low);
+}
+
+// The air's colour before clouds: the game's fog colour (haze) at the horizon (low: HorizonBand), where the clouds
+// meet its sky; above, paler and whiter - the game's teal fog made the whole sky's clouds teal (user: whiter).
+vec3 AirColour(vec3 haze, float low)
+{
+    float grey = dot(haze, vec3(0.3, 0.59, 0.11));
+    return mix(mix(vec3(grey), haze, 0.35) * 1.25, haze, low);
+}
+
+// The moon's light on the clouds (rvk night.cpp: FL.moon, at night FL.sunDir its direction): cool and dim, a light
+// the clouds take as they take the sun's - brightest towards it, silver edges looking at it.
+vec3 MoonLight()
+{
+    return FL.moon.rgb * 1.2;
+}
+
+vec3 MoonDir()
+{
+    return -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
+}
+
+// How much the moon lights (0 none .. 1 a high moon at night): the sky's light on the clouds eased down by it, so
+// those away from the moon are darker than those it lights.
+float MoonShare()
+{
+    return clamp(dot(FL.moon.rgb, vec3(0.3, 0.59, 0.11)) / 0.25, 0.0, 1.0);
+}

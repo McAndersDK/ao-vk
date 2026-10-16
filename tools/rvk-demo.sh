@@ -7,7 +7,7 @@ out=${1:-build/rvk-demo}
 [ $# -gt 0 ] && shift
 mkdir -p "$out"
 sdk=${VULKAN_SDK_DIR:-$HOME/repos/vulkan-sdk/1.4.321.1/x86_64}
-exe=$PWD/build/linux-release/rvk_demo.exe
+exe=${RVK_DEMO_EXE:-$PWD/build/linux-release/rvk_demo.exe}
 cd "$out" || exit 1
 WINEPREFIX=${WINEPREFIX:-$HOME/.wine-prk} WINEDEBUG=-all \
 VK_LAYER_PATH="$sdk/share/vulkan/explicit_layer.d" LD_LIBRARY_PATH="$sdk/lib" \

@@ -24,7 +24,7 @@ namespace rvk {
 using namespace vk;
 using namespace detail;
 
-bool Device::CreatePrepassPipeline(VkShaderModule vert)
+bool Device::CreatePrepassPipeline(VkShaderModule vert, VkShaderModule leafVert)
 {
     VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
                                           VK_SHADER_STAGE_VERTEX_BIT, vert, "main", nullptr};
@@ -60,7 +60,7 @@ bool Device::CreatePrepassPipeline(VkShaderModule vert)
     ci.pColorBlendState = &cb;
     ci.pDynamicState = &ds;
     ci.layout = m_pipelineLayout;
-    if (vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &ci, nullptr, &m_prepassPipeline) != VK_SUCCESS) {
+    if (vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &ci, nullptr, &m_prepassPipeline) != VK_SUCCESS) {
         m_prepassPipeline = VK_NULL_HANDLE;
         Log("depth pre-pass: pipeline creation failed; off");
         return false;
@@ -90,9 +90,17 @@ bool Device::CreatePrepassPipeline(VkShaderModule vert)
                 nullptr}};
     ci.stageCount = 2;
     ci.pStages = stages;
-    if (vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &ci, nullptr, &m_prepassCutoutPipeline) != VK_SUCCESS) {
+    if (vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &ci, nullptr, &m_prepassCutoutPipeline) != VK_SUCCESS) {
         m_prepassCutoutPipeline = VK_NULL_HANDLE;
         Log("depth pre-pass: cut-out pipeline creation failed; cut-outs kept out");
+    }
+    // Our own canopy's sprigs (leaves.cpp): leaf.vert (no vertex input) with the same cut-out fragment shader - the
+    // sprigs' solid middles (a blended canopy's: alpha 0.95 and over), so the scene's sprig pass shades only the
+    // nearest layer of a dense crown instead of every layer.
+    if (leafVert && m_prepassCutoutPipeline) {
+        stages[0].module = leafVert;
+        if (vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &ci, nullptr, &m_leafPrepassPipeline) != VK_SUCCESS)
+            m_leafPrepassPipeline = VK_NULL_HANDLE;
     }
     vkDestroyShaderModule(m_device, frag, nullptr);
     return true;
@@ -237,8 +245,9 @@ void Device::PrepassLog()
         }
     if (!out.empty()) out.pop_back();
     if (!ends.empty()) ends.pop_back();
-    Log("depth pre-pass: %.0f draws a frame in %llu segments (last 600 frames)%s", double(m_prepassDraws) / 600.0,
-        (unsigned long long)m_prepassSegments, m_prepassPipeline ? "" : " - no pipeline");
+    Log("depth pre-pass: %.0f draws a frame in %.0f calls, %llu segments (last 600 frames)%s",
+        double(m_prepassDraws) / 600.0, double(m_prepassCalls) / 600.0, (unsigned long long)m_prepassSegments,
+        m_prepassPipeline ? "" : " - no pipeline");
     Log("depth pre-pass: draws ignoring depth, a frame: %.1f culled as backdrops | %.1f before the depth clear | %.1f "
         "after the segment | %.1f after depth was written | %.1f other%s",
         double(m_backdropDraws[0]) / 600.0, double(m_backdropDraws[1]) / 600.0, double(m_backdropDraws[2]) / 600.0,
@@ -248,7 +257,7 @@ void Device::PrepassLog()
     Log("two-pass foliage: %.0f edge draws a frame in %.1f batches%s", double(m_edgeDraws) / 600.0,
         double(m_edgeFlushes) / 600.0, m_foliageEdges ? "" : " (off: RVK_FolEdges)");
     m_edgeDraws = m_edgeFlushes = 0;
-    m_prepassDraws = m_prepassSegments = 0;
+    m_prepassDraws = m_prepassSegments = m_prepassCalls = 0;
     std::memset(m_backdropDraws, 0, sizeof(m_backdropDraws));
     std::memset(m_prepassWhy, 0, sizeof(m_prepassWhy));
     std::memset(m_prepassEndCause, 0, sizeof(m_prepassEndCause));
@@ -319,6 +328,7 @@ void Device::PrepassEnd(uint32_t cause)
     m_prepassArmed = false;
     m_prepassEndedThisFrame = true;
     ++m_prepassEndCause[cause < kEndCount ? cause : kEndOther];
+    FlushPrepassGroup();
     VkCommandBuffer cmd = m_frames[m_frameIndex].prepass;
     vkCmdEndRendering(cmd);
     const VkPipelineStageFlags2 tests =
@@ -365,10 +375,12 @@ void Device::PrepassDraw(uint32_t primitive, uint32_t fvf, uint32_t stride, uint
     }
     int pipeline = cutout ? 1 : 0;               // (same layout: the dynamic state and the descriptors stay)
     if (c.pipeline != pipeline) {
+        FlushPrepassGroup();
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, cutout ? m_prepassCutoutPipeline : m_prepassPipeline);
         c.pipeline = pipeline;
     }
     if (c.topology != primitive) {
+        FlushPrepassGroup();
         vkCmdSetPrimitiveTopology(cmd, TopologyOf(primitive));
         c.topology = primitive;
     }
@@ -376,30 +388,36 @@ void Device::PrepassDraw(uint32_t primitive, uint32_t fvf, uint32_t stride, uint
     VkRect2D scissor;
     ViewportState(&vp, &scissor);
     if (std::memcmp(&vp, &c.viewport, sizeof(vp)) != 0) {
+        FlushPrepassGroup();
         vkCmdSetViewport(cmd, 0, 1, &vp);
         c.viewport = vp;
     }
     if (std::memcmp(&scissor, &c.scissor, sizeof(scissor)) != 0) {
+        FlushPrepassGroup();
         vkCmdSetScissor(cmd, 0, 1, &scissor);
         c.scissor = scissor;
     }
     uint32_t cull = m_rs[d3d::RS_CULLMODE];
     if (c.cull != cull) {
+        FlushPrepassGroup();
         vkCmdSetCullMode(cmd, cull == d3d::CULL_CCW ? VK_CULL_MODE_BACK_BIT
                               : cull == d3d::CULL_CW ? VK_CULL_MODE_FRONT_BIT : VK_CULL_MODE_NONE);
         c.cull = cull;
     }
     if (c.fvf != fvf) {
+        FlushPrepassGroup();
         SetVertexInput(cmd, fvf, stride);
         c.fvf = fvf;
     }
     if (c.vb != vb) {
+        FlushPrepassGroup();
         VkBuffer buffers[2] = {vb, m_nullBuffer};
         VkDeviceSize offsets[2] = {0, 0};
         vkCmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);
         c.vb = vb;
     }
     if (indexCount && c.ib != ib) {
+        FlushPrepassGroup();
         vkCmdBindIndexBuffer(cmd, ib, 0, VK_INDEX_TYPE_UINT16);
         c.ib = ib;
     }
@@ -407,6 +425,7 @@ void Device::PrepassDraw(uint32_t primitive, uint32_t fvf, uint32_t stride, uint
     // pushes them; for most static draws they don't change from one to the next.
     if (c.frameLights != frameLightsOffset || c.prevBuffer != prevBuffer || c.prevOffset != prevOffset ||
         c.smoothBuffer != smoothBuffer || c.smoothOffset != smoothOffset) {
+        FlushPrepassGroup();
         VkDescriptorBufferInfo frameLights{f.ring, frameLightsOffset, sizeof(FrameLights)};
         VkDescriptorBufferInfo prev{prevBuffer, prevOffset, prevBytes ? prevBytes : 16};
         VkDescriptorBufferInfo smooth{smoothBuffer, smoothOffset, smoothBytes ? smoothBytes : 16};
@@ -431,11 +450,94 @@ void Device::PrepassDraw(uint32_t primitive, uint32_t fvf, uint32_t stride, uint
         c.smoothBuffer = smoothBuffer;
         c.smoothOffset = smoothOffset;
     }
-    if (indexCount)
-        vkCmdDrawIndexed(cmd, indexCount, 1, uint32_t(ibOffset / 2), int32_t(vbOffset / stride), recordIndex);
-    else
-        vkCmdDraw(cmd, vertexCount, 1, uint32_t(vbOffset / stride), recordIndex);
+    // Indexed: into the pending run of the same state, issued as one indirect call (the record in firstInstance, as
+    // the main pass's groups); it was a call a draw - ~3,500 a frame over a city.
+    if (indexCount && m_groupIndirect && m_prepassIndirectCount < m_recordCapacity) {
+        auto* cmds = reinterpret_cast<VkDrawIndexedIndirectCommand*>(f.ringData + m_prepassIndirectBase);
+        VkDrawIndexedIndirectCommand& d = cmds[m_prepassIndirectCount];
+        d.indexCount = indexCount;
+        d.instanceCount = 1;
+        d.firstIndex = uint32_t(ibOffset / 2);
+        d.vertexOffset = int32_t(vbOffset / stride);
+        d.firstInstance = recordIndex;
+        if (!c.groupCount) c.groupFirst = m_prepassIndirectCount;
+        ++c.groupCount;
+        ++m_prepassIndirectCount;
+    } else {
+        FlushPrepassGroup();
+        if (indexCount)
+            vkCmdDrawIndexed(cmd, indexCount, 1, uint32_t(ibOffset / 2), int32_t(vbOffset / stride), recordIndex);
+        else
+            vkCmdDraw(cmd, vertexCount, 1, uint32_t(vbOffset / stride), recordIndex);
+        ++m_prepassCalls;
+    }
     ++m_prepassDraws;
+}
+
+// Our own canopy's sprigs into the armed segment's pre-pass (DrawLeaves): their solid middles' depth, with the
+// canopy's record (the atlas) - the scene's sprig pass then tests against it without writing (each pixel shaded about
+// once, however many layers the crown has). False when no segment is armed (the sprigs then write their own depth).
+bool Device::PrepassLeaves(uint32_t recordIndex, uint32_t first, uint32_t count, VkDeviceSize frameLightsOffset,
+                           VkBuffer prevBuffer, VkDeviceSize prevOffset, VkDeviceSize prevBytes)
+{
+    if (!m_prepassArmed || !m_leafPrepassPipeline || !m_leafPool || m_target != m_scene || !count)
+        return false;
+    Frame& f = m_frames[m_frameIndex];
+    VkCommandBuffer cmd = f.prepass;
+    PrepassCache& c = m_pre;
+    if (!c.bound)
+        return false;                            // (no opaque draw has set the pass up yet: it binds the arrays)
+    FlushPrepassGroup();
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_leafPrepassPipeline);
+    c.pipeline = 2;
+    vkCmdSetPrimitiveTopology(cmd, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    c.topology = ~0u;
+    VkViewport vp;
+    VkRect2D scissor;
+    ViewportState(&vp, &scissor);
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    c.viewport = vp;
+    c.scissor = scissor;
+    vkCmdSetCullMode(cmd, VK_CULL_MODE_NONE);
+    c.cull = ~0u;
+    vkCmdSetVertexInputEXT(cmd, 0, nullptr, 0, nullptr);
+    c.fvf = ~0u;
+    VkDescriptorBufferInfo frameLights{f.ring, frameLightsOffset, sizeof(FrameLights)};
+    VkDescriptorBufferInfo prev{prevBuffer, prevOffset, prevBytes ? prevBytes : 16};
+    VkDescriptorBufferInfo pool{m_leafPool, 0, VkDeviceSize(m_leafPoolLeaves) * 32};
+    VkWriteDescriptorSet w[3] = {};
+    for (int i = 0; i < 3; ++i) {
+        w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[i].descriptorCount = 1;
+    }
+    w[0].dstBinding = 4;
+    w[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    w[0].pBufferInfo = &frameLights;
+    w[1].dstBinding = 8;
+    w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w[1].pBufferInfo = &prev;
+    w[2].dstBinding = 10;
+    w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w[2].pBufferInfo = &pool;
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 3, w);
+    c.frameLights = ~0ull;                       // (the next draw pushes its own)
+    c.smoothBuffer = VK_NULL_HANDLE;
+    vkCmdDraw(cmd, count * 6u, 1, first * 6u, recordIndex);
+    ++m_prepassCalls;
+    return true;
+}
+
+void Device::FlushPrepassGroup()
+{
+    if (!m_pre.groupCount)
+        return;
+    Frame& f = m_frames[m_frameIndex];
+    vkCmdDrawIndexedIndirect(f.prepass, f.ring,
+                             m_prepassIndirectBase + VkDeviceSize(m_pre.groupFirst) * sizeof(VkDrawIndexedIndirectCommand),
+                             m_pre.groupCount, sizeof(VkDrawIndexedIndirectCommand));
+    m_pre.groupCount = 0;
+    ++m_prepassCalls;
 }
 
 // What a submission of this frame slot runs after its uploads: the main commands, or, split, mainA, the pre-pass and
@@ -447,16 +549,20 @@ uint32_t Device::FrameCommands(Frame& f, VkCommandBuffer out[4])
         out[0] = f.main;
         return 1;
     }
-    out[0] = f.mainA;
-    out[1] = f.prepass;
-    out[2] = f.mainB;
-    return 3;
+    uint32_t n = 0;
+    out[n++] = f.mainA;
+    out[n++] = f.prepass;
+    if (f.cloudsRecorded)
+        out[n++] = f.clouds;                     // (clouds.cpp: after the pre-pass's depth, before the scene's draws)
+    out[n++] = f.mainB;
+    return n;
 }
 
 // After the submission: one main command buffer again. The one being recorded stays the main one (mainA from now on),
 // so a caller that holds f.main across a flush keeps recording into the right buffer.
 void Device::FrameCommandsSubmitted(Frame& f)
 {
+    f.cloudsRecorded = false;
     if (!f.split)
         return;
     std::swap(f.mainA, f.mainB);

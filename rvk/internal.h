@@ -52,7 +52,8 @@ struct DrawTransform {
     uint32_t leafSet[4];           // ... its leaves in the pool: first, drawn now | falling-leaf slots << 16, all; the
                                    // ground under it (world y, float bits: where its fallen leaves lie)
 };
-enum : uint32_t { kMatPbr = 1, kMatBase = 2, kMatAlbedo = 4, kMatEmissive = 8, kMatPicked = 16 };   // DrawTransform
+constexpr float kSkySceneryHaze = 2000.0f;     // the sky's scenery's haze: its colour left e^-(distance / this)
+enum : uint32_t { kMatPbr = 1, kMatBase = 2, kMatAlbedo = 4, kMatEmissive = 8, kMatPicked = 16, kMatSky = 32, kMatCloudSheet = 64 };   // DrawTransform
                                                  // mat[2]: has an ORM map; it is the ground base's; stage 0 draws an
                                                  // albedo map; has an emissive map; its texture was picked
 // GPU-driven M2: one record a draw (binding 12). `constIndex` selects the shared DrawConstants it draws with; the
@@ -113,6 +114,31 @@ struct FrameLights {               // binding 4: per-frame data (constants.glsl 
     float pusherBorn[kPushers];    // seconds since each point was made (a character walking on makes new ones)
     float leaves[4];               // leaves (leaves.cpp): branch sway, sprig flutter, gusts, canopy core cut
     float leafView[4];             // ... their distance (none beyond; thinning out from half of it), on, falling leaves
+    float clouds[4];               // the clouds' shadow map (clouds.cpp): its corner x, z (world), 1 / its size, its
+                                   // bindless image + 1 | sampler << 20 (as the float's bits; 0 = none)
+    float clouds2[4];              // ... the cloud layer's height (world y), the shadow's strength
+    float cloudTint[4];            // the game's cloud sheets, drawn with the layer's light (cloud_light.glsl): the
+    float cloudSky[4];             // clouds' colour (rgb, w brightness); the sky's light on them (rgb, w the sheets'
+    float cloudAir[4];             // strength: 0 = none); the air's colour (rgb, w: the horizon's haze)
+    float moon[4];                 // the moonlight (night.cpp): its colour on the ground and grass (0 = none); w: 1 =
+                                   // the shadow map is the moon's (sunDir: the moon's light), not the sun's
+    float sunTrue[4];              // towards the sun, below the horizon too (the clouds' light: sunset, afterglow);
+                                   // w: how much it is night (0 day .. 1)
+    float terrainSun[4];           // the terrain's shade from a low sun (terrain_sun.cpp): its map's corner x, z, 1 / its
+                                   // size, its bindless image + 1 | sampler << 20 (the float's bits; 0 = none)
+    float terrainSun2[4];          // ... x: the eye's own (0 shaded .. 1), y: its weight (0 high sun .. 1 low)
+    float windFrame[4];            // xy: the wind's patterns' frame (Device::WindFrame); z: a sandstorm's spreading of the sun
+    float flash[4];                // lightning (rain.cpp Lightning): its light on the land (rgb), w: the clouds' glow
+    float flashView[4];            // ... towards the strike (view space), w: how far
+    float flashProj[4];            // ... the projection's m[0][0], m[1][1], m[2][2], m[3][2]
+    float flashWorld[4];           // ... the strike (world; the storm's fog lit round it)
+    float rainNear[4];             // x: 1 = the tone mapping's rain layer (binding 16) holds this frame's rain; y: how much
+                                   // a thunderstorm hides the sun (0..1: Device::StormOvercast); z: a storm's blowing
+                                   // (leaves torn off and carried - ffp.vert FallingLeaf)
+    float wet[4];                  // the wet ground (rain.cpp): x how soaked, y the puddles, z the rain's clock (their
+                                   // ripples), w the cover map's heights' reference (world y)
+    float cover[4];                // the rain's cover map (sand_map.cpp RainCoverMap): corner x, z, 1 / size, bindless
+                                   // image + 1 | sampler << 20 (the float's bits; 0 = none)
     GpuLight lights[kFrameLights];
 };
 
@@ -141,6 +167,8 @@ void ImageBarrier(VkCommandBuffer cmd, VkImage image, VkImageAspectFlags aspect,
 d3d::Matrix Identity();
 d3d::Matrix MulMatrix(const d3d::Matrix& a, const d3d::Matrix& b);   // D3D order: v * a * b
 bool InvertMatrix(const d3d::Matrix& m, d3d::Matrix* out);
+// A model-space box through a matrix: the world box around it (shadow.cpp).
+void TransformBounds(const float mn[3], const float mx[3], const d3d::Matrix& m, float outMin[3], float outMax[3]);
 VkPrimitiveTopology TopologyOf(uint32_t d3dPrimitive);
 uint32_t TopologyClassOf(uint32_t d3dPrimitive);   // 0 points, 1 lines, 2 triangles
 // Whether a mesh is one plane (a sign, a poster: draw.cpp), positions first in its vertices.
@@ -149,5 +177,8 @@ bool OnePlane(uint32_t primitive, uint32_t stride, const void* vertices, uint32_
 // Clip-space test of a world-space box's corners against a view-projection: +1 all inside, -1 all outside one
 // plane, 0 otherwise. depth: also test the near and far planes.
 int BoxInClip(const float mn[3], const float mx[3], const d3d::Matrix& vp, bool depth);
+// BoxInClip(mn, mx, vp, false) == -1 for an affine view-projection (orthographic: every point's w is 1) - the box's
+// centre and half extents through the matrix, not its eight corners (the sun cascades' cull, every caster each).
+bool BoxOutsideAffine(const float mn[3], const float mx[3], const d3d::Matrix& vp);
 
 }  // namespace rvk::detail

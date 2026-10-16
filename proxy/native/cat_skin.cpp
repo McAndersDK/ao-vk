@@ -387,7 +387,7 @@ void SetSink(SinkFn sink)
 
 void Install(HMODULE orig)
 {
-    Mode mode = GetMode("Skin", Mode::Off);
+    Mode mode = GetMode("Skin", Mode::On);
     char value[16] = "";
     if (mode == Mode::Off) {                                // GetMode knows off / on / verify; `cpu` reads as off
         GetPrivateProfileStringA("Native", "Skin", "", value, sizeof(value), IniPath());
@@ -409,7 +409,7 @@ void Install(HMODULE orig)
     if (target == reinterpret_cast<void*>(&SkinOn)) {
         g_deferred = true;
     }
-    if (target == reinterpret_cast<void*>(&SkinOn) && GetMode("Scene", Mode::Off) != Mode::On) {
+    if (target == reinterpret_cast<void*>(&SkinOn) && GetMode("Scene", Mode::On) != Mode::On) {
         // (Scene=on: picking is native, cat_pick.cpp, and opens this scope itself - PickingBegin.)
         g_isLine = reinterpret_cast<IsLineFn>(HookEntry(orig, kIsLineRva, kIsLinePrologue, sizeof(kIsLinePrologue),
                                                         reinterpret_cast<void*>(&IsLineHook),

@@ -23,6 +23,8 @@
 #include <cstring>
 #include <initializer_list>
 
+namespace rvkproxy { bool FreeCamWorld(const float game[16], float out[16]); }   // (proxy/ddraw/rvk_freecam.cpp)
+
 namespace rnative::viewport {
 
 namespace {
@@ -494,6 +496,19 @@ void __fastcall Process(uint8_t* vp, void*, void* root)
     Field<uint32_t>(Randy(), 0x288) &= 7;
     void* camera = Field<void*>(vp, 0xC);
     if (!camera) return;
+    // The free camera (Ctrl+Shift+C, the proxy's rvk_freecam.cpp): put in the camera's world matrix before its view and
+    // frustum are made - what is drawn and culled follows it.
+    // Off again: its world matrix marked out of date (+0x9E), made from the game's own placement at once - not left
+    // where the free camera was until the game next moves it.
+    static bool s_free = false;
+    float freeWorld[16];
+    if (rvkproxy::FreeCamWorld(static_cast<const float*>(orig::RRefFrame_t_GetWorldMatrix(camera)), freeWorld)) {
+        std::memcpy(&Field<float>(camera, 0x44), freeWorld, 64);
+        s_free = true;
+    } else if (s_free) {
+        Field<uint8_t>(camera, 0x9E) |= 1;
+        s_free = false;
+    }
     popin::FrameStart(vp, root);
     orig::RCamera_t_GetViewMatrix(camera, g_viewMatrix);
     orig::render_t_SetTransformMatrix(Render(), 2, g_viewMatrix);
@@ -557,7 +572,7 @@ void* __fastcall Delete(void* vp, void*, uint8_t flags)   // FUN_1004c7c8
 
 void Install(HMODULE orig)
 {
-    if (GetMode("Scene", Mode::Off) != Mode::On) return;
+    if (GetMode("Scene", Mode::On) != Mode::On) return;
     g_orig = orig;
     g_render = reinterpret_cast<void* const*>(GetProcAddress(orig, "?m_pcInstance@render_t@@0PAV1@A"));
     g_randy = reinterpret_cast<void* const*>(GetProcAddress(orig, "?s_pcRandy@Randy_t@@1PAV1@A"));

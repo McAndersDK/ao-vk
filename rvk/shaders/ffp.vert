@@ -114,7 +114,8 @@ vec3 PushOffset(vec3 posW, vec3 modelPos, vec4 sway, float plantHeight, vec2 ori
 // a slow swing with the wind and a little bob; world units, at the wind's `time`, gusts at the object's position.
 vec3 BranchSway(vec3 modelPos, float time, vec2 originXZ)
 {
-    return BranchSwayAt(modelPos, D.leaf, originXZ, FL.wind.xy, time, FL.leaves.x * FL.wind.w, FL.leaves.z);
+    return BranchSwayAt(modelPos, D.leaf, originXZ, WindAxes(originXZ, FL.wind.xy, FL.windFrame.xy), FL.wind.xy, time,
+                        FL.leaves.x * FL.wind.w, FL.leaves.z);
 }
 
 // A canopy with leaves: how much of it the leaves stand for at this distance - all of it up to half the leaves'
@@ -147,7 +148,7 @@ vec2 gLeafCorner;                                // where on the card (-1 .. 1)
 // A leaf's flutter: its card flapping about its middle, the far edge most (model units, along the card's normal).
 float LeafFlutter(float phase, float corner, float time, float gust)
 {
-    return sin(time * (6.0 + 2.0 * fract(phase * 7.0)) + phase * 6.2831853) * (0.15 + 0.45 * gust) * corner;
+    return sin(time * (6.0 + 2.0 * fract(phase * 7.0)) + phase * 6.2831853) * (0.15 + 0.3 * min(gust, 2.0)) * corner;
 }
 
 uint LeafHash(uint x)
@@ -174,8 +175,9 @@ bool FallingLeaf(uint slot, vec2 corner, float time, out vec3 pos, out vec3 norm
     float cycle = floor(t / kCycle), age = t - cycle * kCycle;
     uint cs = LeafHash(seed ^ (uint(cycle) * 0x85EBCA6Bu));
     vec2 wd = FL.wind.xy;
-    float gust = Gust(D.world[3].xz, wd, time - age) * FL.leaves.z;
-    if (LeafHashU(cs) >= clamp(FL.leafView.z * (0.3 + 1.2 * gust), 0.0, 1.0)) return false;
+    float gust = Gust(WindAxes(D.world[3].xz, wd, FL.windFrame.xy), time - age) * GrassGusts(FL.leaves.z);
+    float storm = FL.rainNear.z;                 // (a storm: more leaves torn off, carried far on the wind)
+    if (LeafHashU(cs) >= clamp(FL.leafView.z * (0.3 + 1.2 * gust) * (1.0 + 3.0 * storm), 0.0, 1.0)) return false;
     uint src = D.leafSet.x + LeafHash(cs ^ 0x51ED27u) % D.leafSet.z;
     uvec4 a = LV.words[2u * src], b = LV.words[2u * src + 1u];
     vec2 h0 = unpackHalf2x16(a.w), h1 = unpackHalf2x16(b.x), h2 = unpackHalf2x16(b.y);
@@ -183,10 +185,10 @@ bool FallingLeaf(uint slot, vec2 corner, float time, out vec3 pos, out vec3 norm
     vec3 start = (D.world * vec4(uintBitsToFloat(a.xyz), 1.0)).xyz;
     vec3 u = W * vec3(h0, h1.x), v = W * vec3(h1.y, h2);
     float height = max(start.y - uintBitsToFloat(D.leafSet.w), 0.0);
-    float speed = 0.7 + 0.5 * LeafHashU(cs ^ 7u);    // world units a second
+    float speed = (0.7 + 0.5 * LeafHashU(cs ^ 7u)) * (1.0 - 0.4 * storm);    // world units a second (lofted in a storm)
     float fallTime = height / speed;
     if (age >= fallTime + kLie) return false;
-    float flying = min(age, fallTime), drift = 0.5 + 0.9 * gust;
+    float flying = min(age, fallTime), drift = 0.5 + 0.9 * gust + storm * (3.0 + 5.0 * gust);
     float spin = flying * (2.0 + 2.0 * LeafHashU(cs ^ 11u)) + 6.2831853 * LeafHashU(cs ^ 23u);
     vec3 off = vec3(wd.x, 0.0, wd.y) * drift * flying + vec3(cos(spin), 0.0, sin(spin)) * 0.35 * min(flying, 1.0);
     off.y = -speed * flying;
@@ -245,10 +247,12 @@ void LeafVertex(vec2 originXZ)
     if (dot(n, out_) < 0.0) n = -n;              // facing out of the crown
     vec3 pos = centre + corner.x * halfU + corner.y * halfV;
     float size = length(halfV);
-    float gust = Gust(originXZ, FL.wind.xy, FL.wind.z) * FL.leaves.z;
-    float gustPrev = Gust(originXZ, FL.wind.xy, FL.taa.w) * FL.leaves.z;
+    vec2 aa = WindAxes(originXZ, FL.wind.xy, FL.windFrame.xy);
+    float gust = Gust(aa, FL.wind.z) * GrassGusts(FL.leaves.z);   // (levelling off in a storm)
+    float gustPrev = Gust(aa, FL.taa.w) * GrassGusts(FL.leaves.z);
     float f = FL.leaves.y * size;
-    float tip = 0.5 + 0.5 * corner.y;
+    // (Flapping most at the far edge: the old sprigs' top; our own canopy's sprigs' tip, their twig's base at +v.)
+    float tip = (D.leafSet.y & 0x80000000u) != 0u ? 0.5 - 0.5 * corner.y : 0.5 + 0.5 * corner.y;
     inPos = vec4(pos + n * f * LeafFlutter(phase, tip, FL.wind.z, gust), 1.0);
     gLeafPrev = pos + n * f * LeafFlutter(phase, tip, FL.taa.w, gustPrev);
     // Lit as part of a rounded crown, not as a flat card: its normal leans out from the crown's centre.
@@ -344,13 +348,22 @@ void main()
         // ffp_main.glsl LeafMask).
         vec3 modelPos = inPos.xyz;
         float crownShade = 1.0;
+        vec3 treeTint = vec3(1.0);                // (the crown shading: this tree's colour)
         if (D.leaf.w > 0.0 && FL.leafView.y > 0.0) {   // (a palm, D.leaf.w < 0, only sways: its fronds are whole)
             float keep = LeafKeep();
             crownShade = mix(1.0, CrownShade(modelPos), keep);
 #ifndef RVK_LEAF
-            modelPos = mix(modelPos, D.leaf.xyz, CoreShrink(FL.leaves.w, keep));
-            crownShade *= 1.0 - 0.1 * FL.leaves.w * keep;
-            leafThin = CoreThin(FL.leaves.w, keep);
+            if ((D.leafSet.y & 0x80000000u) != 0u) {   // our own canopy (leaves.cpp BakeOwnCanopy): the game's
+                // cards stay as its core - drawn in a little, darker, half thinned near - its density inside and
+                // its painted branches; the sprigs around and through it make its outside.
+                modelPos = mix(modelPos, D.leaf.xyz, 0.12 * keep);
+                crownShade *= 1.0 - 0.18 * keep;
+                leafThin = 0.5 * keep;
+            } else {
+                modelPos = mix(modelPos, D.leaf.xyz, CoreShrink(FL.leaves.w, keep));
+                crownShade *= 1.0 - 0.1 * FL.leaves.w * keep;
+                leafThin = CoreThin(FL.leaves.w, keep);
+            }
 #endif
         }
         vec4 posW = D.world * vec4(modelPos, 1.0);
@@ -368,7 +381,8 @@ void main()
             // motion where it is see-through (the ambient occlusion, motion blur and TAA read those).
             if (meanAlpha < 0.92) vCutout = 0.35;
         }
-        if (D.leaf.w != 0.0) {                   // a canopy with leaves: its branches sway (its cards and its leaves)
+        if (D.leaf.w != 0.0 && FL.leafView.y > 0.0) {   // a canopy with leaves: its branches sway (its cards and its
+                                                         // leaves; the crown shading alone: not)
             vec3 now = BranchSway(inPos.xyz, FL.wind.z, D.world[3].xz);
             posW.xyz += now;
 #ifdef RVK_LEAF
@@ -382,6 +396,10 @@ void main()
 #endif
         vec4 pv = C.view * posW;
         gl_Position = C.proj * pv;
+        // The sky's meshes (its cloud puffs, hundreds of units across, 1-3 km out) can reach past the far plane: kept
+        // just inside it rather than cut off along a straight line (the game's own renderer didn't cut them).
+        if ((D.mat.z & MAT_SKY) != 0u)
+            gl_Position.z = min(gl_Position.z, gl_Position.w * 0.999999);
         vClip = gl_Position;                     // motion vectors: without the jitter
         if ((C.flags.x & F_HDR) != 0u)
             gl_Position.xy += FL.taa.xy * gl_Position.w;   // temporal anti-aliasing: this frame's sub-pixel offset
@@ -403,6 +421,32 @@ void main()
         vec3 normalW = mat3(D.world) * (hasNormal ? inNormal : vec3(0.0));
         if ((C.flags.x & F_NORMALIZE) != 0u && dot(normalW, normalW) > 0.0)
             normalW = normalize(normalW);
+#ifndef RVK_LEAF
+        // The crown shading (RVK_CrownShade, FL.leafView.w): a tree's or shrub's canopy - the game's cards - lit as one
+        // rounded crown: each card's normal turned out of the crown (its side facing out), then bent most of the way
+        // to the crown's own outward direction there (the sunny side bright, the far side and the underside darker);
+        // darker towards its middle and under it (CrownShade, deeper); each tree's colour a little its own.
+        if (D.leaf.w > 0.0 && FL.leafView.w > 0.0) {
+            float k = FL.leafView.w;
+            vec3 outW = mat3(D.world) * (inPos.xyz - D.leaf.xyz);
+            float len = length(normalW), lo = length(outW);
+            if (lo > 1e-5 && len > 1e-5) {
+                outW /= lo;
+                vec3 n = normalW / len;
+                if (dot(n, outW) < 0.0) n = -n;
+                normalW = normalize(mix(n, outW, 0.6 * k)) * len;
+            }
+            vec3 d = (inPos.xyz - D.leaf.xyz) / D.leaf.w;
+            float r = length(d);
+            float inside = mix(0.78, 1.0, smoothstep(0.1, 0.95, r)) * (1.0 - 0.08 * clamp(-d.y, 0.0, 1.0));
+            crownShade *= mix(1.0, inside, k);
+            // (Each tree its own: a hash of where it stands - value +-7%, hue a touch warmer or cooler.)
+            uint h = floatBitsToUint(D.world[3].x) * 0x9E3779B9u ^ floatBitsToUint(D.world[3].z) * 0x85EBCA6Bu;
+            h ^= h >> 15; h *= 0x2C1B3C6Du; h ^= h >> 12;
+            float v = float(h & 0xFFFFu) / 65535.0 - 0.5, w = float(h >> 16) / 65535.0 - 0.5;
+            treeTint = mix(vec3(1.0), (1.0 + 0.14 * v) * vec3(1.0 + 0.05 * w, 1.0, 1.0 - 0.05 * w), k);
+        }
+#endif
         normalV = mat3(C.view) * normalW;
 
         vPosW = posW.xyz;
@@ -445,8 +489,8 @@ void main()
                 specular = vec4(mSpecular.rgb * spec, specular.a);
             }
         }
-        diffuse.rgb *= crownShade;
-        vMatAmbient *= crownShade;
+        diffuse.rgb *= crownShade * treeTint;
+        vMatAmbient *= crownShade * treeTint;
         vMatEmissive *= crownShade;
         // Material colours for per-pixel lighting stay unclamped; the fragment shader clamps the lit result.
         bool perPixel = (C.flags.x & (F_LIGHTING | F_PERPIXEL)) == (F_LIGHTING | F_PERPIXEL);
@@ -460,6 +504,8 @@ void main()
     vSet0 = inTex0.xy;
 #ifdef RVK_LEAF
     vSet0 = gLeafCorner;                         // where on the leaf's card (ffp_main.glsl LeafMask)
+    if ((D.leafSet.y & 0x80000000u) != 0u)
+        vSet0 = vec2(0.0, 3.0);                  // (our own canopy's sprigs: the atlas has their outline)
 #else
     if (D.leaf.w > 0.0 && (fvf & 0xEu) != 4u)
         vSet0 = vec2(leafThin, 2.0);                 // the canopy's core: how much it is thinned out

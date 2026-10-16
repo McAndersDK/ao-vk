@@ -74,6 +74,9 @@
     X(vkDestroyPipelineLayout) \
     X(vkCreateGraphicsPipelines) \
     X(vkCreateComputePipelines) \
+    X(vkCreatePipelineCache) \
+    X(vkGetPipelineCacheData) \
+    X(vkDestroyPipelineCache) \
     X(vkDestroyPipeline) \
     X(vkCmdBeginRendering) \
     X(vkCmdEndRendering) \

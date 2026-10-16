@@ -7,7 +7,8 @@
 // the leaf pool (binding 2), placed and swayed as leaf.vert places them (without their flutter).
 struct ShadowRecord {
     mat4 world;                 // raw D3DMATRIX memory: GLSL M * v == D3D v * M
-    vec4 alpha;                 // x = alpha reference (0..1) for alpha-tested casters
+    vec4 alpha;                 // x = alpha reference (0..1) for alpha-tested casters; yz: a canopy's place in the wind's
+                                // frame (Device::WindAxes, its gusts); w = 1: our own canopy (leaves.cpp)
     vec4 sway;                  // plants (sway.glsl): model y of the base, 1 / model height, tip sway, on
     vec4 windModel;             // the wind's direction in model space, per world unit of sway
     vec4 origin;                // the object's world x, z; wind time; RVK_LeafCore (a canopy with leaves)
@@ -45,7 +46,7 @@ void main()
     vec3 pos = uintBitsToFloat(a.xyz) + corner.x * vec3(h0, h1.x) + corner.y * vec3(h1.y, h2);
     vec2 uvHalf = vec2(float(b.w & 0xFFFu), float((b.w >> 12u) & 0xFFFu)) * (0.25 / 4095.0);
     vTex0 = unpackUnorm2x16(b.z) + corner * uvHalf;
-    vLeaf = corner;
+    vLeaf = r.alpha.w > 0.5 ? vec2(0.0, 3.0) : corner;   // (our own canopy's sprigs: the atlas has their outline)
     vec3 swayPos = pos;
 #else
     vec3 pos = inPos, swayPos = inPos;
@@ -58,7 +59,7 @@ void main()
 #endif
     if (r.sway.w > 0.5) pos += r.windModel.xyz * SwayDistance(swayPos, r.sway, r.origin.xy, r.origin.z);
     vec4 world = r.world * vec4(pos, 1.0);
-    world.xyz += BranchSwayAt(swayPos, r.leaf, r.origin.xy, r.leafWind.xy, r.origin.z, r.leafWind.z, r.leafWind.w);
+    world.xyz += BranchSwayAt(swayPos, r.leaf, r.origin.xy, r.alpha.yz, r.leafWind.xy, r.origin.z, r.leafWind.z, r.leafWind.w);
     gl_Position = P.lightViewProj * world;
     vAlphaRef = r.alpha.x;
 }

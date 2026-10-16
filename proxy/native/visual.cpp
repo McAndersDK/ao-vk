@@ -400,7 +400,7 @@ void __fastcall ObserverRemove(void* self, void*, uint32_t value)   // FUN_10012
 
 void Install(HMODULE orig)
 {
-    if (GetMode("Scene", Mode::Off) != Mode::On) return;
+    if (GetMode("Scene", Mode::On) != Mode::On) return;
     g_orig = orig;
     g_randy = reinterpret_cast<void* const*>(GetProcAddress(orig, "?s_pcRandy@Randy_t@@1PAV1@A"));
     if (!serialize::Get().complete || !serialize::Get().addBool || !serialize::Get().findBool || !serialize::Get().findObject) {

@@ -70,19 +70,40 @@ void AccumulateLight(Light l, vec3 posW, vec3 normalW, vec3 toEye, float sunScal
     }
     ambient += att * l.ambient.rgb;
     float nl = max(dot(normalW, L), 0.0);
+    // A sandstorm (FL.windFrame.z = k): the dust takes k of the sun's direct light - what is left keeps its direction,
+    // shadows and highlights - and spreads most of it (0.85; the rest lost) as soft light from all round: on the land
+    // as on level ground (its light per area: the sun's height), a little less on steep sides, in shadow alike. So a
+    // low sun no longer lights the dunes' crests bright over dark lee slopes, and shadows fade in the thick of a
+    // storm (the user). Level ground about as before.
+    // (With the sand fog - FL.windFrame.w - k is what the storm's column lets by on the sun's way, as for the sun's
+    // disc behind the fog, and what gets through is reddened as the disc is: the land lit by the same weak red sun
+    // the sky shows - the user: the peaks bright under a dark storm sky.)
+    vec3 spread = vec3(0.0), direct = vec3(1.0);
+    if (type == 3u && FL.windFrame.z > 0.0) {
+        float k = FL.windFrame.z;
+        spread = (0.85 * k * max(L.y, 0.0) * (0.6 + 0.4 * max(normalW.y, 0.0))) * l.diffuse.rgb;
+        direct = FL.windFrame.w > 0.5 ? pow(vec3(max(1.0 - k, 1e-4)), vec3(0.8, 1.0, 1.25)) : vec3(1.0 - k);
+    }
+    // A thunderstorm (FL.rainNear.y): its deck takes most of the sun's direct light, a little of it coming down soft
+    // from all round - the land under a storm dark, no sharp shadows (the user).
+    if (type == 3u && FL.rainNear.y > 0.0) {
+        float k = 0.65 * FL.rainNear.y;
+        spread += (0.5 * k * max(L.y, 0.0) * (0.6 + 0.4 * max(normalW.y, 0.0))) * l.diffuse.rgb;
+        direct *= 1.0 - k;
+    }
     if (l.spot.z > 0.0 && nl > 0.0 && att > 0.0)
         att *= PointShadow(l, posW, normalW, nl);   // shadows take the light's diffuse and specular, not its ambient
-    diff += att * nl * l.diffuse.rgb;
+    diff += att * nl * l.diffuse.rgb * direct + spread;
     if (gPbr) {
         // The sun's highlight is shadowed fully (sunScale keeps part of the sunlight in full shadow - baked-looking
         // shade - but a highlight has none to keep) and fades as the sun nears the horizon: a low sun's highlight at
         // grazing angles is the brightest there is, on surfaces its long shadows (beyond the cascades) should cover.
         float a = type == 3u ? gPbrSunVisibility * smoothstep(0.03, 0.25, L.y) : att;
         if (nl > 0.0 && a > 0.0)
-            spec += a * l.diffuse.rgb * PbrSpecular(normalize(normalW), L, toEye);
+            spec += a * l.diffuse.rgb * direct * PbrSpecular(normalize(normalW), L, toEye);
     } else if ((C.flags.x & F_SPECULAR) != 0u && nl > 0.0) {
         float nh = max(dot(normalW, normalize(L + toEye)), 0.0);
-        spec += att * pow(nh, C.misc.x) * l.specular.rgb;
+        spec += att * pow(nh, C.misc.x) * l.specular.rgb * direct;
     }
 }
 

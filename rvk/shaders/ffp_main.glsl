@@ -42,6 +42,7 @@ float PointShadow(Light l, vec3 posW, vec3 n, float nl)
 #include "lighting.glsl"
 #include "env_common.glsl"
 #include "wind.glsl"
+#include "cloud_light.glsl"
 
 layout(location = 0) in vec4 vDiffuse;
 layout(location = 1) in vec4 vSpecular;
@@ -221,8 +222,56 @@ float GrassShadowVisibility(vec3 posW, vec3 n, float nl)
 // under a field, a character's legs in it: in full, a sunlit field would be far darker than before it cast).
 const float kGrassShadowStrength = 0.45;
 float SunVisibilityCasters(vec3 posW, vec3 n);
+
+// The clouds' shadow (rvk clouds.cpp): the sunlight through the cloud layer above the point - its shadow map, made in
+// the layer's plane, read where the sun's ray through the point crosses it. 1 = no cloud.
+float CloudShadow(vec3 posW)
+{
+    uint slot = floatBitsToUint(FL.clouds.w);
+    vec3 L = -FL.sunDir.xyz;
+    if ((slot & 0xFFFFFu) == 0u || L.y < 0.05)
+        return 1.0;
+    vec2 at = posW.xz + (FL.clouds2.x - posW.y) * L.xz / L.y;
+    vec2 uv = (at - FL.clouds.xy) * FL.clouds.z;
+    vec2 edge = min(uv, 1.0 - uv);
+    float inside = smoothstep(0.0, 0.08, min(edge.x, edge.y));
+    if (inside <= 0.0)
+        return 1.0;
+    uint img = (slot & 0xFFFFFu) - 1u, smp = (slot >> 20) & 0xFFu;
+    float t = textureLod(sampler2D(texImages[img], bindlessSamplers[smp]), uv, 0.0).r;
+    return mix(1.0, t, FL.clouds2.y * inside);
+}
+
+// The terrain's shade from a low sun (rvk terrain_sun.cpp): at a point, 1 in the sun, 0 under the terrain hiding it -
+// by the height a point at its place must be to see the sun over the terrain (a map round the eye; 2 units' grace:
+// the ground itself, and what stands on it, not shading itself on the flat). Weighted in low in the sky.
+float TerrainSun(vec3 posW)
+{
+    uint slot = floatBitsToUint(FL.terrainSun.w);
+    if ((slot & 0xFFFFFu) == 0u || FL.terrainSun2.y <= 0.0)
+        return 1.0;
+    vec2 uv = (posW.xz - FL.terrainSun.xy) * FL.terrainSun.z;
+    vec2 edge = min(uv, 1.0 - uv);
+    float inside = smoothstep(0.0, 0.03, min(edge.x, edge.y));
+    if (inside <= 0.0)
+        return 1.0;
+    uint img = (slot & 0xFFFFFu) - 1u, smp = (slot >> 20) & 0xFFu;
+    float need = textureLod(sampler2D(texImages[img], bindlessSamplers[smp]), uv, 0.0).r;
+    float lit = smoothstep(need - 1.0, need + 3.0, posW.y + 2.0);
+    return mix(1.0, lit, FL.terrainSun2.y * inside);
+}
+
+float gCasterVisibility = 1.0, gCloudVisibility = 1.0;   // SunVisibility's two parts: things' shadows, the clouds'
+float gTerrainVisibility = 1.0;                         // ... and the terrain's shade from a low sun (TerrainSun)
+
 float SunVisibility(vec3 posW, vec3 n)
 {
+    gCloudVisibility = CloudShadow(posW);
+    gTerrainVisibility = FL.moon.w > 0.5 ? 1.0 : TerrainSun(posW);
+    if (FL.shadowParams.x <= 0.5) {              // (no shadow map: the terrain's shade alone)
+        gCasterVisibility = 1.0;
+        return gCloudVisibility;
+    }
     float v = SunVisibilityCasters(posW, n);
     if (v > 0.0 && (C.flags.x & F_SHADOWCHEAP) == 0u) {
         bool hasN = dot(n, n) > 0.0;
@@ -231,8 +280,31 @@ float SunVisibility(vec3 posW, vec3 n)
         if (!hasN || nl > 0.0)                   // (facing away: the light equation handles it, as above)
             v *= mix(1.0, GrassShadowVisibility(posW, nn, nl), kGrassShadowStrength);
     }
-    return v;
+    gCasterVisibility = v;
+    return v * gCloudVisibility;
 }
+
+// The terrain's shade from a low sun at the shadows' own strength (FL.terrainSun2.z: theirs fade out low, it doesn't -
+// under the mountains the ground is wholly in shade, not lit between the trees' faded shadows - user, 2026-10-13).
+float TerrainShade()
+{
+    return 1.0 - (1.0 - gTerrainVisibility) * FL.terrainSun2.z;
+}
+
+// A cloud's shadow takes the sunlight, not the sky's: where a shadow darkens all of a surface's light (the ground's
+// lightmap holds the sun and the sky's light together; unlit surfaces), only about the sun's part of it goes - a cloud
+// over the sun had left the ground near black (user, 2026-10-13).
+const float kCloudSunShare = 0.5;
+float FlatShade()
+{
+    // (A thunderstorm - FL.rainNear.y: the sun hidden as by cloud everywhere, more than a cloud's shadow takes - its
+    // share of the land's light gone, so the shadows of things with it.)
+    float o = FL.rainNear.y;
+    return min(1.0 - (1.0 - gCasterVisibility) * FL.shadowParams.y * (1.0 - o), mix(TerrainShade(), 1.0, o)) *
+           (1.0 - kCloudSunShare * max(1.0 - gCloudVisibility, o)) * (1.0 - 0.15 * o);
+}
+
+int gShadowCascade = -1;                         // the cascade SunVisibilityCasters read (RVK_ShadowView)
 
 float SunVisibilityCasters(vec3 posW, vec3 n)
 {
@@ -248,6 +320,7 @@ float SunVisibilityCasters(vec3 posW, vec3 n)
         float edge;
         float v = CascadeVisibility(c, posW, n, nl, edge);
         if (edge >= 1.0) continue;
+        gShadowCascade = c;
         float blend = (C.flags.x & F_SHADOWCHEAP) != 0u ? 0.0 : smoothstep(0.8, 1.0, edge);
         if (blend <= 0.0) return v;
         float next = 1.0;
@@ -358,6 +431,23 @@ vec3 PbrAmbientSpecular(vec3 nu, vec3 V, vec3 ambientLight)
     return EnvBrdfApprox(gPbrF0, gPbrRough, nv) * env * so;
 }
 
+// What wet ground reflects in a direction R: the environment probe (what the camera has seen that way; level 0 for
+// a puddle's mirror, 1 for soaked ground's blur) where it is sure, else the sky's light guessed as PbrAmbientSpecular
+// does. Needs no screen-space reflections.
+vec3 WetReflection(vec3 R, int level)
+{
+    vec3 amb = C.ambient.rgb + FL.sunColor.rgb * 0.15;
+    vec3 sky = ((C.flags.x & F_FOG) != 0u ? mix(amb, C.fogColor.rgb, 0.5) : amb) + FL.sunColor.rgb * 0.25;
+    vec3 env = mix(amb * 0.5, max(sky * 1.3, FL.cloudSky.rgb), smoothstep(-0.4, 0.6, R.y));
+    uint probe = floatBitsToUint(FL.pbr2.w);
+    if ((probe & 0xFFFFFu) != 0u) {
+        uint img = (probe & 0xFFFFFu) - 1u, smp = (probe >> 20) & 0xFFu;
+        vec4 p = textureLod(sampler2D(texImages[img], bindlessSamplers[smp]), EnvAtlasUv(R, level), 0.0);
+        env = mix(env, p.rgb, clamp(p.a, 0.0, 1.0));
+    }
+    return env;
+}
+
 // Normal mapping (F_NORMALMAP): the texture's own tangent-space normal map, OpenGL convention (what Blender bakes:
 // +X along +u, +Y up in the image = against D3D's v). A normal (x, y, z) is the height slope (-x/z, y/z) per world
 // unit along u and down-v; scaled by the world size of a uv unit it bends the normal exactly like the generated
@@ -371,6 +461,13 @@ vec3 NormalMapNormal(vec3 n, vec3 posW, vec2 uv)
     vec3 px = dFdx(posW), py = dFdy(posW);
     float worldPerUv = sqrt(max(dot(px, px), dot(py, py)) / max(max(dot(uvx, uvx), dot(uvy, uvy)), 1e-12));
     return BendNormal(n, px, py, dot(slope, uvx) * worldPerUv, dot(slope, uvy) * worldPerUv);
+}
+
+// Things' shadows fading out as the light nears the horizon (rvk draw.cpp folds it into FL.shadowParams.y: full from
+// ~10 degrees up, none at ~3) - for the uses of the visibility that don't go through that strength.
+float CasterFade()
+{
+    return smoothstep(0.05, 0.17, -normalize(FL.sunDir.xyz + vec3(0.0, 1e-6, 0.0)).y);
 }
 
 float gSunVisibility = 1.0;          // SunVisibility(vPosW, vNormalW) when computed (main)
@@ -404,6 +501,78 @@ float LeafMask()
     return D.leaf.w > 0.0 ? LeafMaskAt(vSet0, vTex0.xy * vec2(textureSize(TEX0, 0))) : 1.0;
 }
 
+// The rain's cover map at a point (rvk sand_map.cpp RainCoverMap, FL.cover): x how sheltered (under a roof 1, a canopy
+// mostly), y how far the ground there lies in a hollow (puddles).
+vec2 RainCoverAt(vec3 p)
+{
+    uint slot = floatBitsToUint(FL.cover.w);
+    if ((slot & 0xFFFFFu) == 0u || FL.cover.z <= 0.0)
+        return vec2(0.0);
+    vec2 uv = (p.xz - FL.cover.xy) * FL.cover.z;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThanEqual(uv, vec2(1.0))))
+        return vec2(0.0);
+    uint img = (slot & 0xFFFFFu) - 1u, smp = (slot >> 20) & 0xFFu;
+    vec4 m = textureLod(sampler2D(texImages[img], bindlessSamplers[smp]), uv, 0.0);
+    // (Linear: a roof's edge softened over a cell. Its solid's top over the point - a hair: the roof's own top is open.)
+    float solid = m.r > -8000.0 ? smoothstep(0.1, 0.5, m.r + FL.wet.w - p.y) : 0.0;
+    float crown = m.g > -8000.0 ? 0.7 * smoothstep(0.1, 0.5, m.g + FL.wet.w - p.y) : 0.0;
+    vec2 edge = min(uv, 1.0 - uv);
+    float inside = smoothstep(0.0, 0.05, min(edge.x, edge.y));
+    return vec2(max(solid, crown) * inside, max(m.a, 0.0) * inside);
+}
+
+float WetHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float WetNoise(vec2 p)
+{
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(WetHash(i), WetHash(i + vec2(1, 0)), f.x), mix(WetHash(i + vec2(0, 1)), WetHash(i + 1.0), f.x), f.y);
+}
+// Raindrops' rings on a puddle: a few drops a cell each time round, a ring spreading and fading (0..1).
+float WetRipples(vec2 xz, float time)
+{
+    float sum = 0.0;
+    for (int k = 0; k < 2; ++k) {
+        vec2 q = xz * 2.2 + float(k) * 0.37;
+        vec2 cell = floor(q);
+        float h = WetHash(cell + float(k) * 13.1);
+        float t = fract(time * 1.3 + h);
+        vec2 at = cell + vec2(WetHash(cell + 3.7 + floor(time * 1.3 + h)), WetHash(cell + 9.1 + floor(time * 1.3 + h)));
+        float r = length(q - at) - t * 0.5;
+        sum += exp(-r * r * 900.0) * (1.0 - t);
+    }
+    return clamp(sum, 0.0, 1.0);
+}
+
+// The game's cloud sheets (MAT_CLOUDSHEET: its flat sky sheets, drawn behind the cloud layer) lit as the layer lights
+// its clouds - the whitened game colour, the sky's light (raised by night), the sun through a thin sheet (bright and
+// silvery towards it, thick parts darker; by night the moon's the same), the sunset's colours and afterglow - and hazed as the layer by the air
+// (the game's fog colour at the horizon, paler above). tex: the sheet's texture (alpha: its shape; colour: shading).
+vec3 CloudSheet(vec4 tex)
+{
+    const vec3 luma = vec3(0.3, 0.59, 0.11);
+    vec3 dir = normalize(vPosW - C.eyePos.xyz);
+    vec3 sunL = normalize(FL.sunTrue.xyz + vec3(0.0, 1e-6, 0.0));
+    float thick = clamp(tex.a, 0.0, 1.0);
+    const float g = 0.6;
+    float phase = min((1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * dot(dir, sunL), 1.5), 8.0);
+    vec3 tint = FL.cloudTint.rgb;
+    vec3 sun = SunLight(sunL) * (0.3 + 0.2 * phase) * (1.0 - 0.45 * thick) * mix(tint, vec3(dot(tint, luma)), 0.5);
+    float moonPhase = min((1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * dot(dir, MoonDir()), 1.5), 8.0);
+    sun += MoonLight() * (0.3 + 0.2 * moonPhase) * (1.0 - 0.45 * thick) * mix(tint, vec3(dot(tint, luma)), 0.5);
+    vec3 sky = FL.cloudSky.rgb * mix(1.0, 0.72, thick) * NightSky() * mix(1.0, 0.7, MoonShare()) * tint;
+    vec3 S = (sun + sky + Afterglow(sunL) * 0.6 * tint) * FL.cloudTint.w * mix(0.8, 1.05, dot(tex.rgb, luma));
+    // Lightning (rvk rain.cpp Lightning): the sheet lit as the cloud layer is (cloud_layer.frag FlashInCloud) - the
+    // sheets sit on the game's small sky, so where this one would be at the clouds' height (~900 over the eye), by
+    // how far across from the strike.
+    if (FL.flash.w > 0.0) {
+        vec2 at = C.eyePos.xz + dir.xz / max(dir.y, 0.08) * 900.0 - FL.flashWorld.xz;
+        S += vec3(0.8, 0.85, 1.0) * tint * (FL.flash.w * 1.2 * (1.0 - 0.3 * thick) / (1.0 + dot(at, at) / (1500.0 * 1500.0)));
+    }
+    float low = HorizonBand(dir, FL.cloudAir.w);
+    return mix(S, AirColour(FL.cloudAir.rgb, low), max(0.25, low));
+}
+
 void main()
 {
     gRecord = vRecord;
@@ -414,7 +583,7 @@ void main()
     // Depth only where the pixel is fully opaque in the end (prepass_cutout.frag): the same alpha as the cut-out test
     // below (texture stages; the lit diffuse keeps the vertex alpha).
     vec4 p0 = Sample(0u), p1 = C.stageA[0].x != 1u ? Sample(1u) : vec4(0.0);
-    float pa = Cascade(p0, p1, 1.0).a;
+    float pa = Cascade(p0, p1, 1.0).a * leafMask;   // (a canopy's thinned cards: none where they are dropped)
     // Where the alpha test passes and, blended (only two-pass foliage's core comes here blended: prepass.cpp), where
     // the core is - its edges write no depth.
     if (((C.flags.x & F_ALPHATEST) != 0u && !AlphaPass(pa)) ||
@@ -443,18 +612,25 @@ void main()
     }
 #endif
     // Shadow: lit draws scale the sunlight (per-pixel lighting), others darken their final colour.
-    float shade = 1.0, localScale = 1.0, texShade = 1.0;
+    float shade = 1.0, localScale = 1.0, texShade = 1.0, flatShade = 1.0;
     if ((C.flags.x & (F_SHADOW | F_SHADOWCOMP | F_SHADOWTEX)) != 0u) {
         gSunVisibility = SunVisibility(vPosW, vNormalW.xyz);
         gSunVisibilityValid = true;
-        shade = 1.0 - (1.0 - gSunVisibility) * FL.shadowParams.y;
+        shade = min(1.0 - (1.0 - gSunVisibility) * FL.shadowParams.y, TerrainShade());
+        flatShade = FlatShade();                  // (all of the light: the clouds' only in part)
     }
     if ((C.flags.x & F_SHADOWCOMP) != 0u) {
-        localScale = 1.0 / max(shade, 0.05);
+        localScale = 1.0 / max(flatShade, 0.05);
         shade = 1.0;
     }
+    // By night the map is the moon's (FL.moon.w): its shadow takes only the moon's light - the ground's lightmap and
+    // ambient (the night's own light, not the moon's) stay.
+    float moonShade = 1.0;
     if ((C.flags.x & F_SHADOWTEX) != 0u) {
-        texShade = shade;
+        if (FL.moon.w > 0.5)
+            moonShade = shade;
+        else
+            texShade = flatShade;
         shade = 1.0;
     }
     bool shadeSun = (C.flags.x & (F_PERPIXEL | F_LIGHTING)) == (F_PERPIXEL | F_LIGHTING);
@@ -509,7 +685,7 @@ void main()
         }
         vec3 ambient = vec3(0.0), diff = vec3(0.0), spec = vec3(0.0), diffL = vec3(0.0), specL = vec3(0.0);
         // Sunlight is shadowed: by the receiver's shade, or in the ground's lighting pass by the lightmap's.
-        float sunScale = (C.flags.x & F_SHADOWTEX) != 0u ? texShade : shadeSun ? shade : 1.0;
+        float sunScale = (C.flags.x & F_SHADOWTEX) != 0u ? texShade * moonShade : shadeSun ? shade : 1.0;
         AccumulateLights(vPosW, n, sunScale, localScale, ambient, diff, spec, diffL, specL);
         // PBR: metals have no diffuse light; the occlusion map takes ambient light away.
         float kd = gPbrOn ? 1.0 - gPbrMetal : 1.0, kAmb = gPbrOn ? kd * gPbrAo : 1.0;
@@ -527,7 +703,7 @@ void main()
             // shadow cascades, whose shadows a low sun makes long), and fading as the sun nears the horizon.
             if (gPbrBase && dot(FL.sunColor.rgb, FL.sunColor.rgb) > 0.0 && dot(FL.sunDir.xyz, FL.sunDir.xyz) > 0.0) {
                 vec3 Ls = -normalize(FL.sunDir.xyz);
-                float sunVis = gSunVisibilityValid ? gSunVisibility : 1.0;
+                float sunVis = (gSunVisibilityValid ? mix(1.0, gSunVisibility, CasterFade()) : 1.0) * TerrainSun(vPosW);
                 float horizon = smoothstep(0.03, 0.25, Ls.y);
                 float baked = smoothstep(0.2, 0.55, dot(Sample(0u).rgb, vec3(0.3, 0.59, 0.11)));
                 gPbrSpec += FL.sunColor.rgb * PbrSpecular(gPbrNormal, Ls, V) * (sunVis * horizon * baked) * FL.pbr.x;
@@ -542,11 +718,11 @@ void main()
         if (dot(FL.sunColor.rgb, FL.sunColor.rgb) > 0.0 && len2 > 0.0) {
             float ndl = max(dot(normalize(n), -normalize(FL.sunDir.xyz)), 0.0);
             if ((C.flags.x & F_SHADOWTEX) != 0u) {
-                gSunShare = 0.6 * ndl * texShade;
+                gSunShare = 0.6 * ndl * texShade * (1.0 - FL.windFrame.z) * (1.0 - 0.65 * FL.rainNear.y);
             } else {
                 const vec3 kLuma = vec3(0.3, 0.59, 0.11);
                 float sunPart = dot(vDiffuse.rgb * FL.sunColor.rgb, kLuma) * ndl * sunScale;
-                gSunShare = clamp(sunPart / max(dot(lit + local, kLuma), 1e-3), 0.0, 1.0);
+                gSunShare = clamp(sunPart * (1.0 - FL.windFrame.z) * (1.0 - 0.65 * FL.rainNear.y) / max(dot(lit + local, kLuma), 1e-3), 0.0, 1.0);
             }
         }
         if ((C.flags.x & F_OVERBRIGHT) != 0u) {
@@ -607,7 +783,7 @@ void main()
         if ((C.flags.x & F_HDR) == 0u) current.rgb = min(current.rgb, vec3(1.0));
     }
     if (!shadeSun)
-        current.rgb *= shade;
+        current.rgb *= FL.moon.w > 0.5 ? mix(1.0, shade, 0.5) : flatShade;   // (by night the moon's: unlit, half of it)
     // Sunlight through leaves: where the sun is behind a leaf (seen from the camera), its light comes through tinted
     // by the leaf, most looking into the sun; other leaves' shadows still block it. Only textures with holes around
     // this point (their coarse mip's alpha) are leaves - not walls drawn the same way.
@@ -622,7 +798,8 @@ void main()
             if (through + glare > 0.0) {
                 // The sun's visibility on the lit side: the shadow already computed for the surface (a second,
                 // opposite-side search only darkened back-lit leaves and cost another few taps).
-                float visible = FL.shadowParams.x <= 0.5 ? 1.0 : gSunVisibilityValid ? gSunVisibility : 1.0;
+                float visible = (FL.shadowParams.x <= 0.5 ? 1.0 : gSunVisibilityValid ? mix(1.0, gSunVisibility, CasterFade()) : 1.0) *
+                                TerrainSun(vPosW);   // (low sun: leaves under the mountains don't glow)
                 current.rgb += t0.rgb * FL.sunColor.rgb * ((0.5 * through + 0.7 * glare) * visible * holes * FL.effects.x);
             }
         }
@@ -657,11 +834,55 @@ void main()
             current.rgb = mix(current.rgb, vec3(peak), core * clamp((bright - 1.0) / 3.0, 0.0, 1.0));
         }
     }
+    // The wet ground (rvk rain.cpp: FL.wet): soaked surfaces darker and reflecting, puddles on the flat in hollows -
+    // not where a roof or a canopy keeps the rain off (the rain's cover map).
+    float wetFlag = uintBitsToFloat(C.vtx.w);
+    float gWetLook = 0.0, gPuddle = 0.0, gWetUp = 0.0;
+    if (wetFlag >= 1.5 && FL.wet.x > 0.0) {
+        vec2 cov = RainCoverAt(vPosW);
+        float open = 1.0 - cov.x;
+        if (open > 0.0) {
+            // (The surface's facing: its own smooth normal; else from its shape - many of the game's are drawn unlit,
+            // without normals - each triangle flat then.)
+            vec3 n = normalize(cross(dFdx(vPosW), dFdy(vPosW)));
+            if (dot(n, C.eyePos.xyz - vPosW) < 0.0) n = -n;
+            if (dot(vNormalW.xyz, vNormalW.xyz) > 0.0) n = normalize(vNormalW.xyz) * (dot(vNormalW.xyz, n) < 0.0 ? -1.0 : 1.0);
+            gWetUp = smoothstep(0.2, 0.85, n.y);
+            gWetLook = FL.wet.x * open * mix(0.35, 1.0, gWetUp);
+            // Puddles: on level ground, where it lies in a hollow (the map's) and the noise says, spreading as they fill.
+            float site = clamp(cov.y * 1.2 + WetNoise(vPosW.xz / 4.5) * 0.7 + WetNoise(vPosW.xz / 1.6 + 7.3) * 0.3 - 0.25, 0.0, 1.0);
+            float fill = FL.wet.y;
+            gPuddle = open * smoothstep(0.8, 0.95, n.y) * smoothstep(1.0 - 0.6 * fill, 1.12 - 0.6 * fill, site) * min(fill * 3.0, 1.0);
+            current.rgb *= (1.0 - 0.35 * gWetLook) * (1.0 - 0.25 * gPuddle);   // (soaked: darker; under water: darker still)
+            // The sky's sheen on it (Fresnel: the more the flatter it is seen) and the sun's (or a flash's) glint - its
+            // own, so the wet shows without the screen-space reflections (the user plays with them off); with them on,
+            // lighter (they reflect the scene over it).
+            vec3 V = normalize(C.eyePos.xyz - vPosW);
+            float fres = 0.02 + 0.98 * pow(1.0 - max(dot(n, V), 0.0), 5.0);
+            float own = FL.rainNear.w > 0.5 ? 0.35 : 1.0;
+            vec3 Rw = reflect(-V, n);
+            vec3 sky = WetReflection(Rw, gPuddle > 0.5 ? 0 : 1);
+            if (FL.flash.w > 0.0) sky += FL.flash.rgb * 0.6;
+            float sheen = gWetLook * gWetUp * (0.06 + 0.55 * fres) + gPuddle * (0.12 + 0.85 * fres);
+            current.rgb = mix(current.rgb, sky, clamp(sheen * own, 0.0, 0.9));
+            vec3 L = -normalize(FL.sunDir.xyz + vec3(0.0, -1e-6, 0.0));
+            float glint = pow(max(dot(reflect(-V, n), L), 0.0), mix(40.0, 400.0, gPuddle));
+            current.rgb += FL.sunColor.rgb * (glint * (0.4 * gWetLook * gWetUp + 2.0 * gPuddle) * (0.3 + fres));
+            // Rain on the puddles: rings spreading, glinting with the sky's light.
+            if (gPuddle > 0.0 && FL.rainNear.y + FL.wet.x > 0.0)
+                current.rgb += C.fogColor.rgb * (0.25 * gPuddle * WetRipples(vPosW.xz, FL.wet.z) * min(FL.wet.x * 2.0, 1.0));
+#ifdef RVK_GLOW
+            albedo *= (1.0 - 0.35 * gWetLook) * (1.0 - 0.4 * gPuddle);
+#endif
+        }
+    }
 #ifdef RVK_GLOW
     // How much the surface reflects (screen-space reflections): the draw's own, or its wet look where it faces up.
     float reflectivity = uintBitsToFloat(C.vtx.z), wet = uintBitsToFloat(C.vtx.w);
+    if (wet >= 1.5) wet -= 2.0;                    // (the draw may get wet: above)
     if (wet > 0.0 && dot(vNormalW.xyz, vNormalW.xyz) > 0.0)
         reflectivity = max(reflectivity, wet * smoothstep(0.7, 0.95, normalize(vNormalW.xyz).y));
+    reflectivity = max(reflectivity, max(0.3 * gWetLook * gWetUp, 0.85 * gPuddle));   // (the rain's wet ground, puddles)
     // PBR: smooth surfaces reflect the scene (metals most); rough ones only their ambient environment.
     if (gPbrOn)
         reflectivity = max(reflectivity, FL.pbr.z * (1.0 - smoothstep(0.1, 0.55, gPbrRough)) * mix(0.12, 0.9, gPbrMetal));
@@ -669,7 +890,14 @@ void main()
     if (gPbrOn && !gPbrBase)
         albedo *= (1.0 - gPbrMetal) * gPbrAo;
 #endif
-    if ((C.flags.x & F_FOG) != 0u) {
+    // The game's cloud sheets: coloured as the cloud layer's clouds, hazed by its air (not the game's fog).
+    // (Strength 0 - a clear sky's (rvk sky.cpp) - they vanish; not drawn as the game draws them.)
+    bool cloudSheet = (D.mat.z & MAT_CLOUDSHEET) != 0u;
+    if (cloudSheet) {
+        current.rgb = CloudSheet(Sample(0u));
+        current.a = clamp(current.a * FL.cloudSky.w, 0.0, 1.0);
+    }
+    if ((C.flags.x & F_FOG) != 0u && !cloudSheet) {
         float f = vFogFactor;
         uint table = C.flags.z;
         if (table != 0u) {
@@ -749,6 +977,14 @@ void main()
         current.rgb *= 0.5;                               // blended as dst * src * 2
     if ((C.flags.w & 256u) != 0u)
         current.a = 1.0;                                  // the interface layer: a replacing draw covers fully
+    // RVK_ShadowView (debug): the sun shadow map's say at each point - white lit, dark shadowed by things - tinted by
+    // the cascade it came from (red nearest, green, blue, yellow widest); grey where no shadow was looked up.
+    if (FL.terrainSun2.w > 0.5 && (C.flags.w & 256u) == 0u) {
+        const vec3 tints[4] = vec3[4](vec3(1.0, 0.45, 0.45), vec3(0.45, 1.0, 0.45), vec3(0.5, 0.6, 1.0), vec3(1.0, 1.0, 0.4));
+        vec3 tint = gShadowCascade >= 0 ? tints[min(gShadowCascade, 3)] : vec3(0.5);
+        float vis = gSunVisibilityValid ? gCasterVisibility : 0.6;
+        current.rgb = tint * mix(0.08, 1.0, vis);
+    }
     outColor = current;
 }
 #endif

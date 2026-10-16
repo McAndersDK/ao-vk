@@ -284,7 +284,7 @@ void __fastcall ProcessAttractorChilds(uint8_t* mesh, void*, int32_t mode, float
 
 void Install(HMODULE orig)
 {
-    if (GetMode("CatQuery", Mode::Off) != Mode::On)
+    if (GetMode("CatQuery", Mode::On) != Mode::On)
         return;
     g_orig = orig;
     g_noRadius = *reinterpret_cast<const float*>(reinterpret_cast<uint8_t*>(orig) + 0x95E5C);

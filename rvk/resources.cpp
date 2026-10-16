@@ -455,6 +455,19 @@ void Device::UpdateTexture(Texture* t, uint32_t level, uint32_t x, uint32_t y, u
     if (!t || !t->m_image || level >= t->m_levels || !width || !height)
         return;
     uint32_t rowBytes = FormatRowBytes(t->m_format, width), rows = FormatRows(t->m_format, height);
+    ++t->m_uploads;
+    t->m_uploadFrame = m_frameNumber;
+    if (level == 0 && x == 0 && y == 0 && width >= t->m_width && height >= t->m_height) {
+        t->m_level0NonZero = ~0u;
+        if (uint64_t(rowBytes) * rows <= 256 * 256 * 4) {
+            uint32_t n = 0;
+            for (uint32_t r = 0; r < rows; ++r) {
+                const uint8_t* row = static_cast<const uint8_t*>(data) + size_t(r) * pitch;
+                for (uint32_t i = 0; i < rowBytes; ++i) n += row[i] != 0;
+            }
+            t->m_level0NonZero = n;
+        }
+    }
 
     // Whether the texture is fully opaque, for the static-draw opaque fast path (Draw): only a full level-0 upload
     // proves it; a partial update makes it unknown again.
@@ -462,6 +475,8 @@ void Device::UpdateTexture(Texture* t, uint32_t level, uint32_t x, uint32_t y, u
         if (x == 0 && y == 0 && width >= t->m_width && height >= t->m_height &&
             pitch >= FormatRowBytes(t->m_format, t->m_width))
             t->m_opaque = PixelsOpaque(t->m_format, data, t->m_width, t->m_height, pitch);
+        else if (x == 0 && width >= t->m_width && y + height <= t->m_height)   // whole rows: still opaque if they are
+            t->m_opaque = t->m_opaque && PixelsOpaque(t->m_format, data, t->m_width, height, pitch);
         else
             t->m_opaque = false;
         // The colour grid the ground-grass classification reads (grass.cpp): a full level-0 upload only.
@@ -540,10 +555,16 @@ void Device::DestroyTexture(Texture* texture)
         return;
     for (auto& t : m_textures)
         if (t == texture) t = nullptr;
+    for (auto& l : m_heldLabels)                 // (a label held back for after the post passes)
+        for (auto& t : l.textures)
+            if (t == texture) t = nullptr;
     if (m_target == texture)
         SetRenderTarget(nullptr);
     ForgetCasterTexture(texture);
-    for (Texture** map : {&texture->m_normalMap, &texture->m_ormMap, &texture->m_albedoMap, &texture->m_emissiveMap})
+    for (const CloudPuff& p : m_cloudPuffsLast)
+        if (p.texture == texture) { m_cloudPuffsLast.clear(); break; }   // (kept for frames without the sky's puffs)
+    for (Texture** map : {&texture->m_normalMap, &texture->m_ormMap, &texture->m_albedoMap, &texture->m_emissiveMap,
+                          &texture->m_leafArt, &texture->m_leafArtNormal})
         if (*map) {
             DestroyTexture(*map);
             *map = nullptr;
@@ -583,6 +604,18 @@ void Device::SetEmissiveMap(Texture* texture, Texture* emissive)
         DestroyTexture(texture->m_emissiveMap);
     texture->m_emissiveMap = emissive;
     m_constantsDirty = true;
+}
+
+void Device::SetLeafArt(Texture* texture, Texture* atlas, Texture* normal)
+{
+    if (!texture)
+        return;
+    for (auto [map, now] : {std::pair{&texture->m_leafArt, atlas}, std::pair{&texture->m_leafArtNormal, normal}})
+        if (*map != now) {
+            if (*map) DestroyTexture(*map);
+            *map = now;
+        }
+    ++texture->m_leafArtVersion;
 }
 
 void Device::SetPbr(const PbrSettings& s)
