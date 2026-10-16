@@ -2938,6 +2938,9 @@ private:
     VkBuffer m_nullBuffer = VK_NULL_HANDLE;    // zeros, bound at stride 0 for attributes a format lacks
     VmaAllocation_T* m_nullAllocation = nullptr;
     Texture* m_blackTexture = nullptr;         // what an unbound stage samples
+    Texture* m_blueNoise = nullptr;            // 64 x 64 blue noise (r; g the same shifted half a tile): the cloud
+                                               // march's offsets (clouds.cpp CreateBlueNoise)
+    Texture* CreateBlueNoise();
     std::unordered_map<uint64_t, VkSampler> m_samplers;
 
     std::string m_screenshotPath;

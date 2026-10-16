@@ -187,6 +187,7 @@ Device::~Device()
         if (f.imageAvailable) vkDestroySemaphore(m_device, f.imageAvailable, nullptr);
     }
     if (m_blackTexture) DestroyTextureNow(m_blackTexture);
+    if (m_blueNoise) DestroyTextureNow(m_blueNoise);
     if (m_flatNormal) DestroyTextureNow(m_flatNormal);
     for (auto& [key, sampler] : m_samplers) vkDestroySampler(m_device, sampler, nullptr);
     for (VkPipeline p : m_pipelines) if (p) vkDestroyPipeline(m_device, p, nullptr);
@@ -273,7 +274,8 @@ bool Device::Init(HWND window, uint32_t width, uint32_t height, std::string* err
     m_blackTexture = CreateTexture(1, 1, &black);
     uint32_t flat = 0xFF8080FF;                  // (0.5, 0.5, 1): the unbent normal
     m_flatNormal = CreateTexture(1, 1, &flat);
-    return m_blackTexture != nullptr && m_flatNormal != nullptr;
+    m_blueNoise = CreateBlueNoise();
+    return m_blackTexture != nullptr && m_flatNormal != nullptr && m_blueNoise != nullptr;
 }
 
 namespace {

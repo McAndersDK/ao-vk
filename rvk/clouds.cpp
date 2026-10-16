@@ -8,10 +8,12 @@
 #include "internal.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace rvk {
 
@@ -488,12 +490,13 @@ bool Device::CreateCloudResources(std::string* error)
     const VkShaderStageFlags frag = VK_SHADER_STAGE_FRAGMENT_BIT;
     const VkDescriptorSetLayoutBinding wb[2] = {{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, frag, nullptr},
                                                 {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, frag, nullptr}};
-    const VkDescriptorSetLayoutBinding lb[6] = {{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, frag, nullptr},
+    const VkDescriptorSetLayoutBinding lb[7] = {{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, frag, nullptr},
                                                 {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, frag, nullptr},
                                                 {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, frag, nullptr},
                                                 {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, frag, nullptr},
                                                 {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, frag, nullptr},
-                                                {5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, frag, nullptr}};
+                                                {5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, frag, nullptr},
+                                                {6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, frag, nullptr}};
     const VkFormat weatherFormat = GetFormatInfo(Format::RGBA8).vk;
     const VkDescriptorSetLayoutBinding rb[3] = {{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, frag, nullptr},
                                                 {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, frag, nullptr},
@@ -502,7 +505,7 @@ bool Device::CreateCloudResources(std::string* error)
            setLayout(rb, 3, &m_cloudResolveSetLayout, &m_cloudResolveLayout) &&
            pipeline(kFullscreenVertSpirv, sizeof(kFullscreenVertSpirv), kCloudResolveFragSpirv, sizeof(kCloudResolveFragSpirv),
                     m_cloudResolveLayout, &halfFormat, 1, VK_FORMAT_UNDEFINED, &m_cloudResolvePipeline) &&
-           setLayout(lb, 6, &m_cloudLayerSetLayout, &m_cloudLayerLayout) &&
+           setLayout(lb, 7, &m_cloudLayerSetLayout, &m_cloudLayerLayout) &&
            // (Written whole: blended over with alpha 1 / over a cleared target.)
            pipeline(kFullscreenVertSpirv, sizeof(kFullscreenVertSpirv), kCloudWeatherFragSpirv, sizeof(kCloudWeatherFragSpirv),
                     m_cloudWeatherLayout, &weatherFormat, 1, VK_FORMAT_UNDEFINED, &m_cloudWeatherPipeline) &&
@@ -514,6 +517,83 @@ bool Device::CreateCloudResources(std::string* error)
            pipeline(kFullscreenVertSpirv, sizeof(kFullscreenVertSpirv), kCloudLayerSunRayFragSpirv,
                     sizeof(kCloudLayerSunRayFragSpirv), m_cloudLayerLayout, &shadowFormat, 1, VK_FORMAT_UNDEFINED,
                     &m_cloudSunRayPipeline);
+}
+
+// Blue noise (void and cluster, Ulichney 1993): 64 x 64 ranks whose every threshold is evenly spread - no clumps, no
+// gaps - so the cloud march's start offsets differ between neighbours as much as they can (interleaved gradient noise
+// left its diagonal lines in the clouds' edges: banding - vertexfragment.com "volumetric cloud banding"). Made once at
+// start (~20 ms); r the ranks, g the same half a tile over (the sun march's).
+Texture* Device::CreateBlueNoise()
+{
+    const auto begin = std::chrono::steady_clock::now();
+    constexpr int kN = 64, kAll = kN * kN;
+    // A gaussian (sigma 1.9) on the torus, as offsets.
+    std::vector<float> g(kAll);
+    for (int y = 0; y < kN; ++y)
+        for (int x = 0; x < kN; ++x) {
+            const int dx = std::min(x, kN - x), dy = std::min(y, kN - y);
+            g[y * kN + x] = std::exp(-float(dx * dx + dy * dy) / (2.0f * 1.9f * 1.9f));
+        }
+    std::vector<uint8_t> on(kAll, 0);
+    std::vector<float> energy(kAll, 0.0f);
+    auto toggle = [&](int i, bool set) {
+        on[size_t(i)] = set ? 1 : 0;
+        const int ix = i % kN, iy = i / kN;
+        const float sign = set ? 1.0f : -1.0f;
+        for (int y = 0; y < kN; ++y) {
+            const float* row = &g[size_t(((y - iy + kN) % kN) * kN)];
+            float* e = &energy[size_t(y * kN)];
+            for (int x = 0; x < kN; ++x) e[x] += sign * row[(x - ix + kN) % kN];
+        }
+    };
+    auto tightest = [&](uint8_t want) {          // (the most crowded of the set, or the emptiest of the unset)
+        int best = -1;
+        for (int i = 0; i < kAll; ++i)
+            if (on[size_t(i)] == want && (best < 0 || (want ? energy[size_t(i)] > energy[size_t(best)] : energy[size_t(i)] < energy[size_t(best)])))
+                best = i;
+        return best;
+    };
+    // A random tenth set, then evened out: the most crowded moved to the emptiest until it stays.
+    uint32_t seed = 0x9E3779B9u;
+    auto rnd = [&]() { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; return seed; };
+    const int initial = kAll / 10;
+    for (int k = 0; k < initial;) {
+        const int i = int(rnd() % uint32_t(kAll));
+        if (!on[size_t(i)]) { toggle(i, true); ++k; }
+    }
+    for (int guard = 0; guard < kAll; ++guard) {
+        const int c = tightest(1);
+        toggle(c, false);
+        const int v = tightest(0);
+        if (v == c) { toggle(c, true); break; }
+        toggle(v, true);
+    }
+    const std::vector<uint8_t> start = on;
+    const std::vector<float> startEnergy = energy;
+    std::vector<int> rank(kAll, 0);
+    // The initial points ranked down (the most crowded taken away last-first), the rest ranked up into the emptiest.
+    for (int r = initial - 1; r >= 0; --r) {
+        const int c = tightest(1);
+        rank[size_t(c)] = r;
+        toggle(c, false);
+    }
+    on = start;
+    energy = startEnergy;
+    for (int r = initial; r < kAll; ++r) {
+        const int v = tightest(0);
+        rank[size_t(v)] = r;
+        toggle(v, true);
+    }
+    std::vector<uint32_t> px(kAll);
+    for (int y = 0; y < kN; ++y)
+        for (int x = 0; x < kN; ++x) {
+            const uint32_t r = uint32_t(rank[size_t(y * kN + x)] * 256 / kAll);
+            const uint32_t s2 = uint32_t(rank[size_t(((y + kN / 2) % kN) * kN + (x + kN / 2 + 7) % kN)] * 256 / kAll);
+            px[size_t(y * kN + x)] = 0xFF000000u | (r << 16) | (s2 << 8);
+        }
+    Log("startup: blue noise %d ms", int(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                          std::chrono::steady_clock::now() - begin).count()));
+    return CreateTexture(kN, kN, px.data());
 }
 
 void Device::DestroyCloudResources()
@@ -1586,9 +1666,10 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     VkDescriptorImageInfo detailInfo{m_cloudRepeatSampler, m_cloudDetail.view, VK_IMAGE_LAYOUT_GENERAL};
     VkDescriptorImageInfo depthInfo{m_pointSampler, skipCovered ? m_depthView : m_blackTexture->m_view,
                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet w[6] = {};
-    const VkDescriptorImageInfo* images[6] = {nullptr, &weatherInfo, &shapeInfo, &depthInfo, nullptr, &detailInfo};
-    for (uint32_t i = 0; i < 6; ++i) {
+    VkDescriptorImageInfo blueInfo{m_pointSampler, m_blueNoise->m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet w[7] = {};
+    const VkDescriptorImageInfo* images[7] = {nullptr, &weatherInfo, &shapeInfo, &depthInfo, nullptr, &detailInfo, &blueInfo};
+    for (uint32_t i = 0; i < 7; ++i) {
         w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[i].dstBinding = i;
         w[i].descriptorCount = 1;
@@ -1597,7 +1678,7 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     }
     w[0].pBufferInfo = &blockInfo;
     w[4].pBufferInfo = &lightsInfo;
-    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudLayerLayout, 0, 6, w);
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_cloudLayerLayout, 0, 7, w);
     vkCmdDraw(cmd, 3, 1, 0, 0);
 }
 
@@ -1663,7 +1744,14 @@ Texture* Device::ReusedCloudLayer(VkCommandBuffer cmd, bool skipCovered, const f
     rf.sub[0] = o[0];
     rf.sub[1] = o[1];
     rf.sub[2] = valid ? 1.0f : 0.0f;
-    rf.sub[3] = 0.4f;
+    // (A still view: more of the history - each pixel's march offset averaged over more frames, smoother edges; turning,
+    // less, so nothing trails.)
+    {
+        float turn = 0.0f;
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j) turn += std::fabs(rotation.m[i][j] - m_cloudPrevRotation.m[i][j]);
+        rf.sub[3] = turn < 0.003f ? 0.2f : 0.4f;
+    }
     {   // (During a lightning flash the fresh pixels as they are: its strokes last a few frames, not smeared over more.)
         float flash[4], view[4], proj[4], world[4];
         Lightning(flash, view, proj, world);

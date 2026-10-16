@@ -37,6 +37,7 @@ layout(set = 0, binding = 1) uniform sampler2D weatherMap;
 layout(set = 0, binding = 2) uniform sampler3D shapeNoise;
 layout(set = 0, binding = 3) uniform sampler2D sceneDepth;  // the pre-pass's (L.weather.w): only where it is clear
 layout(set = 0, binding = 5) uniform sampler3D detailNoise;
+layout(set = 0, binding = 6) uniform sampler2D blueNoise;   // 64 x 64 (rvk clouds.cpp CreateBlueNoise): the march's offsets
 
 layout(location = 0) out vec4 outScene;
 
@@ -387,7 +388,10 @@ void main()
     gInner = R + (L.layer.x - eye.y);
     float outer = R + (L.layer.y - eye.y);
     gThick = outer - gInner;
-    float jitter = fract(52.9829189 * fract(dot(hp, vec2(0.06711056, 0.00583715))) + FL.taa.z);
+    // (Blue noise, moved on each frame by the golden ratio - FL.taa.z - for the history to average: neighbours start
+    // their marches as differently as can be, no lines of it in the clouds' edges.)
+    vec2 blue = texelFetch(blueNoise, ivec2(hp) & 63, 0).rg;
+    float jitter = fract(blue.r + FL.taa.z);
     vec4 deck = Deck(eye, dir, jitter);          // (below the layer: in front of it, looking up)
     vec2 si = Sphere(eye, dir, gCentre, gInner), so = Sphere(eye, dir, gCentre, outer);
     float r0 = length(eye - gCentre);
@@ -434,39 +438,59 @@ void main()
     float baseThick = min(gThick, 1300.0);
     float minStep = baseThick * 0.012, along = (t1 - t0) / float(steps);
     float t = t0 + jitter * clamp(t0 * 0.012, minStep, along);
-    float lightJitter = fract(jitter * 1.6180339 + 0.37);   // (the sun's steps moved too: no shells of light)
-    bool clearBefore = false;
-    for (int i = 0; i < steps && transmit > 0.01 && t < t1; ++i) {
-        float dt = clamp(t * 0.012, minStep, max(along, minStep));
+    float lightJitter = fract(blue.g + FL.taa.z);   // (the sun's steps moved too: no shells of light)
+    // Adaptive steps (vertexfragment.com "volumetric cloud banding", after Horizon Zero Dawn): long steps through clear
+    // air; at the first cloud a quarter of the step, three of them back (the edge lies before the sample), and small
+    // steps on until kFine samples without cloud. Only the ray's first cloud - the outline seen: refining every gap
+    // inside ragged storm cloud cost ~+0.9 ms in game.
+    // (Inside the cloud back to long steps after kFineMax small ones: its edge is what bands, and thick cloud soon
+    // stops the march anyway.)
+    const int kFine = 3, kFineMax = 8;
+    int fineLeft = 0, fineMax = 0;               // (small steps: samples left without cloud; small steps left at all)
+    bool wasClear = true;                        // (the last sample clear air: the next cloud is an edge)
+    bool refined = false;                        // (the first edge found)
+    float odLast = -1.0;                         // (the last sample's way to the sun)
+    for (int i = 0; i < steps + 8 && transmit > 0.01 && t < t1; ++i) {
+        float big = clamp(t * 0.012, minStep, max(along, minStep));
+        bool fine = fineLeft > 0 && fineMax > 0;
+        float dt = fine ? big * 0.25 : big;
         vec3 p = eye + dir * t;
-        t += dt;
         float d = Density(p, true);
+        if (fine) --fineMax;
         if (d <= 0.001) {
-            t += dt;                             // (clear air: on twice as far)
-            clearBefore = true;
+            if (fine) --fineLeft;
+            wasClear = true;
+            t += fine ? dt : 2.0 * dt;           // (clear air: on twice as far)
             continue;
         }
-        if (clearBefore) {
-            // Into the cloud after a long step through clear air: it may begin a step back - look there (its edge
-            // otherwise stepped, the same for a whole patch of sky).
-            clearBefore = false;
-            vec3 pb = p - dir * dt;
-            float db = Density(pb, true);
-            if (db > 0.001) { p = pb; d = db; t -= dt; }
+        if (wasClear && !fine && !refined) {
+            // The edge: back three small steps (still after the last, clear, sample) and look again from there.
+            wasClear = false;
+            refined = true;
+            fineLeft = kFine;
+            fineMax = kFineMax;
+            t = max(t - 3.0 * big * 0.25, t0);
+            continue;
         }
+        wasClear = false;
+        if (fine) fineLeft = kFine;
+        t += dt;
         float tHere = t - dt;
-        // The sun through the cloud: a few steps towards it, longer each (far off, fewer and longer).
-        float od = 0.0;
+        // The sun through the cloud: a few steps towards it, longer each (far off, fewer and longer). (Small steps at
+        // an edge: every other one keeps the last - a quarter step away, the light hardly differs.)
+        bool reuse = fine && (fineMax & 1) == 1 && odLast >= 0.0;
+        float od = reuse ? odLast : 0.0;
         bool far = tHere > 8000.0;
         int lightSteps = far ? 2 : int(L.view.w);
         float ls = baseThick * (far ? 0.1 : 0.045), grow = far ? 2.2 : 1.5;
         vec3 lp = p + sunL * (ls * (lightJitter - 0.5));
-        for (int k = 0; k < lightSteps; ++k) {
+        for (int k = 0; k < lightSteps && !reuse; ++k) {
             lp += sunL * ls;
             od += Density(lp, false) * ls;
             ls *= grow;
         }
-        od *= sigma;
+        if (!reuse) od *= sigma;
+        odLast = od;
         // Several scattering orders (each dimmer, reaching deeper, less forward): light inside thick cloud; a strong
         // forward lobe - the silver edges looking towards the sun.
         float sun = 0.0;
