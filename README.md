@@ -119,10 +119,10 @@ Spell effects with GPU particles, and depth of field.
 - Light override: every nearby light lights every surface (the game picks at most 8 lights per object, so the
   ground and big objects often missed the lights around you). Up to 64 lights a frame.
 - Separate intensity sliders for lamps and for the lights characters carry (your own included).
-- Generated surface relief: normal maps derived from each texture's brightness, the ground included.
+- Generated bump maps: normal maps derived from each texture's brightness, the ground included.
 - Side-loaded material maps for individual game textures (`randy-vk\materials\`, see `docs/materials.md`): normal
-  maps, PBR materials (roughness / metallic / occlusion: GGX highlights, metals, reflections) and replacement
-  textures.
+  maps, PBR materials (roughness / metallic / occlusion: GGX highlights, metals, reflections) and enhanced
+  textures (the Renderer tab's **Materials** section).
 - Sunlight shining through leaves and grass.
 - Anisotropic filtering.
 
@@ -364,6 +364,8 @@ off by default. **Advanced**, right after it: every slider and choice, grouped b
 `randy-vk.ini` made while the game runs apply too, within half a second (the options window shows them once
 reopened). A few debugging switches are set in `randy-vk.ini` only and don't appear in the window:
 `RVK_PbrDebug` (also Ctrl+Shift+K), `RVK_ShadowView`, `RVK_Occlusion`, `RVK_TimeOfDay` and `RVK_TimeSpeed`.
+So are minor switches and most of the experimental features' tuning (`kHidden` in `proxy/ddraw/rvk_settings.cpp`):
+the window keeps one switch per feature and the sliders that matter; the rest still work from `randy-vk.ini`.
 
 Some useful ones:
 
@@ -375,7 +377,7 @@ Some useful ones:
 | `RVK_PtShadows` / `RVK_PtRes` | 8 / 512 | how many lights cast point shadows, and their resolution |
 | `RVK_PtLight` | 0.3 | brightness of lamps, fires and other lights |
 | `RVK_CharLight` | 0.25 | brightness of lights characters carry (your own included) |
-| `RVK_TessOn`, `RVK_Tess*` | on | rounder characters: roundness, detail, distance |
+| `RVK_TessOn`, `RVK_Tess*` | on | tessellation (rounder characters): roundness, detail, distance |
 | `RVK_FoliageLod` | 35 | distance from which foliage is shaded cheaply |
 | `RVK_GrassOn` | 1 | our own ground grass: procedural blades over the terrain (off = the game's foliage only; needs HDR) |
 | `RVK_GrassTex` | 1 | grass only where the ground's own texture is green (not on sand, brick, roads) |
