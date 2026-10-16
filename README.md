@@ -139,7 +139,7 @@ Spell effects with GPU particles, and depth of field.
   they are drawn.
 - Moonlight at night lights the land and casts shadows.
 - Shadows fade out as the sun nears the horizon, and a low sun no longer lights what the hills hide from it (valleys
-  under mountains stay in shade; Experimental section, on by default).
+  under mountains stay in shade; on by default).
 
 **Effects**
 - The scene is drawn off-screen with colours brighter than white, then tone mapped (with exposure control)
@@ -165,7 +165,7 @@ Spell effects with GPU particles, and depth of field.
 - Darker nights, lit by the moon, with lamps and windows glowing (`RVK_NightDark`: 0 as the game, 1 moonlit, 2 dark).
 - The ships over the cities hazed into the distance instead of cut off.
 
-**Clouds, rain and smoke** (Experimental section, off by default)
+**Clouds, rain and smoke** (on by default; sections Sky, Weather and Smoke)
 - Volumetric clouds: a cloud layer over the sky that follows the game's own clouds and weather, from scattered
   clouds on dry days to overcast and a low grey deck in rain, each zone with its own climate (deserts clearer,
   coasts and forests cloudier), lit by the sun and the moon, sunset-coloured, casting drifting shadows on the
@@ -188,10 +188,10 @@ Spell effects with GPU particles, and depth of field.
 - Big plant quads are split near characters so they bend smoothly instead of tilting as one piece.
 - Distant foliage is shaded more cheaply (a level of detail), for speed in grassy areas.
 - No grass grows under objects lying on the ground (platforms, floors, road pieces).
-- Leaves on trees, shrubs and palms (Experimental section, off by default): sprigs of leaves flutter on the branches,
+- Leaves on trees, shrubs and palms (on by default): sprigs of leaves flutter on the branches,
   catch the sun, cast shadows, and fall in gusts.
 
-**Water** (Experimental section, off by default)
+**Water** (on by default)
 - The game's flat water is replaced by a real surface: waves (a gentle ripple on ponds, a swell on the open sea),
   small ripples, refraction of what is under it, water that gets deeper in colour the deeper it is, caustics on the
   bottom, reflections of the scene and the sky with a sun glint, foam along shores, and the game's fog.
@@ -207,7 +207,8 @@ Spell effects with GPU particles, and depth of field.
 
 **Presets**
 - One click in the Renderer tab: **Original** (every enhancement off), **Classic+** (the game's look, lit and
-  shadowed better), **Modern** (the defaults) or **Ultra** (everything turned up). Changing any setting by hand
+  shadowed better; the new clouds, weather, smoke, water, leaves and grass off), **Modern** (the defaults) or **Ultra**
+  (Modern's look with cloud, smoke and water quality, shadows, AO and grass turned up). Changing any setting by hand
   makes it **Custom**. To keep a setup of your own, back up `randy-vk.ini`.
 
 **Characters**
@@ -361,12 +362,11 @@ Delete ao-vk's `randy31.dll`, rename `randy31_orig.dll` back to `randy31.dll`, a
 All settings live in `randy-vk.ini` (section `[Renderer]`; the native code's switches in `[Native]`, above) and are
 saved whenever they change. With AOReloaded they
 appear in the game's options window (F10) in two tabs. **Renderer**: the presets first, then every feature as an
-on/off checkbox; new, unfinished features sit in their own **Experimental** block just under the feature switches,
-off by default. **Advanced**, right after it: every slider and choice, grouped by feature. Changes apply immediately. Edits to the `[Renderer]` section of
+on/off checkbox, by section. **Advanced**, right after it: every slider and choice, grouped by feature. Changes apply immediately. Edits to the `[Renderer]` section of
 `randy-vk.ini` made while the game runs apply too, within half a second (the options window shows them once
 reopened). A few debugging switches are set in `randy-vk.ini` only and don't appear in the window:
 `RVK_PbrDebug` (also Ctrl+Shift+K), `RVK_ShadowView`, `RVK_Occlusion`, `RVK_TimeOfDay` and `RVK_TimeSpeed`.
-So are minor switches and most of the experimental features' tuning (`kHidden` in `proxy/ddraw/rvk_settings.cpp`):
+So are minor switches and most of the clouds', weather's, smoke's, water's and leaves' tuning (`kHidden` in `proxy/ddraw/rvk_settings.cpp`):
 the window keeps one switch per feature and the sliders that matter; the rest still work from `randy-vk.ini`.
 
 Some useful ones:
@@ -393,7 +393,7 @@ Some useful ones:
 | `RVK_GrassTrail` | 1 | grass trodden by characters stays down a few seconds behind them (needs `RVK_PushOn`) |
 | `RVK_GrassShadow` | 1 | grass blades cast the sun's shadow near the camera, onto the ground and each other (needs `RVK_SunShadow`) |
 | `RVK_GrassEven` | 1 | an even grass colour: one green (1) rather than the colours of the ground under each blade (0) |
-| `RVK_WaterOn` | 0 | the new water (off = the game's own). Experimental: off by default |
+| `RVK_WaterOn` | 1 | the new water (off = the game's own) |
 | `RVK_WaterStyle` | 0.5 | 0 = the game's water made richer, 1 = realistic |
 | `RVK_WaterQual` | 2 | 1 low, 2 medium, 3 high: surface detail and reflection quality |
 | `RVK_WaterWaves` / `RVK_WaterRipple` | 0.3 / 1 | wave height, small ripples |
@@ -405,10 +405,10 @@ Some useful ones:
 | `RVK_WaterSheen` / `RVK_WaterSpark` | 1 / 1 | waterfalls: how much their clear water reflects (up to 2), their sparkles of sunlight and lamplight (0 = none) |
 | `RVK_WaterSpray` / `RVK_WaterChurn` | 1 / 1 | waterfalls: the spray and mist at their foot, the pool churned and foaming where they land (0 = none) |
 | `RVK_WaterSpeed` | 1.75 | waterfalls: how fast the water falls (1 = as fast as real water would for the game's units in metres) |
-| `RVK_WeatherOn` | 0 | the new weather: rvk draws the game's rain instead of it. Experimental: off by default |
+| `RVK_WeatherOn` | 1 | the new weather: rvk draws the game's rain instead of it |
 | `RVK_RainForce` / `RVK_RainAmount` / `RVK_RainSplash` | 0 / 1 / 1 | rain this hard whatever the game's weather (0 = the game's; for trying it), how many drops, how many splashes where it lands; rain rings on water come with it |
 | `RVK_RainBright` | 1 | how bright the rain and its splashes are |
-| `RVK_SmokeOn` | 0 | simulated smoke: a fluid simulated round each smoke source, lit by the sun and the lamps. Experimental: off by default |
+| `RVK_SmokeOn` | 1 | simulated smoke: a fluid simulated round each smoke source, lit by the sun and the lamps |
 | `RVK_SmokeQual` / `RVK_SmokeRes` / `RVK_SmokeThick` | 2 / 12 / 1 | its grid: cells per world unit of a source's box (a long-lived source's taller box gets more), at most 64 / 96 / 128 a side (quality 1 / 2 / 3); how thick it is (up to 8) |
 | `RVK_SmokeLife` | 1 | how long the smoke lasts, times the game's (0.25 - 4): longer is taller and thicker |
 | `RVK_SmokeStir` | 1 | how much characters stir it: walking through pushes it aside and leaves eddies (0: not at all) |
