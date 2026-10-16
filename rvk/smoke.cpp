@@ -14,7 +14,7 @@
 // The sand volume (RVK_SandBlow, in a sand or ash storm - the game's tint, wind.cpp): one more volume, round the camera,
 // with no source: the storm's wind blows through it, bringing sand in over its walls in streaks; the ground under it
 // (the ground grass captures; flat under the camera's character without it) is solid and gives sand off where it is
-// bare, skimming along it; now and then a dust devil whirls some up; characters' feet kick it up. It moves with the
+// bare, skimming along it; characters' feet kick it up. It moves with the
 // camera a whole cell at a time, its floor under the lowest ground in it.
 #include "internal.h"
 
@@ -77,7 +77,7 @@ constexpr size_t kSandColumnFloats = 12;            // how fast its sand settles
 // The sand volume's block (smoke_sim.comp Sand, std430), then its columns' ground (2 floats each); a smoke volume's
 // all 0.
 struct SandHeader {
-    float corner[4], wind[4], air[4], devil[4], devil2[4], devil3[4], streaks[4];
+    float corner[4], wind[4], air[4], feet[4], streaks[4];
 };
 
 // The sand volume's cells a side: RVK_SandRes, or by RVK_SmokeQual.
@@ -105,15 +105,6 @@ float SandLit(const float colour[3], int i)
     const float luma = 0.3f * colour[0] + 0.59f * colour[1] + 0.11f * colour[2];
     return 1.5f * (colour[i] + (luma - colour[i]) * 0.3f);
 }
-
-uint32_t NextRandom(uint32_t& x)
-{
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    return x;
-}
-float Random01(uint32_t& x) { return float(NextRandom(x) >> 8) / 16777216.0f; }
 
 // The storm's wind through the sand volume (world / s, x z): ~3.5 on a calm day's x1 .. ~10 in a full storm, rising and
 // falling.
@@ -757,11 +748,10 @@ void Device::MakeSandGround(const float corner[3], float size, uint32_t n)
 }
 
 // The sand volume (RVK_SandBlow): kept round the camera while a sand or ash storm blows; when it ends the volume is let
-// go (it fades as a gone source's). Its dust devil comes and goes.
+// go (it fades as a gone source's).
 void Device::UpdateSandVolume(double now, float dt)
 {
     if (!SandActive()) {
-        m_sandDevil.life = 0.0f;
         m_sandEyeShelter = 0.0f;
         return;
     }
@@ -886,43 +876,6 @@ void Device::UpdateSandVolume(double now, float dt)
         }
     }
 
-    // The dust devil: now and then (about every 15 s in a full storm) one comes in from the upwind side of the box,
-    // carried through by the wind about as fast, wandering a little; it whirls for 6..14 s or until it leaves the box.
-    SandDevil& d = m_sandDevil;
-    if (d.life > 0.0f) {
-        d.age += dt;
-        float wind[2];
-        SandWind(m_windDir, m_windStrength, m_windTime, wind);
-        d.vel[0] = 0.8f * wind[0] + d.drift[0];
-        d.vel[1] = 0.8f * wind[1] + d.drift[1];
-        d.pos[0] += d.vel[0] * dt;
-        d.pos[2] += d.vel[1] * dt;
-        float y;
-        if (GroundAt(d.pos[0], d.pos[2], &y, nullptr, nullptr))
-            d.pos[1] = y;
-        if (d.age > d.life || std::fabs(d.pos[0] - s.pos[0]) > 0.45f * box || std::fabs(d.pos[2] - s.pos[2]) > 0.45f * box)
-            d.life = 0.0f;
-    } else if (v->age > kWarmUp && (Random01(m_sandRandom) < dt * std::min(m_sand * 2.5f, 1.0f) / 15.0f ||
-                                    (getenv("RANDYVK_SAND_DEVIL") && d.age == 0.0f))) {
-        // (Tests, RANDYVK_SAND_DEVIL: one at once, coming past 10 units ahead of the camera.)
-        const bool test = d.age == 0.0f && getenv("RANDYVK_SAND_DEVIL");
-        const float across = test ? 0.0f : (Random01(m_sandRandom) - 0.5f) * 0.6f * box;
-        const float bx = test ? m_frameEye[0] + fx * 10.0f : s.pos[0], bz = test ? m_frameEye[2] + fz * 10.0f : s.pos[2];
-        const float back = test ? 12.0f : 0.38f * box;
-        d.pos[0] = bx - m_windDir[0] * back - m_windDir[1] * across;
-        d.pos[2] = bz - m_windDir[1] * back + m_windDir[0] * across;
-        d.pos[1] = s.pos[1] + 1.5f;
-        GroundAt(d.pos[0], d.pos[2], &d.pos[1], nullptr, nullptr);
-        d.radius = 1.5f + 1.5f * Random01(m_sandRandom);   // (a few cells at least: the grid's ~0.5 units)
-        d.spin = (6.0f + 4.0f * Random01(m_sandRandom)) * (Random01(m_sandRandom) < 0.5f ? -1.0f : 1.0f);
-        d.life = 6.0f + 8.0f * Random01(m_sandRandom);
-        d.age = 1e-6f;
-        const float wa = Random01(m_sandRandom) * 6.2831853f;
-        d.drift[0] = 0.6f * std::cos(wa);
-        d.drift[1] = 0.6f * std::sin(wa);
-        Log("sand: a dust devil at %.1f %.1f %.1f, radius %.1f, for %.0f s", double(d.pos[0]), double(d.pos[1]),
-            double(d.pos[2]), double(d.radius), double(d.life));
-    }
 }
 
 // The smoke: simulated, then drawn over the finished scene (EndScene: its rendering just closed).
@@ -1304,18 +1257,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
             sh.streaks[1] = float(m_sandPivot[1]);
             sh.streaks[2] = float(m_sandOffset[0]);
             sh.streaks[3] = float(m_sandOffset[1]);
-            const SandDevil& dv = m_sandDevil;
-            if (dv.life > 0.0f) {
-                const float env = std::clamp(dv.age / 2.0f, 0.0f, 1.0f) * std::clamp((dv.life - dv.age) / 2.0f, 0.0f, 1.0f);
-                for (int i = 0; i < 3; ++i) sh.devil[i] = (dv.pos[i] - corner[i]) / s.size;
-                sh.devil[3] = dv.radius / s.size;
-                sh.devil2[0] = dv.spin * env;
-                sh.devil2[1] = 8.0f * env;
-                sh.devil2[2] = 0.25f * env * m_sandBlow;
-                sh.devil3[0] = dv.vel[0];
-                sh.devil3[1] = dv.vel[1];
-            }
-            sh.devil2[3] = 0.03f * m_sandBlow;
+            sh.feet[0] = 0.03f * m_sandBlow;
             sandBytes = sizeof(SandHeader) + m_sandGround.size() * sizeof(float);
         }
         void* sandCpu = nullptr;

@@ -1904,13 +1904,6 @@ private:
                                                  // (1: the game's full one; 0: the game's)
     bool m_sandAsh = false;                      // RVK_SandAsh: the forced one an ash storm
     // The sand volume (smoke.cpp UpdateSandVolume): a smoke volume round the camera in a sand or ash storm.
-    struct SandDevil {
-        float pos[3] = {0, 0, 0};                // its foot (world)
-        float radius = 1.2f, spin = 0.0f, age = 0.0f, life = 0.0f;   // life 0: none
-        float drift[2] = {0, 0};                 // how it wanders (world / s)
-        float vel[2] = {0, 0};                   // how it travels (world / s)
-    };
-    SandDevil m_sandDevil;
     // The sand's streak pattern (simulated and drawn): a point's place in it is its offset from m_sandPivot turned
     // into the wind's frame (along, across) plus m_sandOffset (the wind carrying it: along falls). Turned about a
     // point near the camera (moved, the offset made up for it, once the camera is 64 units off): turned about the
@@ -1985,7 +1978,6 @@ private:
     float m_sandGroundCorner[3] = {1e30f, 0, 0}; // ... for the box there
     uint32_t m_sandGroundN = 0;
     uint64_t m_sandGroundFrame = 0;              // ... made then (made again now and then: the ground comes in)
-    uint32_t m_sandRandom = 0x9E3779B9u;
     bool SandActive() const { return m_sand > 0.01f && m_sandBlow > 0.0f; }
     float m_rainWind[3] = {0, 0, 0};
     double m_rainClock = 0.0;                    // the rain's own time (s), for the drops' fall

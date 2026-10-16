@@ -49,7 +49,7 @@ float Detail(vec3 p, vec3 vel)
 // narrow across, lifting a little as they go, and finer streaks racing faster through them; both in the streak pattern
 // the wind carries (S.sand; its offset wrapped at whole periods of both). Sharp-edged (sand, not a gas): the density
 // there x 0..~2.2, the average about kept. Bent by the simulated air: where it goes otherwise than the storm's wind
-// (round a character, in its wind shadow, kicked up, a dust devil) the pattern is pushed off as far as that difference
+// (round a character, in its wind shadow, kicked up) the pattern is pushed off as far as that difference
 // carries it in a fraction of a second, and its edges soften where the air is churned - the simulation's own shape
 // shows there.
 float SandGrain(vec3 p, vec3 uvw)

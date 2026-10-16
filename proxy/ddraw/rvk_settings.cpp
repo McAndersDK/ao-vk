@@ -151,7 +151,7 @@ Setting g_settings[] = {
     {"RVK_SandFog",    "Sand and ash storms: the storm's air as a lit fog - shaded by dunes and walls, glowing towards the sun (off: the flat haze)", "Experimental", Bool, 0, 1, 1, 0, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_SandSun",    "Sand and ash storms, with the sand fog: how clearly the sun shows through the storm, dim and red (0: hidden as the dust)", "Experimental", Float, 0, 1, 0.05f, 0.9f, nullptr, 0, "RVK_WeatherOn"},
     {"RVK_SandTint",   "Sand and ash storms, with the sand fog: the light under the storm the dust's colour - the sun behind it lights the land orange (0: the sun's own)", "Experimental", Float, 0, 1, 0.05f, 0.6f, nullptr, 0, "RVK_WeatherOn"},
-    {"RVK_SandBlow",   "Sand and ash storms: sand blowing round you, simulated - streaks, eddies, dust devils, kicked up by feet (x; 0: none)", "Experimental", Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
+    {"RVK_SandBlow",   "Sand and ash storms: sand blowing round you, simulated - streaks, eddies, kicked up by feet (x; 0: none)", "Experimental", Float, 0, 3, 0.1f, 1, nullptr, 0, "RVK_WeatherOn"},
 
     {"RVK_SmokeOn",    "Simulated smoke (needs HDR)",  "Experimental",    Bool,  0, 1, 1, 0, nullptr, 0},
     {"RVK_SmokeQual",  "Smoke: most cells a box (1: 64, 2: 96, 3: 128 a side)",  "Experimental",     Int,   1, 3, 1, 2, nullptr, 0, "RVK_SmokeOn"},
