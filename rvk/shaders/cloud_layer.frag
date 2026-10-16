@@ -34,6 +34,7 @@ layout(set = 0, binding = 0, std140) uniform LayerFrame {
                         // (0..1: torn into ragged fragments)
     vec4 morph;         // the churn (rvk clouds.cpp UpdateCloudDrift): x its field's phase (tiles, wrapping), y how far
                         // it pushes the cells (body tiles), z the detail's extra rise (world); w: the rain veils (Veils)
+    vec4 quality;       // x: the march's step length, x (RVK_CloudQual: 1.4 low .. 0.5 ultra)
 } L;
 layout(set = 0, binding = 1) uniform sampler2D weatherMap;
 layout(set = 0, binding = 2) uniform sampler3D shapeNoise;
@@ -526,7 +527,7 @@ void main()
     float baseThick = min(gThick, 1300.0);
     // (A storm's steps longer: its varied underside hangs closer, where steps are short - the cost grew with it; the
     // blue noise and the edge's small steps keep it smooth.)
-    float growth = mix(0.012, 0.018, L.ambient.w);
+    float growth = mix(0.012, 0.018, L.ambient.w) * L.quality.x;
     float minStep = baseThick * growth, along = (t1 - t0) / float(steps);
     // (The offset a whole clear-air step - twice the step: the march goes on twice as far through clear air, and
     // half of one left the clouds' lit edges in soft horizontal bands - user's dump.)
@@ -543,7 +544,7 @@ void main()
     bool wasClear = true;                        // (the last sample clear air: the next cloud is an edge)
     bool refined = false;                        // (the first edge found)
     float odLast = -1.0;                         // (the last sample's way to the sun)
-    for (int i = 0; i < steps + 8 && transmit > 0.01 && t < t1; ++i) {
+    for (int i = 0; i < int(float(steps + 8) / L.quality.x) && transmit > 0.01 && t < t1; ++i) {
         float big = clamp(t * growth, minStep, max(along, minStep));
         bool fine = fineLeft > 0 && fineMax > 0;
         float dt = fine ? big * 0.25 : big;
@@ -575,7 +576,10 @@ void main()
         float od = reuse ? odLast : 0.0;
         bool far = tHere > 8000.0;
         int lightSteps = far ? 2 : int(L.view.w) - (L.ambient.w > 0.5 ? 1 : 0);   // (a storm hides the sun: one less)
-        float ls = baseThick * (far ? 0.1 : 0.045), grow = far ? 2.2 : (lightSteps < int(L.view.w) ? 1.75 : 1.5);
+        // (However many steps - RVK_CloudQual, one less in a storm - they reach as far as four growing x1.5: finer, not
+        // further - the same light and shade.)
+        const float kGrow[7] = float[7](1.0, 1.0, 7.1, 2.4, 1.5, 1.27, 1.17);
+        float ls = baseThick * (far ? 0.1 : 0.045), grow = far ? 2.2 : kGrow[clamp(lightSteps, 2, 6)];
         vec3 lp = p + sunL * (ls * (lightJitter - 0.5));
         gPushKept = true;
         for (int k = 0; k < lightSteps && !reuse; ++k) {

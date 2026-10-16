@@ -2065,7 +2065,8 @@ bool g_sunDirSet = false, g_sunColourSet = false;
 float g_cloudThick = 1.0f;        // --cloud-thick X: RVK_CloudThick
 float g_cloudShade = 1.6f;        // --cloud-shade X: RVK_CloudShade
 float g_cloudHeight = 900.0f;     // --cloud-height X: RVK_CloudHeight
-float g_cloudLow = 1.0f;          // --cloud-low X: RVK_CloudLow
+float g_cloudLow = 0.0f;          // --cloud-low X: RVK_CloudLow (the renderer's default: none)
+int g_cloudQual = 1;              // --cloud-qual N: RVK_CloudQual (0 low .. 3 ultra)
 float g_cloudSheet = 1.0f;        // --cloud-sheet X: RVK_CloudSheet
 float g_cloudShadow = 0.6f;       // --cloud-shadow X: RVK_CloudShadow
 float g_cloudNight = 0.8f;        // --cloud-night X: RVK_CloudNight
@@ -3813,6 +3814,7 @@ int main(int argc, char** argv)
         else if (a == "--cloud-shade" && i + 1 < argc) g_cloudShade = float(std::atof(argv[++i]));
         else if (a == "--cloud-height" && i + 1 < argc) g_cloudHeight = float(std::atof(argv[++i]));
         else if (a == "--cloud-low" && i + 1 < argc) g_cloudLow = float(std::atof(argv[++i]));
+        else if (a == "--cloud-qual" && i + 1 < argc) g_cloudQual = std::atoi(argv[++i]);
         else if (a == "--cloud-sheet" && i + 1 < argc) g_cloudSheet = float(std::atof(argv[++i]));
         else if (a == "--cloud-shadow" && i + 1 < argc) g_cloudShadow = float(std::atof(argv[++i]));
         else if (a == "--cloud-night" && i + 1 < argc) g_cloudNight = float(std::atof(argv[++i]));
@@ -4081,6 +4083,7 @@ int main(int argc, char** argv)
         clouds.shade = g_cloudShade;
         clouds.height = g_cloudHeight;
         clouds.low = g_cloudLow;
+        clouds.quality = uint32_t(g_cloudQual);
         clouds.sheet = g_cloudSheet;
         clouds.shadow = g_cloudShadow;
         clouds.night = g_cloudNight;

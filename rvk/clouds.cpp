@@ -112,7 +112,7 @@ struct UpFrame {                                 // cloud_up.frag's block: the c
 struct LayerFrame {
     d3d::Matrix invViewProj;
     float eye[4], layer[4], weather[4], shape[4], wind[4], tint[4], ambient[4], haze[4], view[4], sub[4], horizon[4],
-        shadowArea[4], deck[4], scud[4], morph[4];
+        shadowArea[4], deck[4], scud[4], morph[4], quality[4];
 };
 
 struct ResolveFrame {
@@ -1677,7 +1677,12 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     lf.view[0] = float(hw);
     lf.view[1] = float(hh);
     lf.view[2] = float(std::clamp(m_cloudParams.steps * 3u, 32u, 192u));
-    lf.view[3] = 4.0f;
+    // RVK_CloudQual: the march's steps shorter (less noise - its offsets averaged over frames cover a finer step), more
+    // steps towards the sun.
+    static const float kStepScale[4] = {1.4f, 1.0f, 0.7f, 0.5f}, kSunSteps[4] = {3.0f, 4.0f, 5.0f, 6.0f};
+    const uint32_t quality = std::min(m_cloudParams.quality, 3u);
+    lf.view[3] = kSunSteps[quality];
+    lf.quality[0] = kStepScale[quality];
     std::memcpy(lf.sub, sub, sizeof(lf.sub));
     if (shadowArea)
         std::memcpy(lf.shadowArea, shadowArea, sizeof(lf.shadowArea));
