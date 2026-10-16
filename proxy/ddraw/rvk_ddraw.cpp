@@ -392,6 +392,27 @@ void RvkState::Present()
     if (pressed('C'))
         FreeCamToggle(window);
     FreeCamFrame(device, window);
+    // Ctrl+Shift+Alt+1 / 2 / 3: the game's own weather debug toggles (Gamecode's EnvironmentDebugModule_t message
+    // handlers, AFCM module 9: 0x87 sand storm, 0x86 rain, 0x7c ash storm) - a storm on demand, to see the game's own
+    // (its lightning flashes). Each its code checked first (this client's Gamecode.dll), else nothing.
+    if (GetAsyncKeyState(VK_MENU) & 0x8000) {
+        struct Weather { int key; uint32_t rva; uint8_t first; const char* what; };
+        static const Weather kWeather[] = {{'1', 0xB5DA4, 0xFE, "sand storm"}, {'2', 0xB5A28, 0x96, "rain"},
+                                           {'3', 0xB5E83, 0x18, "ash storm"}};
+        for (const Weather& w : kWeather) {
+            if (!pressed(w.key)) continue;
+            auto* base = reinterpret_cast<uint8_t*>(GetModuleHandleA("Gamecode.dll"));
+            // (mov eax, <its unwind table>; call the frame set-up; sub esp, 2Ch; push ebx; push esi)
+            static const uint8_t kTail[] = {0x83, 0xEC, 0x2C, 0x53, 0x56};
+            const uint8_t* f = base ? base + w.rva : nullptr;
+            if (f && f[0] == 0xB8 && f[1] == w.first && f[5] == 0xE8 && std::memcmp(f + 10, kTail, sizeof(kTail)) == 0) {
+                reinterpret_cast<void (*)()>(const_cast<uint8_t*>(f))();
+                RvkLog("weather: the game's %s debug toggle called", w.what);
+            } else {
+                RvkLog("weather: the game's %s debug toggle not found (another Gamecode.dll?) - not called", w.what);
+            }
+        }
+    }
     // Ctrl+Shift+F11: lighting debug view (not a setting).
     if (pressed(VK_F11)) {
         device->SetLightingDebug(!device->LightingDebug());
