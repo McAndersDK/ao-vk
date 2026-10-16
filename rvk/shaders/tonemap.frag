@@ -3,6 +3,8 @@
 // brighter ones roll off smoothly towards 1 by their brightest channel, which keeps their hue, and lose saturation
 // the more they are overexposed, as bright light does.
 #include "occlusion.glsl"
+#define FL_BINDING 15
+#include "frame_lights.glsl"                    // (the lightning's flash: FL.flash)
 layout(location = 0) out vec4 outColor;
 
 // Colour grading of the tone mapped colour (0..1): white balance, a cooler, paler night, contrast (in a perceptual
@@ -139,6 +141,22 @@ void main()
     // How far the pixel is: its view depth over the far clip's (the sky: wholly).
     float d = texelFetch(depthTex, ivec2(gl_FragCoord.xy), 0).r;
     float far = 1.0;
+    // Lightning (rvk rain.cpp Lightning): the strike's light on everything by its own colour, falling off away from
+    // it - by night the land lit as by day for an instant - and in the sky the clouds round the strike glowing.
+    if (FL.flash.w > 0.0) {
+        vec2 uv = gl_FragCoord.xy / vec2(textureSize(scene, 0));
+        vec3 ray = vec3((uv.x * 2.0 - 1.0) / FL.flashProj.x, (1.0 - uv.y * 2.0) / FL.flashProj.y, 1.0);
+        vec3 a = texelFetch(albedo, ivec2(gl_FragCoord.xy), 0).rgb;
+        vec3 strike = FL.flashView.xyz * FL.flashView.w;
+        if (d < 1.0) {
+            float z = FL.flashProj.w / min(d - FL.flashProj.z, -1e-9);
+            float apart = distance(ray * z, strike);
+            c += a * FL.flash.rgb / (1.0 + apart * apart / (450.0 * 450.0));
+        } else {
+            float near_ = exp((dot(normalize(ray), FL.flashView.xyz) - 1.0) / 0.025);
+            c += a * FL.flash.rgb * 0.5 + vec3(0.8, 0.85, 1.0) * (FL.flash.w * near_ * 0.6);
+        }
+    }
     if ((int(P.proj.w) & 16) == 0) {
         far = 0.0;                               // (no depth readable: warmth everywhere)
     } else if (d < 1.0) {

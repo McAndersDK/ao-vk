@@ -128,6 +128,9 @@ struct FrameLights {               // binding 4: per-frame data (constants.glsl 
                                    // size, its bindless image + 1 | sampler << 20 (the float's bits; 0 = none)
     float terrainSun2[4];          // ... x: the eye's own (0 shaded .. 1), y: its weight (0 high sun .. 1 low)
     float windFrame[4];            // xy: the wind's patterns' frame (Device::WindFrame); z: a sandstorm's spreading of the sun
+    float flash[4];                // lightning (rain.cpp Lightning): its light on the land (rgb), w: the clouds' glow
+    float flashView[4];            // ... towards the strike (view space), w: how far
+    float flashProj[4];            // ... the projection's m[0][0], m[1][1], m[2][2], m[3][2]
     GpuLight lights[kFrameLights];
 };
 

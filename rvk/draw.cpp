@@ -364,6 +364,7 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
     fl->effects[3] = m_grassPush;
     Wind(fl->wind);
     WindFrame(fl->windFrame);
+    Lightning(fl->flash, fl->flashView, fl->flashProj);
     FillPushers(fl, eye);
     fl->leaves[0] = m_leaf.on ? m_leaf.wind : 0.0f;
     fl->leaves[1] = m_leaf.on ? m_leaf.flutter : 0.0f;
@@ -2223,9 +2224,35 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     // The game's lightning glow (VisualCloudlight_t: a big additive mesh at the clouds' height, its vertex colours
     // pulsing with each strike - the whole sky flickers; an in-game run of frame dumps): with the new weather left out
     // (RVK_StormFlash brings it back). The bolts (VisualLightning_t) stay.
-    if (m_weatherParams.enable && !m_stormFlash && std::strncmp(m_drawVisualName, "VisualCloudlight_t", 18) == 0) {
-        ++m_stormFlashSkipped;
-        return;
+    if (m_weatherParams.enable && std::strncmp(m_drawVisualName, "VisualCloudlight_t", 18) == 0) {
+        // (How bright it flares - additive: its colours x their alpha - and where: our flash's strike, rain.cpp.)
+        const FvfLayout layout = DecodeFvf(fvf);
+        if (vertices && layout.offset[0] >= 0 && layout.offset[2] >= 0) {
+            const uint8_t* base = static_cast<const uint8_t*>(vertices);
+            float bright = 0.0f, mid[3] = {0, 0, 0};
+            for (uint32_t i = 0; i < vertexCount; ++i) {
+                const uint8_t* vtx = base + size_t(i) * layout.stride;
+                uint32_t c;
+                std::memcpy(&c, vtx + layout.offset[2], 4);
+                const float a = float(c >> 24) / 255.0f;
+                const float l = (0.3f * float((c >> 16) & 0xFF) + 0.59f * float((c >> 8) & 0xFF) + 0.11f * float(c & 0xFF)) / 255.0f;
+                bright = std::max(bright, a * l);
+                float p[3];
+                std::memcpy(p, vtx + layout.offset[0], 12);
+                for (int k = 0; k < 3; ++k) mid[k] += p[k];
+            }
+            if (bright > m_glowSeen) {
+                m_glowSeen = bright;
+                const auto& w = m_world.m;
+                for (int k = 0; k < 3; ++k) mid[k] /= float(vertexCount);
+                for (int k = 0; k < 3; ++k)
+                    m_glowPos[k] = mid[0] * w[0][k] + mid[1] * w[1][k] + mid[2] * w[2][k] + w[3][k];
+            }
+        }
+        if (!m_stormFlash) {
+            ++m_stormFlashSkipped;
+            return;
+        }
     }
     ++m_frameDraw;
     // GPU profiling: which class of scene draw this is (splits the "scene" block; see ProfileSceneClass).

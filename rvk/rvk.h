@@ -328,6 +328,8 @@ public:
     void SetWindStorm(float scale) { m_windStormScale = scale; }   // RVK_WindStorm (wind.cpp)
     void SetStormTint(bool on) { m_stormTint = on; }               // RVK_StormTint (Draw: the game's storm sheet)
     void SetStormFlash(bool on) { m_stormFlash = on; }             // RVK_StormFlash (Draw: the game's lightning glow)
+    void SetLightning(float s) { m_lightning = s; }                // RVK_Lightning (rain.cpp: our flash, x)
+    void TriggerLightning(const float pos[3]);                     // a strike there now (the game's, or a test's)
     void SetSandHaze(float amount) { m_sandHaze = amount; }        // RVK_SandHaze (wind.cpp)
     void SetSandBlow(float amount) { m_sandBlow = amount; }        // RVK_SandBlow (smoke.cpp: the sand volume)
     void SetSandProcedural(bool on) { m_sandProcedural = on; }     // RVK_SandProc (smoke_sim.comp stage 12)
@@ -1105,6 +1107,8 @@ private:
     float SkyCloudiness() const;
     void SkyWind(float out[2]) const;
     void UpdateWind();                           // the frame's shared wind (wind.cpp): direction, strength, gusts, clock
+    void UpdateLightning();                      // a strike from the game's glow last frame (rain.cpp)
+    void Lightning(float flash[4], float view[4], float proj[4]) const;   // this frame's flash (FrameLights)
     float Gusts() const { return std::max(m_grassGusts, 0.0f) * m_windGusts; }   // RVK_GrassGusts x the storm's
     float m_cloudWindSpeed = 8.0f;               // the clouds' drift (world units a second), eased (UpdateCloudDrift)
     static const char* SkyName(float cloudiness);
@@ -1889,6 +1893,12 @@ private:
     double m_stormSheetTime = -10.0;
     bool m_stormFlash = false;                   // RVK_StormFlash: the game's lightning glow over the clouds drawn
     uint32_t m_stormFlashSkipped = 0;            // its draws left out (the wind log line)
+    float m_lightning = 1.0f;                    // RVK_Lightning: our flash for each of the game's strikes, x (0: none)
+    float m_glowSeen = 0.0f, m_glowLast = 0.0f;  // the game's lightning glow: its brightness this frame (so far), last
+    float m_glowPos[3] = {};                     // ... where (world: its mesh's middle)
+    double m_flashStart = -1e9;                  // the last strike (m_frameClock)
+    float m_flashPos[3] = {};
+    uint32_t m_flashSeed = 0, m_flashCount = 0;
     // A sand or ash storm (wind.cpp): its colour and strength from the game's tint, seen left out (Draw).
     uint32_t m_stormTintColour = 0;              // its vertex colour (ARGB: alpha its strength)
     double m_stormTintSeen = -1e9;               // when (m_frameClock)
@@ -1984,6 +1994,8 @@ private:
     bool SandActive() const { return m_sand > 0.01f && m_sandBlow > 0.0f; }
     float m_rainWind[3] = {0, 0, 0};
     double m_rainClock = 0.0;                    // the rain's own time (s), for the drops' fall
+    double m_rainDrift[3] = {0, 0, 0};           // how far the rain has moved (its velocity added up: it leans as the
+                                                 // wind changes without the drops jumping)
     double m_rainLastClock = -1.0;
     uint32_t m_rainLogFrame = 0;
     VkDescriptorSetLayout m_rainSetLayout = VK_NULL_HANDLE;

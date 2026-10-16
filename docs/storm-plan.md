@@ -78,3 +78,10 @@ Each phase playable on its own; demo scenes for each (the grass bench with a sto
   ~0.6 ms in the demo (960 x 960).
 - Next: an in-game look at 2a + 2b in a real sandstorm (the game's tint colour and alpha, the wind's speed, how
   thick); ground streaks finer than the grid (GPU particles) if the volume's skimming sand is too coarse; then phase 3.
+- Phase 3 (2026-10-15, storms63): the rain's way added up frame by frame (rain.cpp m_rainDrift: a change of lean moves
+  the drops on, never jumps them); gust fronts (wind.glsl Gust) lean it harder as they pass and gather it into
+  curtains, thinner between (rain.vert). Lightning (RVK_Lightning, x; 0 none): each of the game's strikes - found by
+  its glow over the clouds (VisualCloudlight_t, still left out) flaring up: when and where - gives a flash of our
+  own (rain.cpp: a stroke, one or two return strokes, an afterglow over ~1.5 s): its light on everything by the
+  surface's colour (the albedo target), falling off over ~450 units from the strike, and the clouds round it glowing
+  (tonemap.frag; the frame lights at binding 15). Demo: --lightning-at N (the grass bench). Not yet: scud.

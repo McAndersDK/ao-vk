@@ -995,6 +995,11 @@ void ThreadedDevice::SetStormFlash(bool on)
     Enqueue([this, on](const uint8_t*) { m_device.SetStormFlash(on); });
 }
 
+void ThreadedDevice::SetLightning(float s)
+{
+    Enqueue([this, s](const uint8_t*) { m_device.SetLightning(s); });
+}
+
 void ThreadedDevice::SetStormTint(bool on)
 {
     Enqueue([this, on](const uint8_t*) { m_device.SetStormTint(on); });

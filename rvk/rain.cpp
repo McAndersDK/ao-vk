@@ -46,6 +46,9 @@ struct RainFrame {
     float fogParams[4];                          // start, end, density, table mode
     float viewport[4];                           // width, height, 1 / width, 1 / height
     float proj[4];                               // D3D projection m[2][2], m[3][2], m[0][0], m[1][1]
+    float drift[4];                              // xyz: how far the rain has moved (world, wrapped); w: the gust fronts'
+                                                 // extra lean (units / s at a front's peak)
+    float curtains[4];                           // x: the rain gathered into curtains along the gust fronts (0 .. 1)
 };
 
 constexpr uint32_t kRainMaxDrops = 24000;       // at full rain, RVK_RainAmount 1
@@ -233,6 +236,13 @@ void Device::RenderRain(VkCommandBuffer cmd)
     float wind[3] = {m_rainWind[0], 0.0f, m_rainWind[2]};
     const float wl = std::hypot(wind[0], wind[2]);
     if (wl > kRainSpeed) { wind[0] *= kRainSpeed / wl; wind[2] *= kRainSpeed / wl; }
+    // The drops' way so far, added up (rain.vert: a drop's place from it, so a change of lean moves them on, never
+    // jumps them); wrapped now and then (one jump a few hours apart).
+    const float velocity[3] = {wind[0], -kRainSpeed, wind[2]};
+    for (int i = 0; i < 3; ++i) {
+        m_rainDrift[i] += double(velocity[i]) * dt;
+        if (std::fabs(m_rainDrift[i]) > 30000.0) m_rainDrift[i] = std::fmod(m_rainDrift[i], 30000.0);
+    }
 
     const auto& vm = m_view.m;
     float eye[3];
@@ -254,6 +264,11 @@ void Device::RenderRain(VkCommandBuffer cmd)
     rf.fall[1] = -kRainSpeed;
     rf.fall[2] = wind[2];
     rf.fall[3] = kRainBox;
+    for (int i = 0; i < 3; ++i) rf.drift[i] = float(m_rainDrift[i]);
+    // In a storm the gust fronts (wind.glsl Gust) lean the rain harder as they pass, and gather it into curtains.
+    const float stormy = std::clamp(m_storm * std::max(m_windStormScale, 0.0f), 0.0f, 1.5f);
+    rf.drift[3] = 5.0f * stormy;
+    rf.curtains[0] = std::min(stormy, 1.0f);
     // The game's drop colour tints it (a colourless one: plain water); its opacity is the rain's own.
     const uint32_t c = fromGame && m_weatherGame.colour ? m_weatherGame.colour : 0xC8D0D8u;
     rf.colour[0] = float((c >> 16) & 0xFF) / 255.0f;
@@ -360,6 +375,81 @@ void Device::RenderRain(VkCommandBuffer cmd)
     vkCmdDraw(cmd, splashes * 6, 1, 0, 0);
     vkCmdEndRendering(cmd);
     ProfileMark("rain splashes");
+}
+
+// Lightning (docs/storm-plan.md phase 3). The game's own strikes - its bolts (VisualLightning_t, drawn as they are),
+// its thunder, and a glow over the clouds (VisualCloudlight_t: an additive mesh near the strike whose colours pulse
+// with it, left out with the new weather - Draw) - tell when and where; each strike lights the land by its surfaces'
+// colour and the clouds round it (tonemap.frag) with a flash of our own: a stroke, one or two return strokes a tenth of
+// a second apart, a short afterglow - not the glow's frame-to-frame flicker.
+namespace {
+constexpr float kFlashLight[3] = {0.75f, 0.82f, 1.0f};   // its light on the land at a stroke's peak (x RVK_Lightning)
+constexpr double kFlashSeconds = 1.5;                    // how long a strike lights anything
+
+float StrikeHash(uint32_t seed, uint32_t salt)
+{
+    uint32_t x = seed * 0x9E3779B9u + salt * 0x85EBCA6Bu;
+    x ^= x >> 16; x *= 0x7FEB352Du; x ^= x >> 15; x *= 0x846CA68Bu; x ^= x >> 16;
+    return float(x & 0xFFFFFF) / float(0x1000000);
+}
+
+// A strike's light t seconds in (0 .. ~1): its strokes, each gone in a few frames, and the afterglow.
+float FlashEnvelope(double t, uint32_t seed)
+{
+    if (t < 0.0 || t > kFlashSeconds)
+        return 0.0f;
+    const float times[3] = {0.0f, 0.07f + 0.06f * StrikeHash(seed, 1), 0.19f + 0.12f * StrikeHash(seed, 2)};
+    const float amps[3] = {1.0f, 0.55f + 0.35f * StrikeHash(seed, 3), StrikeHash(seed, 4) > 0.4f ? 0.45f : 0.0f};
+    float f = 0.12f * std::exp(-float(t) / 0.4f);
+    for (int k = 0; k < 3; ++k)
+        if (t >= times[k])
+            f += amps[k] * std::exp(-(float(t) - times[k]) / 0.045f);
+    return std::min(f, 1.2f);
+}
+}  // namespace
+
+void Device::TriggerLightning(const float pos[3])
+{
+    m_flashStart = m_frameClock;
+    std::memcpy(m_flashPos, pos, sizeof(m_flashPos));
+    m_flashSeed = ++m_flashCount * 2654435761u;
+}
+
+// Once a frame (BeginFrame): the game's glow seen last frame - a new strike where it flares up.
+void Device::UpdateLightning()
+{
+    const float b = m_glowSeen, prev = m_glowLast;
+    m_glowLast = b;
+    m_glowSeen = 0.0f;
+    if (m_lightning <= 0.0f || !m_weatherParams.enable)
+        return;
+    if (b > 0.04f && b > prev * 1.6f + 0.02f && m_frameClock - m_flashStart > 0.6) {
+        TriggerLightning(m_glowPos);
+        Log("lightning: a strike at %.0f %.0f %.0f (the game's glow %.2f)", double(m_glowPos[0]), double(m_glowPos[1]),
+            double(m_glowPos[2]), double(b));
+    }
+}
+
+void Device::Lightning(float flash[4], float view[4], float proj[4]) const
+{
+    for (int i = 0; i < 4; ++i) flash[i] = view[i] = proj[i] = 0.0f;
+    const float f = m_lightning > 0.0f ? FlashEnvelope(m_frameClock - m_flashStart, m_flashSeed) * m_lightning : 0.0f;
+    if (f <= 1e-3f || !m_aoProjValid)
+        return;
+    for (int i = 0; i < 3; ++i) flash[i] = kFlashLight[i] * f;
+    flash[3] = 2.5f * f;
+    const auto& v = m_aoView.m;                  // world -> view (row vectors)
+    float p[3];
+    for (int i = 0; i < 3; ++i)
+        p[i] = m_flashPos[0] * v[0][i] + m_flashPos[1] * v[1][i] + m_flashPos[2] * v[2][i] + v[3][i];
+    const float l = std::sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+    if (l > 1e-3f)
+        for (int i = 0; i < 3; ++i) view[i] = p[i] / l;
+    view[3] = l;
+    proj[0] = m_aoProj.m[0][0];
+    proj[1] = m_aoProj.m[1][1];
+    proj[2] = m_aoProj.m[2][2];
+    proj[3] = m_aoProj.m[3][2];
 }
 
 }  // namespace rvk

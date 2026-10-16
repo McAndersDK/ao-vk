@@ -1153,6 +1153,7 @@ float g_sandBlow = 1.0f;          // --sand-blow X: RVK_SandBlow
 uint32_t g_sandRes = 0;           // --sand-res N: RVK_SandRes
 float g_windStorm = 1.0f;         // --wind-storm X: RVK_WindStorm
 float g_sandForce = 0.0f;         // --sand-force X: RVK_SandForce
+int g_lightningAt = -1;           // --lightning-at N: a strike ahead of the camera at frame N (the grass bench)
 bool g_sandAsh = false;           // --sand-ash: RVK_SandAsh
 bool g_grassBenchStill = false;   // --grass-bench-still: the camera stays where it starts (to watch the wind)
 bool g_terrainPbr = false;        // --terrain-pbr: the bench's ground texture gets a PBR material (a glossy path through
@@ -1390,6 +1391,10 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
                                         {0, 1, 0}));
         dev.SetTransform(Projection, PerspectiveLH(kPi / 3, float(g_width) / g_height, 0.3f, 300.0f));
         dev.SetTransform(World, Identity());
+        if (frame == g_lightningAt) {
+            const float strike[3] = {ex + 120.0f * std::cos(yaw + 0.3f), ey + 20.0f, ez + 120.0f * std::sin(yaw + 0.3f)};
+            dev.TriggerLightning(strike);
+        }
         dev.SetRenderState(RS_ZENABLE, 1);
         dev.SetRenderState(RS_ZWRITEENABLE, 1);
         dev.SetRenderState(RS_ZFUNC, CMP_LESSEQUAL);
@@ -3847,6 +3852,7 @@ int main(int argc, char** argv)
         else if (a == "--smoke-wind" && i + 1 < argc) g_smokeWindScale = float(std::atof(argv[++i]));
         else if (a == "--smoke-density" && i + 1 < argc) g_smokeDensity = float(std::atof(argv[++i]));
         else if (a == "--rain" && i + 1 < argc) { g_rainForce = float(std::atof(argv[++i])); hdr = true; }
+        else if (a == "--lightning-at" && i + 1 < argc) g_lightningAt = std::atoi(argv[++i]);
         else if (a == "--water-mesh-at" && i + 3 < argc) { for (float& x : g_waterMeshAt) x = float(std::atof(argv[++i])); }
         else if (a == "--water-eye" && i + 3 < argc) { for (float& x : g_waterEye) x = float(std::atof(argv[++i])); g_waterEyeSet = true; }
         else if (a == "--water-shelf") g_waterShelf = true;

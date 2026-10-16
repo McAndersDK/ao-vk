@@ -1643,6 +1643,7 @@ void Device::BeginFrame()
     CollectWaterBodies();                        // the water's ripples follow the characters of the last frame
     m_frameClock = SwayClock();
     UpdateWind();                                // (m_windTime, m_windTimePrev: wind.cpp)
+    UpdateLightning();                           // (rain.cpp: the game's glow last frame)
     m_lightsPrev.swap(m_lightsCur);              // last frame's complete light set lights this frame
     m_lightsCur.clear();
     m_sunLuminance = 0.0f;
