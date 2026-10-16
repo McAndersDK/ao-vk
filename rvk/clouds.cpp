@@ -1041,7 +1041,8 @@ void Device::MarchCloudPuffs(VkCommandBuffer cmd, const std::vector<std::pair<fl
         float green[3];
         StormGreen(green);                       // (a thunderstorm's green cast: RVK_StormGreen)
         for (int k = 0; k < 3; ++k)
-            cf.colour[k] = (p.colour[k] + (grey - p.colour[k]) * 0.6f * storm) * (1.0f - 0.25f * storm) * m_cloudParams.brightness * green[k];
+            cf.colour[k] = (p.colour[k] + (grey - p.colour[k]) * 0.6f * storm) * (1.0f - 0.25f * storm) * m_cloudParams.brightness * green[k] *
+                           (1.0f - 0.35f * std::clamp(m_stormGreen, 0.0f, 1.0f) * storm);
         cf.colour[3] = std::clamp(p.colour[3], 0.0f, 1.0f);
         // The sun into mesh space (a direction: the inverse's 3x3; normalised in the shader).
         for (int j = 0; j < 3; ++j)
@@ -1524,7 +1525,9 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     {   // (A thunderstorm's green cast - RVK_StormGreen: the layer's colour and the sky's light on it.)
         float green[3];
         StormGreen(green);
-        for (int k = 0; k < 3; ++k) { lf.tint[k] *= green[k]; lf.ambient[k] *= green[k]; }
+        // (... and darker: the user - a dark yellow-green storm.)
+        const float dark = 1.0f - 0.35f * std::clamp(m_stormGreen, 0.0f, 1.0f) * storm;
+        for (int k = 0; k < 3; ++k) { lf.tint[k] *= green[k] * dark; lf.ambient[k] *= green[k]; }
     }
     for (int k = 0; k < 3; ++k) lf.haze[k] = m_cloudHaze[k];
     if (m_frameNumber % 600 == 2)

@@ -478,7 +478,7 @@ void Device::Lightning(float flash[4], float view[4], float proj[4], float world
 void Device::StormGreen(float out[3]) const
 {
     const float k = std::clamp(m_stormGreen, 0.0f, 1.0f) * std::clamp(m_rain, 0.0f, 1.0f);
-    const float green[3] = {0.89f, 1.085f, 0.846f};   // (0.82, 1, 0.78 at unit luma)
+    const float green[3] = {1.01f, 1.063f, 0.638f};   // (yellow-green - the user: 0.95, 1, 0.6 at unit luma)
     for (int i = 0; i < 3; ++i) out[i] = 1.0f + (green[i] - 1.0f) * k;
 }
 

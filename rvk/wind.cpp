@@ -181,13 +181,15 @@ Device::StormAir Device::StormAirNow() const
 {
     StormAir air;
     const float sand = m_sand > 0.0f && m_sandHaze > 0.0f ? 0.075f * m_sand * m_sandHaze : 0.0f;
-    // (A thunderstorm's rain mist: only as the fog - ~750 units to see through at the ground in full rain.)
-    const float rain = m_sandFog > 0.0f ? 0.004f * std::clamp(m_rain, 0.0f, 1.0f) * std::max(m_rainFog, 0.0f) : 0.0f;
+    // (A thunderstorm's rain mist: only as the fog - ~2 km to see through at the ground in full rain; the user: at
+    // 0.004 it hid every cloud.)
+    const float rain = m_sandFog > 0.0f ? 0.0015f * std::clamp(m_rain, 0.0f, 1.0f) * std::max(m_rainFog, 0.0f) : 0.0f;
     air.sigma = sand + rain;
     air.sandShare = air.sigma > 0.0f ? sand / air.sigma : 1.0f;
     // (The mist deeper and hardly any of it high up: the clouds stand over it, not buried as in a dust storm.)
-    air.height = 250.0f + (120.0f - 250.0f) * air.sandShare;
-    air.upper = 0.08f + (0.3f - 0.08f) * air.sandShare;
+    // (Low, and next to none high up: the clouds overhead show through - ~80% of them in full rain.)
+    air.height = 150.0f + (120.0f - 150.0f) * air.sandShare;
+    air.upper = 0.02f + (0.3f - 0.02f) * air.sandShare;
     return air;
 }
 
