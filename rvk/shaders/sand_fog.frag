@@ -10,6 +10,7 @@ layout(set = 0, binding = 0) uniform sampler2D depthTex;
 layout(set = 0, binding = 1) uniform sampler2DArrayShadow shadowMap;
 layout(set = 0, binding = 2) uniform sampler2D cloudShadow;   // the clouds' (rvk clouds.cpp; FL.clouds: where, if any)
 layout(set = 0, binding = 3) uniform sampler2D terrainMap;    // terrain_sun.cpp: R the height to see a low sun, G the ground
+layout(set = 0, binding = 5) uniform sampler2D shelterMap;    // sand_map.cpp SandFogShelter: R the shelter over the top, G the top
 layout(push_constant) uniform Push {
     mat4 invViewProj;   // the world camera's clip -> world (raw D3DMATRIX memory)
     vec4 eye;           // camera position; w: the march's reach (world units)
@@ -22,6 +23,7 @@ layout(push_constant) uniform Push {
     vec4 wind;          // the wind's direction x, z; its frame's offsets along, across (the gusts carried with it)
     vec4 gusts;         // x: RVK_SandGusts, y: the wind's time (s), z: the eye's shelter (0 .. 1), w: ash (1: no glow)
     vec4 sunv;          // x: the sky round the sun seen through T ^ this (RVK_SandSun; 1: hidden as the rest)
+    vec4 shelter;       // the shelter map: its corner x, z, 1 / its size (0: none), the height its tops are taken from
 } P;
 layout(location = 0) out vec4 outFog;
 
@@ -78,6 +80,22 @@ float Billow(vec3 q, float h)
     float n = GustNoise(vec3(along / 70.0, h / 22.0 + P.gusts.y * 0.015, across / 40.0));
     float b = (0.45 + 2.0 * smoothstep(0.34, 0.68, n)) / 1.45;
     return mix(1.0, b, clamp(P.gusts.x, 0.0, 1.0));
+}
+
+// How far the dust at a point is held off (0 .. 1) in the lee of a wall or a hill near the eye: below the solid
+// shelter's height over the cell's top, by how far (as rvk sand_map.cpp SandShelterAt); fading out at the map's edge.
+float Lee(vec3 q)
+{
+    vec2 uv = (q.xz - P.shelter.xy) * P.shelter.z;
+    vec2 edge = min(uv, 1.0 - uv);
+    float inside = smoothstep(0.0, 0.12, min(edge.x, edge.y));
+    if (inside <= 0.0)
+        return 0.0;
+    vec2 m = textureLod(shelterMap, uv, 0.0).rg;
+    float excess = m.r, top = m.g + P.shelter.w;
+    float band = clamp(0.5 * excess, 0.3, 3.0);
+    float k = smoothstep(0.3, 1.2, excess);
+    return inside * k * clamp((top + excess - q.y) / band, 0.0, 1.0);
 }
 
 void main()
@@ -140,8 +158,10 @@ void main()
         float h = max(q.y - tm.y, 0.0);
         hLast = h;
         float sigma = P.dens.x * ((1.0 - kUpper) * exp(-h / P.dens.y) * Billow(q, h) + kUpper * exp(-h / kUpperHeight));
-        // (Clear round the eye - RVK_SandClear, fading in over as many again; held off further in a lee.)
-        sigma *= smoothstep(0.35 * P.dens.w, 1.6 * P.dens.w, t) * (1.0 - 0.75 * P.gusts.z * (1.0 - smoothstep(10.0, 40.0, t)));
+        // (Clear round the eye - RVK_SandClear, fading in over as many again; held off in the lee of walls and
+        // hills - the shelter map's, else the eye's own shelter near it.)
+        float lee = P.shelter.z > 0.0 ? Lee(q) : P.gusts.z * (1.0 - smoothstep(10.0, 40.0, t));
+        sigma *= smoothstep(0.35 * P.dens.w, 1.6 * P.dens.w, t) * (1.0 - 0.75 * lee);
         float shade = 1.0;
         if (sun) {
             if (shadows > 0.0)

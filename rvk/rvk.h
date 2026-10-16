@@ -1971,6 +1971,9 @@ private:
     bool SandMapAt(float x, float z, SandColumn* out) const;
     float SandMapSolidIn(float x0, float z0, float x1, float z1) const;
     float SandShelterAt(float x, float y, float z) const;
+    // The map's solid shelter for the sand fog (sand_fog.frag binding 5): out its corner x, z, 1 / its size, the
+    // height its tops are taken from; false without a map.
+    bool SandFogShelter(float out[4]);
     void DumpSandMap(const std::string& path) const;
     std::vector<float> m_sandGround;             // per column (4 floats): its top (the ground or a solid's; box units),
                                                  // how much sand it gives, the shelter heights solid, see-through (box
@@ -2369,6 +2372,9 @@ private:
     Texture* m_sandFogTex[2] = {};               // half resolution: the sand fog's light + transmittance (ping-pong)
     VkPipeline m_sandFogPipeline = VK_NULL_HANDLE, m_sandFogBlurPipeline = VK_NULL_HANDLE;
     bool m_sandFogValid = false;                 // this frame's fog drawn (the tone mapping lays it on)
+    Texture* m_sandFogShelter = nullptr;         // RG16F, the sand map's cells: the solid shelter over the top, the top
+    uint32_t m_sandFogShelterGen = ~0u;          // (the m_sandShelterGen it was made for)
+    float m_sandFogShelterRef = 0.0f;            // (the height its tops are taken from)
     bool RenderSandFog(VkCommandBuffer cmd);
     // Screen-space reflections (hdr.cpp, ssr.frag): strength (0 = off) and reflectivity of water, glossy surfaces
     // and the wet look of surfaces facing up.

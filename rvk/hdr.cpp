@@ -164,16 +164,18 @@ bool Device::CreateHdrResources(std::string* error)
         return false;
     {
         // Volumetric light: depth, the sun shadow cascades, the clouds' shadow map (clouds.cpp), the terrain's shade
-        // from a low sun (terrain_sun.cpp), the frame lights (binding 4, as in the scene shaders).
-        VkDescriptorSetLayoutBinding b[5] = {
+        // from a low sun (terrain_sun.cpp), the frame lights (binding 4, as in the scene shaders); the sand fog's
+        // shelter (binding 5, sand_map.cpp SandFogShelter).
+        VkDescriptorSetLayoutBinding b[6] = {
             {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
             {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
             {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
             {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-            {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
+            {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
         VkDescriptorSetLayoutCreateInfo sl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         sl.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-        sl.bindingCount = 5;
+        sl.bindingCount = 6;
         sl.pBindings = b;
         if (!Check(vkCreateDescriptorSetLayout(m_device, &sl, nullptr, &m_volumeSetLayout), "volume set layout", error) ||
             !pipelineLayout(m_volumeSetLayout, &m_volumeLayout))
@@ -313,6 +315,8 @@ void Device::DestroyHdrResources()
         if (t) { DestroyTextureNow(t); t = nullptr; }
     for (Texture*& t : m_sandFogTex)
         if (t) { DestroyTextureNow(t); t = nullptr; }
+    if (m_sandFogShelter) { DestroyTextureNow(m_sandFogShelter); m_sandFogShelter = nullptr; }
+    m_sandFogShelterGen = ~0u;
     if (m_ssrTex) { DestroyTextureNow(m_ssrTex); m_ssrTex = nullptr; }
     for (Texture*& t : m_lut)
         if (t) { DestroyTextureNow(t); t = nullptr; }
@@ -1018,7 +1022,7 @@ bool Device::RenderSandFog(VkCommandBuffer cmd)
     SandGusts(gusts);                            // (the eye's ground, the wind's frame and time; zeros without gusts)
     struct {
         d3d::Matrix invViewProj;
-        float eye[4], proj[4], dens[4], albedo[4], sky[4], terrain[4], wind[4], gusts[4], sun[4];
+        float eye[4], proj[4], dens[4], albedo[4], sky[4], terrain[4], wind[4], gusts[4], sun[4], shelter[4];
     } push{};
     static_assert(sizeof(push) <= 256, "push constant range");
     push.invViewProj = inverse;
@@ -1085,6 +1089,8 @@ bool Device::RenderSandFog(VkCommandBuffer cmd)
     push.gusts[3] = m_sandAsh ? 1.0f : 0.0f;
     // RVK_SandSun: the sky round the sun seen through the dust's depth ^ this (1: as the rest of the sky - hidden).
     push.sun[0] = 1.0f - 0.95f * std::clamp(m_sandSun, 0.0f, 1.0f);
+    // The lee of walls and hills near the eye (the sand map's shelter): the dust there held off.
+    const bool shelterMap = SandFogShelter(push.shelter);
 
     Texture* dst = m_sandFogTex[0];
     Transition(cmd, dst, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -1110,14 +1116,17 @@ bool Device::RenderSandFog(VkCommandBuffer cmd)
     VkDescriptorImageInfo clouds{m_linearSampler, CloudShadowView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkDescriptorImageInfo terrain{m_linearSampler, terrainMap ? m_terrainSunMap->m_view : m_blackTexture->m_view,
                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet wr[5] = {};
+    VkDescriptorImageInfo shelter{m_linearSampler, shelterMap ? m_sandFogShelter->m_view : m_blackTexture->m_view,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet wr[6] = {};
     for (auto& x : wr) { x.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; x.descriptorCount = 1; }
     wr[0].dstBinding = 0; wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[0].pImageInfo = &depth;
     wr[1].dstBinding = 1; wr[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[1].pImageInfo = &shadow;
     wr[2].dstBinding = 4; wr[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; wr[2].pBufferInfo = &lights;
     wr[3].dstBinding = 2; wr[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[3].pImageInfo = &clouds;
     wr[4].dstBinding = 3; wr[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[4].pImageInfo = &terrain;
-    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_volumeLayout, 0, 5, wr);
+    wr[5].dstBinding = 5; wr[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[5].pImageInfo = &shelter;
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_volumeLayout, 0, 6, wr);
     vkCmdPushConstants(cmd, m_volumeLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRendering(cmd);

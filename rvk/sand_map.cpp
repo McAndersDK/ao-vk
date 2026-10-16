@@ -624,6 +624,52 @@ float Device::SandShelterAt(float x, float y, float z) const
     return std::max(held(col.shelterSolid, 1.0f), held(col.shelterCrown, 0.5f));
 }
 
+// The map's solid shelter for the sand fog (sand_fog.frag: the dust held off in the lee of walls and hills near the
+// eye), made again when the shelter is: per cell R the solid shelter's height over the cell's top (0: none), G the top
+// over m_sandFogShelterRef (half floats). (See-through obstacles left out: a canopy holds off the blown sand, not the
+// dust in the air.)
+bool Device::SandFogShelter(float out[4])
+{
+    out[0] = out[1] = out[2] = out[3] = 0.0f;
+    const SandMap& m = m_sandMap;
+    if (!m.valid || m.shelterSolid.size() != size_t(kMapN) * kMapN)
+        return false;
+    if (!m_sandFogShelter) {
+        m_sandFogShelter = CreateTexture(kMapN, kMapN, Format::RG16F, 1);
+        if (!m_sandFogShelter)
+            return false;
+        m_sandFogShelterGen = ~0u;
+    }
+    if (m_sandFogShelterGen != m_sandShelterGen) {
+        auto half = [](float f) {
+            uint32_t x;
+            std::memcpy(&x, &f, 4);
+            const uint32_t sign = (x >> 16) & 0x8000u;
+            const int32_t e = int32_t((x >> 23) & 0xFF) - 127 + 15;
+            const uint32_t mant = x & 0x7FFFFFu;
+            if (e <= 0) return uint16_t(sign);
+            if (e >= 31) return uint16_t(sign | 0x7BFFu);
+            return uint16_t(sign | (uint32_t(e) << 10) | (mant >> 13));
+        };
+        m_sandFogShelterRef = m_frameEye[1];
+        std::vector<uint16_t> texels(size_t(kMapN) * kMapN * 2);
+        for (size_t c = 0; c < size_t(kMapN) * kMapN; ++c) {
+            const bool known = m.ground[c] > kUnknown * 0.5f;
+            const float top = known ? std::max(m.ground[c], m.solid[c]) : m_sandFogShelterRef;
+            const float excess = known && m.shelterSolid[c] > kUnknown * 0.5f ? std::max(m.shelterSolid[c] - top, 0.0f) : 0.0f;
+            texels[c * 2] = half(excess);
+            texels[c * 2 + 1] = half(top - m_sandFogShelterRef);
+        }
+        UpdateTexture(m_sandFogShelter, 0, 0, 0, kMapN, kMapN, texels.data(), kMapN * 4);
+        m_sandFogShelterGen = m_sandShelterGen;
+    }
+    out[0] = float(m.origin[0]) * kMapCell;
+    out[1] = float(m.origin[1]) * kMapCell;
+    out[2] = 1.0f / (float(kMapN) * kMapCell);
+    out[3] = m_sandFogShelterRef;
+    return true;
+}
+
 // The frame dump's picture of the map (<dump>-sand.bmp, two pixels a cell, north up): the ground grey by its height,
 // solid red, see-through green, the shelter blue by its height over the cell's top (white: the eye).
 void Device::DumpSandMap(const std::string& path) const
