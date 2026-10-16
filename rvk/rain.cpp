@@ -198,8 +198,8 @@ void Device::RenderRain(VkCommandBuffer cmd)
     m_rainLastClock = now;
     float target = 0.0f;
     if (P.enable) {
-        if (P.force > 0.0f)
-            target = std::min(P.force, 1.0f);
+        if (P.force > 0.0f || P.stormForce > 0.0f)
+            target = std::min(std::max(P.force, P.stormForce), 1.0f);   // (forced: rain, or a thunderstorm's)
         else if (now - m_weatherGameTime < 0.5) {
             // The game's weather (0..1: its rain is intensity^3 x kGameRainMax) - from where its own rain shows: below
             // ~0.25 it draws next to nothing (a lingering 0.13 left a constant drizzle here, its drops long streaks
@@ -421,8 +421,28 @@ void Device::UpdateLightning()
     const float b = m_glowSeen, prev = m_glowLast;
     m_glowLast = b;
     m_glowSeen = 0.0f;
+    const double now = m_frameClock;
+    const float dt = m_strikeClock < 0.0 ? 0.0f : float(std::clamp(now - m_strikeClock, 0.0, 0.25));
+    m_strikeClock = now;
     if (m_lightning <= 0.0f || !m_weatherParams.enable)
         return;
+    // A forced thunderstorm (RVK_StormForce): strikes of our own, at random (RVK_StrikeRate a minute as the storm
+    // stands at full strength), anywhere from near to far round the camera, from the cloud base.
+    const WeatherParams& P = m_weatherParams;
+    if (P.stormForce > 0.0f && P.strikeRate > 0.0f && dt > 0.0f && m_frameEyeValid) {
+        const uint32_t seed = uint32_t(m_frameNumber) * 747796405u + 2891336453u;
+        const float chance = 1.0f - std::exp(-P.strikeRate / 60.0f * std::min(m_storm, 1.0f) * dt);
+        if (StrikeHash(seed, 11) < chance && now - m_flashStart > 0.8) {
+            const float angle = 6.2831853f * StrikeHash(seed, 12);
+            const float dist = 60.0f + 340.0f * StrikeHash(seed, 13) * StrikeHash(seed, 14);   // (more near than far)
+            const float pos[3] = {m_frameEye[0] + dist * std::cos(angle), m_frameEye[1] + 60.0f + 60.0f * StrikeHash(seed, 15),
+                                  m_frameEye[2] + dist * std::sin(angle)};
+            TriggerLightning(pos);
+            Log("lightning: a strike at %.0f %.0f %.0f (forced storm, %.0f units off)", double(pos[0]), double(pos[1]),
+                double(pos[2]), double(dist));
+            return;
+        }
+    }
     if (b > 0.04f && b > prev * 1.6f + 0.02f && m_frameClock - m_flashStart > 0.6) {
         TriggerLightning(m_glowPos);
         Log("lightning: a strike at %.0f %.0f %.0f (the game's glow %.2f)", double(m_glowPos[0]), double(m_glowPos[1]),

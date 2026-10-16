@@ -1153,6 +1153,8 @@ float g_sandBlow = 1.0f;          // --sand-blow X: RVK_SandBlow
 uint32_t g_sandRes = 0;           // --sand-res N: RVK_SandRes
 float g_windStorm = 1.0f;         // --wind-storm X: RVK_WindStorm
 float g_sandForce = 0.0f;         // --sand-force X: RVK_SandForce
+float g_stormForce = 0.0f;        // --storm F: RVK_StormForce (a thunderstorm: rain, wind, our own strikes)
+float g_strikeRate = 6.0f;        // --strike-rate R: RVK_StrikeRate (strikes a minute)
 int g_lightningAt = -1;           // --lightning-at N: a strike ahead of the camera at frame N (the grass bench)
 bool g_sandAsh = false;           // --sand-ash: RVK_SandAsh
 bool g_grassBenchStill = false;   // --grass-bench-still: the camera stays where it starts (to watch the wind)
@@ -3853,6 +3855,8 @@ int main(int argc, char** argv)
         else if (a == "--smoke-density" && i + 1 < argc) g_smokeDensity = float(std::atof(argv[++i]));
         else if (a == "--rain" && i + 1 < argc) { g_rainForce = float(std::atof(argv[++i])); hdr = true; }
         else if (a == "--lightning-at" && i + 1 < argc) g_lightningAt = std::atoi(argv[++i]);
+        else if (a == "--storm" && i + 1 < argc) { g_stormForce = float(std::atof(argv[++i])); hdr = true; }
+        else if (a == "--strike-rate" && i + 1 < argc) g_strikeRate = float(std::atof(argv[++i]));
         else if (a == "--water-mesh-at" && i + 3 < argc) { for (float& x : g_waterMeshAt) x = float(std::atof(argv[++i])); }
         else if (a == "--water-eye" && i + 3 < argc) { for (float& x : g_waterEye) x = float(std::atof(argv[++i])); g_waterEyeSet = true; }
         else if (a == "--water-shelf") g_waterShelf = true;
@@ -4067,10 +4071,12 @@ int main(int argc, char** argv)
         smoke.sandCells = g_sandRes;
         dev.SetSmokeParams(smoke);
     }
-    if (g_rainForce > 0.0f || g_sandStorm || g_sandForce > 0.0f) {
+    if (g_rainForce > 0.0f || g_stormForce > 0.0f || g_sandStorm || g_sandForce > 0.0f) {
         Device::WeatherParams weather;
         weather.enable = true;
         weather.force = g_rainForce;
+        weather.stormForce = g_stormForce;
+        weather.strikeRate = g_strikeRate;
         dev.SetWeatherParams(weather);
     }
     dev.SetSandBlow(g_sandBlow);

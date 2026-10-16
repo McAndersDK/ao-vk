@@ -603,6 +603,9 @@ public:
         float amount = 1.0f;                     // RVK_RainAmount: how many drops, x
         float splashes = 1.0f;                   // RVK_RainSplash: how many splashes, x (0 = none)
         float brightness = 1.0f;                 // RVK_RainBright: the drops' and splashes' light, x
+        float stormForce = 0.0f;                 // RVK_StormForce: a thunderstorm this hard regardless of the game's
+                                                 // (its rain, its wind, lightning of our own; 0 = the game's)
+        float strikeRate = 6.0f;                 // RVK_StrikeRate: its strikes a minute at full strength
     };
     struct WeatherState {
         float precipitation = 0.0f;              // how hard (the game's VisualRain_t::process value, as given)
@@ -1897,6 +1900,7 @@ private:
     float m_glowSeen = 0.0f, m_glowLast = 0.0f;  // the game's lightning glow: its brightness this frame (so far), last
     float m_glowPos[3] = {};                     // ... where (world: its mesh's middle)
     double m_flashStart = -1e9;                  // the last strike (m_frameClock)
+    double m_strikeClock = -1.0;                 // (a forced storm's strikes: the last frame's clock)
     float m_flashPos[3] = {};
     uint32_t m_flashSeed = 0, m_flashCount = 0;
     // A sand or ash storm (wind.cpp): its colour and strength from the game's tint, seen left out (Draw).
