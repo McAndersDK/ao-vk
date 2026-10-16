@@ -153,6 +153,9 @@ void main()
     }
     float transmit = 1.0;
     vec3 light = vec3(0.0);
+    // (The rain mist thinner looking up - full towards the horizon, so the land and the sky still meet without a seam
+    // - the storm's clouds standing out over it; the user: the fog hid most of them. The dust as it was.)
+    float lookUp = mix(1.0, 0.3, smoothstep(0.02, 0.35, dir.y) * P.sunv.w);
     int steps = int(P.sky.w);
     float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))) + P.albedo.w);
     float tPrev = 0.0, hLast = 0.0, shadeLast = 1.0;
@@ -164,7 +167,7 @@ void main()
         vec2 tm = TerrainAt(q.xz);
         float h = max(q.y - tm.y, 0.0);
         hLast = h;
-        float sigma = P.dens.x * ((1.0 - kUpper) * exp(-h / P.dens.y) * Billow(q, h) + kUpper * exp(-h / kUpperHeight));
+        float sigma = P.dens.x * lookUp * ((1.0 - kUpper) * exp(-h / P.dens.y) * Billow(q, h) + kUpper * exp(-h / kUpperHeight));
         // (Clear round the eye - RVK_SandClear, fading in over as many again; held off in the lee of walls and
         // hills - the shelter map's, else the eye's own shelter near it.)
         float lee = P.shelter.z > 0.0 ? Lee(q) : P.gusts.z * (1.0 - smoothstep(10.0, 40.0, t));
@@ -198,7 +201,7 @@ void main()
         float d1 = abs(k1 * len) < 1e-3 ? len : (1.0 - exp(-k1 * len)) / k1;
         float d2 = abs(k2 * len) < 1e-3 ? len : (1.0 - exp(-k2 * len)) / k2;
         // (Never thicker than at the ground.)
-        float tau = P.dens.x * ((1.0 - kUpper) * min(exp(-hLast / P.dens.y) * d1, len) +
+        float tau = P.dens.x * lookUp * ((1.0 - kUpper) * min(exp(-hLast / P.dens.y) * d1, len) +
                                 kUpper * min(exp(-hLast / kUpperHeight) * d2, len));
         float a = 1.0 - exp(-tau);
         light += transmit * a * (P.albedo.rgb * (base + sunDirect * shadeLast));

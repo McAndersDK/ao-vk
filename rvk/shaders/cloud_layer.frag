@@ -110,7 +110,7 @@ float Density(vec3 p, bool detail)
     if (cover < 0.01)
         return 0.0;
     float fbm = n.g * 0.625 + n.b * 0.25 + n.a * 0.125;
-    float lift = w.a * 0.07;                     // (the uneven underside: the clouds start this much higher here -
+    float lift = w.a * (0.07 + 0.08 * L.ambient.w);   // (in a storm - L.ambient.w - a lumpier underside)                     // (the uneven underside: the clouds start this much higher here -
                                                  // gently: more, and an overcast hangs in waves)
     float body = Remap(n.r, fbm - 1.0, 1.0, 0.0, 1.0) * Profile(clamp((h - lift) / (1.0 - lift), 0.0, 1.0), w.g);
     // Coverage eats into the body from its thin parts: little cover, only the cores remain.

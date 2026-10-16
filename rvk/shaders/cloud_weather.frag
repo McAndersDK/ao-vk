@@ -33,7 +33,8 @@ void main()
     float overcast = smoothstep(0.7, 1.0, cloudy);
     float soft = Spread(texture(noiseTexture, vec3(q * 1.7 + 0.53, 0.61 + W.info.x * 0.0003)).r, 0.54, 0.80);   // (smooth: no sharp
     cover = mix(cover, 0.62 + 0.36 * smoothstep(0.2, 0.8, soft), overcast);                // ridges to stand as walls)
-    cover = mix(cover, 0.9 + 0.1 * smoothstep(0.2, 0.8, soft), W.storm.x);   // (a storm: sealed, still uneven)
+    cover = mix(cover, 0.78 + 0.22 * smoothstep(0.2, 0.8, soft), W.storm.x);   // (a storm: sealed, heavy masses and
+                                                                              // thinner stretches between)
     // A: how far above the layer's base the clouds start here - an uneven underside (seen from below, an overcast
     // is lumps and folds at different heights, lit differently, not one flat ceiling).
     float base = Spread(texture(noiseTexture, vec3(q * 3.3 + 0.71, 0.27 + W.info.x * 0.0003)).r, 0.54, 0.80);

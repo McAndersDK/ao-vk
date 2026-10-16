@@ -1499,8 +1499,10 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     }
     // Towards the horizon the clouds become the fog's colour as far as the game's are fogged (over half at least: the
     // far distance is hazy, as the game's sky).
-    lf.horizon[0] = std::clamp(0.55f + 0.45f * m_cloudFogged, 0.0f, 1.0f);
-    lf.horizon[1] = std::clamp(m_cloudParams.shade, 0.25f, 4.0f);
+    // (A thunderstorm: its clouds pronounced - less of the horizon's haze over them, more light and shade - the user.)
+    const float stormLook = std::clamp(m_rain, 0.0f, 1.0f);
+    lf.horizon[0] = std::clamp(0.55f + 0.45f * m_cloudFogged, 0.0f, 1.0f) * (1.0f - 0.4f * stormLook);
+    lf.horizon[1] = std::clamp(m_cloudParams.shade * (1.0f + 0.5f * stormLook), 0.25f, 4.0f);
     // The game's colour for its clouds, mostly whitened: its brightness kept, a little of its hue (the zones' teal
     // skies made them very blue - user: whiter).
     {
