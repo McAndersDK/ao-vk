@@ -370,8 +370,11 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
     fl->rainNear[2] = std::clamp(m_storm * std::max(m_windStormScale, 0.0f), 0.0f, 1.0f) * std::clamp(m_stormDebris, 0.0f, 2.0f);
     fl->rainNear[3] = m_ssr > 0.0f ? 1.0f : 0.0f;
     // The wet ground and the rain's cover map (its bindless slot packed as the terrain's sun map's).
-    fl->wet[0] = m_indoors ? 0.0f : m_wetness;
-    fl->wet[1] = m_indoors ? 0.0f : m_puddles;
+    // (Deferred - the user, 2026-10-16: the wet look flickered at an even beat in game; off whatever RVK_RainWet says
+    // until that is found. Suspects: the environment probe's ping-pong update, the puddles' ripple clock.)
+    constexpr bool kWetGround = false;
+    fl->wet[0] = kWetGround && !m_indoors ? m_wetness : 0.0f;
+    fl->wet[1] = kWetGround && !m_indoors ? m_puddles : 0.0f;
     fl->wet[2] = float(std::fmod(m_rainClock, 3600.0));
     fl->wet[3] = m_rainCoverOut[3];
     for (int i = 0; i < 4; ++i) fl->cover[i] = 0.0f;
