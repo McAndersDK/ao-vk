@@ -291,6 +291,13 @@ void Device::DumpDraw(uint32_t primitive, uint32_t fvf, const void* vertices, ui
                          m_rs[d3d::RS_DESTBLEND], m_rs[d3d::RS_ALPHATESTENABLE], m_rs[d3d::RS_ZENABLE],
                          m_rs[d3d::RS_ZWRITEENABLE], m_rs[d3d::RS_ZFUNC], z0, rhw0,
                          WaterWritesDepth(fvf) ? "forced (water)" : "as the game sets it");
+        } else {                                 // (the rest of 2D: what it is, how it blends - a screen flash shows)
+            const Texture* t = m_textures[0];
+            std::fprintf(m_dumpFile, "Q %u: 2D, prim %u fvf 0x%x v %u i %u | tex0 %ux%u | blend %u %u/%u | z %u/%u/%u | target %s\n",
+                         n, primitive, fvf, vertexCount, indexCount, t ? t->Width() : 0, t ? t->Height() : 0,
+                         m_rs[d3d::RS_ALPHABLENDENABLE], m_rs[d3d::RS_SRCBLEND], m_rs[d3d::RS_DESTBLEND],
+                         m_rs[d3d::RS_ZENABLE], m_rs[d3d::RS_ZWRITEENABLE], m_rs[d3d::RS_ZFUNC],
+                         m_target == m_scene ? "scene" : m_target == m_main ? "main" : "other");
         }
         return;
     }

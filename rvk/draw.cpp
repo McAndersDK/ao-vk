@@ -2284,8 +2284,23 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
         (m_drawIsLabel || (IsInterfaceDraw(fvf) && (m_target == m_main || m_target == m_uiLayer) &&
                            !(m_scenePhase && m_target == m_scene))))
         return;
-    if (m_dumpFile && !m_external)
+    if (m_dumpFile && !m_external) {
         DumpDraw(primitive, fvf, m_drawGpu ? nullptr : vertices, vertexCount, indices, indexCount);
+        // (Its vertex colours, averaged - what a draw-by-draw comparison of frames can't see otherwise: a colour
+        // pulsing frame to frame.)
+        const FvfLayout layout = DecodeFvf(fvf);
+        const uint32_t stride = FvfStride(fvf);
+        if (vertices && !m_drawGpu && layout.offset[2] >= 0 && stride && vertexCount) {
+            double sum[4] = {};
+            for (uint32_t i = 0; i < vertexCount; ++i) {
+                uint32_t c;
+                std::memcpy(&c, static_cast<const uint8_t*>(vertices) + size_t(i) * stride + layout.offset[2], 4);
+                for (int k = 0; k < 4; ++k) sum[k] += double((c >> (24 - 8 * k)) & 0xFFu);
+            }
+            std::fprintf(m_dumpFile, "  vc %u: argb %.0f %.0f %.0f %.0f\n", m_dumpDraw - 1, sum[0] / vertexCount,
+                         sum[1] / vertexCount, sum[2] / vertexCount, sum[3] / vertexCount);
+        }
+    }
     if (!m_external && !m_drawGpu && IsBlobShadow(primitive, fvf, vertices, vertexCount, indexCount))
         return;                                  // replaced by sun shadows
     if (m_drawIsCloudPuff && CaptureCloudPuff(fvf, vertices, vertexCount, indices, indexCount))
