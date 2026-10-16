@@ -1036,7 +1036,7 @@ void Device::MarchCloudPuffs(VkCommandBuffer cmd, const std::vector<std::pair<fl
         std::memcpy(cf.uvU, p.uvU, sizeof(cf.uvU));
         std::memcpy(cf.uvV, p.uvV, sizeof(cf.uvV));
         // Rain (rvk rain.cpp: how hard, eased): the clouds heavier - darker, greyer, denser.
-        const float storm = std::clamp(m_rain, 0.0f, 1.0f);
+        const float storm = StormSky();
         const float grey = (p.colour[0] + p.colour[1] + p.colour[2]) / 3.0f;
         for (int k = 0; k < 3; ++k)
             cf.colour[k] = (p.colour[k] + (grey - p.colour[k]) * 0.6f * storm) * (1.0f - 0.25f * storm) * m_cloudParams.brightness *
@@ -1142,7 +1142,7 @@ void Device::MakeCloudShadow(VkCommandBuffer cmd)
         }
         cover += std::clamp(p.colour[3], 0.0f, 1.0f) * (extent / len) * (extent / len) * 0.5f;
     }
-    sf.info[2] = std::clamp(cover * 0.6f + std::clamp(m_rain, 0.0f, 1.0f) * 0.5f, 0.0f, 1.0f) *
+    sf.info[2] = std::clamp(cover * 0.6f + StormSky() * 0.5f, 0.0f, 1.0f) *
                  std::min(m_cloudParams.density, 1.5f);
     sf.info[2] = std::min(sf.info[2], 1.0f);
     sf.info[3] = area * 0.2f;                    // (a few cloud shadows across the map)
@@ -1251,7 +1251,7 @@ void Device::UpdateCloudDrift()
     const float k = 1.0f - std::exp(-dt / 10.0f);
     m_cloudWindDir[0] += (wx - m_cloudWindDir[0]) * k;
     m_cloudWindDir[1] += (wz - m_cloudWindDir[1]) * k;
-    const float speed = 8.0f + ((4.0f + 10.0f * SkyCloudiness()) - 8.0f) * vary + 6.0f * std::clamp(m_rain, 0.0f, 1.0f) * vary;
+    const float speed = 8.0f + ((4.0f + 10.0f * SkyCloudiness()) - 8.0f) * vary + 6.0f * StormSky() * vary;
     m_cloudWindSpeed += (speed - m_cloudWindSpeed) * (1.0f - std::exp(-dt / 30.0f));
     const float dl = std::max(std::sqrt(m_cloudWindDir[0] * m_cloudWindDir[0] + m_cloudWindDir[1] * m_cloudWindDir[1]), 1e-3f);
     m_cloudDrift[0] -= m_cloudWindDir[0] / dl * m_cloudWindSpeed * dt;
@@ -1259,7 +1259,7 @@ void Device::UpdateCloudDrift()
     m_cloudDrift[2] += 1.5f * dt;
     // Scud: in a thunderstorm the low deck races along under the layer, three times as fast and more (the storm's
     // gusts) - added up, so a change of pace never jumps it.
-    const float scudSpeed = m_cloudWindSpeed * 2.5f * std::clamp(m_rain, 0.0f, 1.0f);
+    const float scudSpeed = m_cloudWindSpeed * 2.5f * StormSky();
     m_scudDrift[0] = std::fmod(m_scudDrift[0] - m_cloudWindDir[0] / dl * scudSpeed * dt, 200000.0f);
     m_scudDrift[1] = std::fmod(m_scudDrift[1] - m_cloudWindDir[1] / dl * scudSpeed * dt, 200000.0f);
 }
@@ -1280,7 +1280,7 @@ void Device::MakeCloudWeather(VkCommandBuffer cmd, const float eye[3])
     wf.area[1] = std::floor((eye[2] - area * 0.5f) / texel) * texel;
     wf.area[2] = area;
     const double clock = std::fmod(m_frameClock, 3600.0);
-    const float rain = std::clamp(m_rain, 0.0f, 1.0f);
+    const float rain = StormSky();
     float cover = 0.0f, flat = 0.0f, weight = 0.0f, wispy = 0.0f;
     uint32_t known = 0;                          // (puffs whose texture is known)
     for (const CloudPuff& p : m_cloudPuffs) {
@@ -1437,7 +1437,7 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     lf.eye[3] = float(clock);
     lf.layer[0] = m_cloudBase;
     // (A thunderstorm's layer taller: its towers - cloud_layer.frag Profile - the rest keep to the lower 1300.)
-    lf.layer[1] = m_cloudBase + kLayerThickness * (1.0f + 2.0f * smoothstep01(0.1f, 0.7f, std::clamp(m_rain, 0.0f, 1.0f)));
+    lf.layer[1] = m_cloudBase + kLayerThickness * (1.0f + 2.0f * smoothstep01(0.1f, 0.7f, StormSky()));
     lf.layer[2] = kLayerRadius;
     lf.layer[3] = kLayerReach;
     lf.weather[0] = m_cloudWeatherArea[0];
@@ -1449,7 +1449,7 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     // Detail and density by the weather (RVK_CloudDetail / RVK_CloudThick scale them): storms smooth, heavy masses -
     // 30% less erosion at full rain, 20% denser; clearer skies crisper, more ragged edges (up to +20%). (Eased: rain
     // and cloudiness are.)
-    const float stormNow = std::clamp(m_rain, 0.0f, 1.0f);
+    const float stormNow = StormSky();
     const float weatherDetail = (1.0f - 0.3f * stormNow) * (1.0f + 0.2f * (1.0f - std::clamp(m_cloudCloudy, 0.0f, 1.0f)));
     lf.shape[2] = 0.65f * m_cloudParams.detail * weatherDetail;
     lf.shape[3] = 0.02f * m_cloudParams.density * (1.0f + 0.6f * stormNow);   // (a storm's: heavy, dark underneath)
@@ -1508,7 +1508,7 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     // Towards the horizon the clouds become the fog's colour as far as the game's are fogged (over half at least: the
     // far distance is hazy, as the game's sky).
     // (A thunderstorm: its clouds pronounced - less of the horizon's haze over them, more light and shade - the user.)
-    const float stormLook = std::clamp(m_rain, 0.0f, 1.0f);
+    const float stormLook = StormSky();
     lf.horizon[0] = std::clamp(0.55f + 0.45f * m_cloudFogged, 0.0f, 1.0f) * (1.0f - 0.4f * stormLook);
     lf.horizon[1] = std::clamp(m_cloudParams.shade * (1.0f + 0.5f * stormLook), 0.25f, 4.0f);
     // The game's colour for its clouds, mostly whitened: its brightness kept, a little of its hue (the zones' teal
@@ -1519,7 +1519,7 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
         const float lift = l > 1e-3f ? std::max(1.0f, 0.62f * std::clamp(m_daylight / 0.35f, 0.0f, 1.0f) / l) : 1.0f;
         for (int k = 0; k < 3; ++k) lf.tint[k] = (l + (m_cloudTint[k] - l) * 0.3f) * lift;
     }
-    const float storm = std::clamp(m_rain, 0.0f, 1.0f);
+    const float storm = StormSky();
     {
         // RVK_CloudNight: by night (as the shaders' Night(): by the sun's true height) their brightness x more.
         const float l = std::max(std::sqrt(m_trueSunDir[0] * m_trueSunDir[0] + m_trueSunDir[1] * m_trueSunDir[1] +
@@ -1561,7 +1561,7 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     static const float deckOverride = getenv("RANDYVK_CLOUD_DECK") ? float(atof(getenv("RANDYVK_CLOUD_DECK"))) : -1.0f;
     lf.deck[0] = std::clamp((deckOverride >= 0.0f ? deckOverride : m_cloudDeck) * m_cloudParams.low, 0.0f, 1.0f);
     // (Between the ground and the layer's base; a thunderstorm's lower - its scud, near over the land.)
-    const float scud = smoothstep01(0.1f, 0.7f, std::clamp(m_rain, 0.0f, 1.0f));
+    const float scud = smoothstep01(0.1f, 0.7f, StormSky());
     lf.deck[1] = m_cloudBase - (0.55f + 0.15f * scud) * m_cloudParams.height;
     lf.deck[2] = lf.deck[1] + kDeckThickness;
     // The game's sheets' faint shadow (the shadow map), while it draws them.

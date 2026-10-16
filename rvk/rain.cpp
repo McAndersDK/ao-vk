@@ -51,6 +51,13 @@ constexpr uint32_t kBoltMaxSegments = 256;      // (bolt.vert's block)
 constexpr float kFlashLight[3] = {0.75f, 0.82f, 1.0f};   // its light on the land at a stroke's peak (x RVK_Lightning)
 constexpr double kFlashSeconds = 1.5;                    // how long a strike lights anything
 
+// 0 at a, 1 at b, smooth between.
+float SkyStep(float a, float b, float x)
+{
+    const float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
 float StrikeHash(uint32_t seed, uint32_t salt)
 {
     uint32_t x = seed * 0x9E3779B9u + salt * 0x85EBCA6Bu;
@@ -338,28 +345,44 @@ void Device::RenderRain(VkCommandBuffer cmd)
     const double now = m_frameClock;
     const float dt = m_rainLastClock < 0.0 ? 0.0f : float(std::clamp(now - m_rainLastClock, 0.0, 0.25));
     m_rainLastClock = now;
-    float target = 0.0f;
+    float target = 0.0f, skyTarget = 0.0f;
     if (P.enable && !m_indoors) {
         if (P.force > 0.0f || P.stormForce > 0.0f)
-            target = std::min(std::max(P.force, P.stormForce), 1.0f);   // (forced: rain, or a thunderstorm's)
+            target = skyTarget = std::min(std::max(P.force, P.stormForce), 1.0f);   // (forced: rain, or a thunderstorm's)
         else if (now - m_weatherGameTime < 0.5) {
             // The game's weather (0..1: its rain is intensity^3 x kGameRainMax) - from where its own rain shows: below
             // ~0.25 it draws next to nothing (a lingering 0.13 left a constant drizzle here, its drops long streaks
             // across the sky).
             const float weather = std::cbrt(std::max(m_weatherGame.precipitation, 0.0f) / kGameRainMax);
             target = std::clamp((weather - kGameRainFrom) / (1.0f - kGameRainFrom), 0.0f, 1.0f);
+            // Its sky: a storm's as soon as it really rains - the game's heaviest rain seen is ~0.3 here (its
+            // precipitation 0.012 .. 0.016: our rain only ~0.1), which a storm's sky must answer in full (the user:
+            // rain under hardly any of our clouds).
+            skyTarget = SkyStep(0.10f, 0.28f, weather);
+        }
+        // The game's lightning: a storm's sky too, rain or none (the user: strikes all round under an open sky) - most
+        // of it for one strike, all of it for a few; held two minutes past the last, then gone over another.
+        if (now - m_lastGameStrike < 180.0) {
+            const float since = float(now - m_lastGameStrike);
+            const float hold = 1.0f - SkyStep(120.0f, 180.0f, since);
+            skyTarget = std::max(skyTarget, (0.75f + 0.25f * SkyStep(1.0f, 2.0f, m_strikeHeat)) * hold);
         }
     }
+    m_strikeHeat *= std::exp(-dt / 45.0f);
     m_rain += (target - m_rain) * (1.0f - std::exp(-dt / 2.5f));
     if (target == 0.0f && m_rain < 0.003f)
         m_rain = 0.0f;
+    // (The sky rolls in over some seconds - not dark at a strike's flash - and clears slower than the rain stops.)
+    m_stormSky += (skyTarget - m_stormSky) * (1.0f - std::exp(-dt / (skyTarget > m_stormSky ? 12.0f : 60.0f)));
+    if (skyTarget == 0.0f && m_stormSky < 0.003f)
+        m_stormSky = 0.0f;
     const bool fromGame = now - m_weatherGameTime < 0.5;
     if (fromGame && ++m_rainLogFrame % 600 == 1)
         Log("weather: the game's precipitation %.4f, wind %.2f %.2f %.2f, colour %06x, fall %.2f, wind scale %.3f, "
-            "opacity %.2f -> rain %.2f (target %.2f)", double(m_weatherGame.precipitation), double(m_weatherGame.wind[0]),
-            double(m_weatherGame.wind[1]), double(m_weatherGame.wind[2]), m_weatherGame.colour,
+            "opacity %.2f -> rain %.2f (target %.2f), storm sky %.2f (target %.2f)", double(m_weatherGame.precipitation),
+            double(m_weatherGame.wind[0]), double(m_weatherGame.wind[1]), double(m_weatherGame.wind[2]), m_weatherGame.colour,
             double(m_weatherGame.fallSpeed), double(m_weatherGame.windScale), double(m_weatherGame.opacity),
-            double(m_rain), double(target));
+            double(m_rain), double(target), double(m_stormSky), double(skyTarget));
     m_rainClock += dt;
     // The ground soaked by the rain (RVK_RainWet): wet in half a minute of rain, dry over minutes after; puddles slower
     // to gather, slower to go. Where it lies: the rain's cover map (the sand map's, built while it rains or the ground
@@ -737,6 +760,8 @@ void Device::UpdateLightning()
     }
     if (b > 0.04f && b > prev * 1.6f + 0.02f && m_frameClock - m_flashStart > 0.6) {
         TriggerLightning(m_glowPos);
+        m_lastGameStrike = now;                  // (a storm's sky: RenderRain)
+        m_strikeHeat += 1.0f;
         Log("lightning: a strike at %.0f %.0f %.0f (the game's glow %.2f)", double(m_glowPos[0]), double(m_glowPos[1]),
             double(m_glowPos[2]), double(b));
     }
@@ -769,7 +794,7 @@ void Device::Lightning(float flash[4], float view[4], float proj[4], float world
 // tinted towards a green-grey as it rains, its brightness kept (unit luma).
 void Device::StormGreen(float out[3]) const
 {
-    const float k = std::clamp(m_stormGreen, 0.0f, 1.0f) * std::clamp(m_rain, 0.0f, 1.0f);
+    const float k = std::clamp(m_stormGreen, 0.0f, 1.0f) * StormSky();
     const float green[3] = {1.01f, 1.063f, 0.638f};   // (yellow-green - the user: 0.95, 1, 0.6 at unit luma)
     for (int i = 0; i < 3; ++i) out[i] = 1.0f + (green[i] - 1.0f) * k;
 }
@@ -780,7 +805,7 @@ float Device::StormOvercast() const
 {
     if (!m_weatherParams.enable)
         return 0.0f;
-    const float r = std::clamp((m_rain - 0.05f) / 0.55f, 0.0f, 1.0f);
+    const float r = std::clamp((StormSky() - 0.05f) / 0.55f, 0.0f, 1.0f);
     return std::clamp(r * r * (3.0f - 2.0f * r) * std::max(m_stormDark, 0.0f), 0.0f, 1.0f);
 }
 
@@ -789,9 +814,9 @@ float Device::StormOvercast() const
 // horizon stood teal under a dark green storm sky (the user). (RVK_StormGreen x how hard it rains; none without rain.)
 void Device::StormHue(float rgb[3]) const
 {
-    if (!m_weatherParams.enable || m_rain <= 0.0f || m_stormGreen <= 0.0f)
+    if (!m_weatherParams.enable || m_stormSky <= 0.0f || m_stormGreen <= 0.0f)
         return;
-    const float r = std::clamp((m_rain - 0.05f) / 0.55f, 0.0f, 1.0f);
+    const float r = std::clamp((StormSky() - 0.05f) / 0.55f, 0.0f, 1.0f);
     const float k = std::clamp(m_stormGreen, 0.0f, 1.0f) * r * r * (3.0f - 2.0f * r);
     const float green[3] = {1.01f, 1.063f, 0.638f};   // (unit luma: as StormGreen)
     const float l = 0.3f * rgb[0] + 0.59f * rgb[1] + 0.11f * rgb[2];

@@ -1505,7 +1505,7 @@ void Device::BeginFrame()
             m_indoorRun = 0;
             Log("weather: %s (rooms %u, terrain %u drawn)", inside ? "indoors - none" : "outdoors", m_frameRoomVisuals,
                 m_frameTerrainVisuals);
-            if (inside) m_rain = m_sand = m_storm = 0.0f;
+            if (inside) m_rain = m_stormSky = m_sand = m_storm = 0.0f;
         }
         m_frameRoomVisuals = m_frameTerrainVisuals = 0;
     }

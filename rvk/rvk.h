@@ -366,6 +366,7 @@ public:
     void SetStormDebris(float s) { m_stormDebris = s; }            // RVK_StormDebris (x)
     void SetWetNow(float wet, float puddles) { m_wetness = wet; m_puddles = puddles; }   // (tests: soaked already)
     float StormOvercast() const;
+    float StormSky() const { return std::clamp(m_stormSky, 0.0f, 1.0f); }   // how much a storm's sky (rain.cpp)
     void StormSmokeWind(float out[3]) const;                       // a storm's own wind on the smoke (smoke.cpp)                                   // how much a thunderstorm hides the sun (rain.cpp)
     void StormHue(float rgb[3]) const;                             // a colour turned the storm's dark yellow-green (rain.cpp)
     // A thunderstorm's green cast (RVK_StormGreen x how hard it rains): per channel, about unit brightness (rain.cpp).
@@ -1925,6 +1926,10 @@ private:
     WeatherState m_weatherGame;                  // the game's, as last handed over
     double m_weatherGameTime = -1e9;             // when (m_frameClock)
     float m_rain = 0.0f;                         // how hard it rains now, 0..1 (eased towards the target)
+    float m_stormSky = 0.0f;                     // how much a storm's sky now, 0..1: the rain's or the lightning's,
+                                                 // eased (rain.cpp RenderRain) - the clouds, the sun, the storm's hue
+    double m_lastGameStrike = -1e9;              // the game's last strike (m_frameClock)
+    float m_strikeHeat = 0.0f;                   // the game's recent strikes, counted and fading (half a minute)
     float m_wetness = 0.0f, m_puddles = 0.0f;    // the ground soaked by the rain, the puddles on it (rain.cpp: slow
                                                  // to come, slower to dry)
     float m_rainWet = 1.0f;                      // RVK_RainWet: the wet ground and the puddles, x

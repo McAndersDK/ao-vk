@@ -710,7 +710,7 @@ void Device::LandHaze(float out[24]) const
     if (m_atmos) {
         const auto& v = m_aoView.m;
         const float vary = std::clamp(m_cloudParams.vary, 0.0f, 1.0f);
-        const float weather = (1.0f + (0.7f + 0.7f * SkyCloudiness() - 1.0f) * vary) * (1.0f + std::clamp(m_rain, 0.0f, 1.0f));
+        const float weather = (1.0f + (0.7f + 0.7f * SkyCloudiness() - 1.0f) * vary) * (1.0f + StormSky());
         out[8] = m_aoProj.m[0][0];
         out[9] = m_aoProj.m[1][1];
         out[10] = 0.6f / fogParams[1] * weather;

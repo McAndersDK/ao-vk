@@ -77,9 +77,9 @@ void Device::UpdateWind()
         }
     }
 
-    // How hard: the storm is the rain (rain.cpp eases it towards the game's weather) or the sand (the game's ~0.38 a full
+    // How hard: the storm is its sky (rain.cpp: the rain, or the game's lightning) or the sand (the game's ~0.38 a full
     // sandstorm), eased again.
-    const float stormTarget = std::clamp(std::max(m_rain, 2.5f * m_sand), 0.0f, 1.0f);
+    const float stormTarget = std::clamp(std::max(StormSky(), 2.5f * m_sand), 0.0f, 1.0f);
     const float ease = dt > 0.0f ? 1.0f - std::exp(-dt / kStormSeconds) : 1.0f;
     m_storm += (stormTarget - m_storm) * ease;
     if (m_storm < 1e-3f && stormTarget == 0.0f) m_storm = 0.0f;
