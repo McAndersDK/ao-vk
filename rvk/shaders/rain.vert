@@ -32,18 +32,27 @@ void main()
     vec3 lo = R.camera.xyz - size * 0.5;
     float t = R.time.x;
     // (Its way so far: the rain's, added up as the wind changed, x its own speed; its own drift on the clock.)
-    vec3 head = lo + mod(seed * size + R.drift.xyz * speed + own * t - lo, size);
+    // Each time it falls out of the box and comes in again at the top it is a new drop: somewhere else across, its
+    // own brightness and streak - else every drop came back where it was each fall through the box (~1-2 s), the same
+    // pattern over and over to someone standing still (the user). (Its wrap is at the box's top and bottom, faded.)
+    float fallen = seed.y * size.y + R.drift.y * speed - lo.y;
+    float cycle = floor(fallen / size.y);
+    uint fresh = RainHash(drop * 2654435761u + uint(int(cycle)) * 40503u + 911u);
+    vec2 across = vec2(RainRand(fresh), RainRand(fresh));
+    float look = 0.6 + 0.6 * RainRand(fresh);      // (brightness)
+    float streak = 0.7 + 0.6 * RainRand(fresh);    // (its streak's length)
+    vec3 head = lo + mod(vec3(across.x, seed.y, across.y) * size + R.drift.xyz * speed + own * t - lo, size);
     vec3 prevHead = head - v * max(t - R.time.y, 0.0);
     // A gust front passing leans it further (the streak: the eye reads the slant) and gathers the rain there into a
     // curtain, thinner between (about as much rain on the whole).
     float gust = Gust(WindAxes(head.xz, FL.wind.xy, FL.windFrame.xy), FL.wind.z);
-    vec3 tail = head - (v + vec3(FL.wind.x, 0.0, FL.wind.y) * (R.drift.w * gust)) * R.curtains.y;
+    vec3 tail = head - (v + vec3(FL.wind.x, 0.0, FL.wind.y) * (R.drift.w * gust)) * (R.curtains.y * streak);
 
     // Faded out towards the box's walls (where the drops wrap) and right at the camera.
     vec3 rel = (head - R.camera.xyz) / (size * 0.5);
     float edge = 1.0 - smoothstep(0.65, 1.0, max(abs(rel.x), max(abs(rel.y), abs(rel.z))));
     float dist = distance(head, R.camera.xyz);
-    float alpha = R.colour.w * edge * smoothstep(0.3, 1.2, dist) * mix(1.0, 0.6 + 2.6 * gust, R.curtains.x);
+    float alpha = R.colour.w * edge * smoothstep(0.3, 1.2, dist) * mix(1.0, 0.6 + 2.6 * gust, R.curtains.x) * look;
 
     vec4 cHead = R.viewProj * vec4(head, 1.0), cTail = R.viewProj * vec4(tail, 1.0);
     if (cHead.w < 0.05 || cTail.w < 0.05 || alpha <= 0.0) {
