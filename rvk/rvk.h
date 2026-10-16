@@ -361,6 +361,8 @@ public:
     void SetRainFog(float s) { m_rainFog = s; }                    // RVK_RainFog (x; 0: none)
     void SetStormGreen(float s) { m_stormGreen = s; }              // RVK_StormGreen (0..1)
     void SetStormDark(float s) { m_stormDark = s; }                // RVK_StormDark (x)
+    void SetRainWet(float s) { m_rainWet = s; }                    // RVK_RainWet (x)
+    void SetWetNow(float wet, float puddles) { m_wetness = wet; m_puddles = puddles; }   // (tests: soaked already)
     float StormOvercast() const;                                   // how much a thunderstorm hides the sun (rain.cpp)
     void StormHue(float rgb[3]) const;                             // a colour turned the storm's dark yellow-green (rain.cpp)
     // A thunderstorm's green cast (RVK_StormGreen x how hard it rains): per channel, about unit brightness (rain.cpp).
@@ -1898,6 +1900,9 @@ private:
     WeatherState m_weatherGame;                  // the game's, as last handed over
     double m_weatherGameTime = -1e9;             // when (m_frameClock)
     float m_rain = 0.0f;                         // how hard it rains now, 0..1 (eased towards the target)
+    float m_wetness = 0.0f, m_puddles = 0.0f;    // the ground soaked by the rain, the puddles on it (rain.cpp: slow
+                                                 // to come, slower to dry)
+    float m_rainWet = 1.0f;                      // RVK_RainWet: the wet ground and the puddles, x
     // The shared wind (wind.cpp UpdateWind, read through Wind()): every swaying, falling and drifting thing's.
     float m_windDir[2] = {0.848f, 0.530f};       // where it blows (world x, z, unit)
     float m_windStrength = 1.0f;                 // x the sway: 1 calm .. ~3 in a full storm
@@ -1946,6 +1951,10 @@ private:
         int origin[2] = {0, 0};                  // its first cell (world cells)
         std::vector<float> ground, solid, crownLo, crownHi, feed, shelterSolid, shelterCrown;
         std::vector<float> wallLo, floor;        // (building it: walls' lowest point over a cell, floors' highest)
+        // The rain's (sand_map.cpp RainCoverMap): the highest solid thing over a cell, whether it reaches the ground or
+        // not (a roof, an overhang, an arch - the sand's solid keeps only what does); how far its ground lies below
+        // the ground round it (a hollow: puddles gather there).
+        std::vector<float> cover, hollow;
         // The flow round solid obstacles (SandFlow): the wind's direction there (x z, a unit wind's), how far the air
         // arriving there was pushed aside on its way (x z, world), the nearest obstacle's top (world y).
         std::vector<float> flowX, flowZ, offsetX, offsetZ, nearTop;
@@ -2006,6 +2015,14 @@ private:
     // The map's solid shelter for the sand fog (sand_fog.frag binding 5): out its corner x, z, 1 / its size, the
     // height its tops are taken from; false without a map.
     bool SandFogShelter(float out[4]);
+    // The rain's cover map (sand_map.cpp: rain.vert, splash.vert, the wet ground): RGBA16F over the sand map's cells -
+    // the highest solid over each, the see-through cover's top and bottom (over m_rainCoverRef), the ground's hollow.
+    // out: its corner x, z, 1 / its size, the height its heights are taken from; false without a map.
+    bool RainCoverMap(float out[4]);
+    Texture* m_rainCover = nullptr;
+    uint32_t m_rainCoverGen = ~0u;
+    float m_rainCoverRef = 0.0f;
+    float m_rainCoverOut[4] = {};                // (this frame's: RainCoverMap's out, 0 0 0 0 without)
     void DumpSandMap(const std::string& path) const;
     std::vector<float> m_sandGround;             // per column (4 floats): its top (the ground or a solid's; box units),
                                                  // how much sand it gives, the shelter heights solid, see-through (box

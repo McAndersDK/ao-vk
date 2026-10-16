@@ -181,6 +181,7 @@ void Device::UpdateSandMap()
             m.wallLo.assign(cells, 1e9f);
             m.floor.assign(cells, kUnknown);
             m.crownHi.assign(cells, kUnknown);
+            m.cover.assign(cells, kUnknown);
             m.feed.assign(cells, 1.0f);
             m.statelGen = m_statelGeneration;
             const float x0 = float(ex) * kMapCell, z0 = float(ez) * kMapCell, size = kMapN * kMapCell;
@@ -311,6 +312,32 @@ void Device::FinishSandCells(SandMap& m)
         const bool blocks = m.ground[c] > kUnknown * 0.5f && m.wallLo[c] <= m.ground[c] + 1.5f;
         if (!blocks) m.solid[c] = kUnknown;
     }
+    // The ground's hollows (puddles): how far each cell lies below the mean of the ground ~4 units round it (two
+    // running sums, along x then z; unknown ground counts as none).
+    const int r = 8;
+    std::vector<float> sum(m.ground.size(), 0.0f), count(m.ground.size(), 0.0f), sum2(m.ground.size()), count2(m.ground.size());
+    for (int z = 0; z < kMapN; ++z) {
+        float s = 0.0f, n = 0.0f;
+        auto at = [&](int x, float& v) { const float g = m.ground[size_t(z) * kMapN + x]; if (g > kUnknown * 0.5f) { v = g; return true; } return false; };
+        for (int x = -r; x < kMapN; ++x) {
+            float v;
+            if (x + r < kMapN && at(x + r, v)) { s += v; n += 1.0f; }
+            if (x - r - 1 >= 0 && at(x - r - 1, v)) { s -= v; n -= 1.0f; }
+            if (x >= 0) { sum[size_t(z) * kMapN + x] = s; count[size_t(z) * kMapN + x] = n; }
+        }
+    }
+    for (int x = 0; x < kMapN; ++x) {
+        float s = 0.0f, n = 0.0f;
+        for (int z = -r; z < kMapN; ++z) {
+            if (z + r < kMapN) { s += sum[size_t(z + r) * kMapN + x]; n += count[size_t(z + r) * kMapN + x]; }
+            if (z - r - 1 >= 0) { s -= sum[size_t(z - r - 1) * kMapN + x]; n -= count[size_t(z - r - 1) * kMapN + x]; }
+            if (z >= 0) { sum2[size_t(z) * kMapN + x] = s; count2[size_t(z) * kMapN + x] = n; }
+        }
+    }
+    m.hollow.assign(m.ground.size(), 0.0f);
+    for (size_t c = 0; c < m.ground.size(); ++c)
+        if (m.ground[c] > kUnknown * 0.5f && count2[c] > 0.5f)
+            m.hollow[c] = std::max(sum2[c] / count2[c] - m.ground[c], 0.0f);
 }
 
 // The flow round solid obstacles: each cell's nearest one (a distance transform: the nearest solid cell carried along
@@ -526,6 +553,7 @@ void Device::RasterSandItem(SandMap& m, uint32_t index)
                 } else if (flat && m.ground[cell] > kUnknown * 0.5f && hi <= m.ground[cell] + 2.0f) {
                     m.floor[cell] = std::max(m.floor[cell], hi);   // (a floor: plating, a platform, steps)
                 } else {
+                    m.cover[cell] = std::max(m.cover[cell], hi);   // (the rain's: kept whether it reaches down or not)
                     m.solid[cell] = std::max(m.solid[cell], hi);
                     if (!flat) m.wallLo[cell] = std::min(m.wallLo[cell], lo);
                 }
@@ -667,6 +695,51 @@ bool Device::SandFogShelter(float out[4])
     out[1] = float(m.origin[1]) * kMapCell;
     out[2] = 1.0f / (float(kMapN) * kMapCell);
     out[3] = m_sandFogShelterRef;
+    return true;
+}
+
+// The rain's cover map (rain.vert, splash.vert, ffp_main's wet ground), made again when the map is: per cell R the
+// highest solid thing over it, G B the see-through cover's top and bottom (over m_rainCoverRef; -9000 none), A how
+// far its ground lies in a hollow. Built whenever it rains or the ground is wet (rain.cpp), not only in a sandstorm.
+bool Device::RainCoverMap(float out[4])
+{
+    out[0] = out[1] = out[2] = out[3] = 0.0f;
+    const SandMap& m = m_sandMap;
+    if (!m.valid || m.cover.size() != size_t(kMapN) * kMapN || m.hollow.size() != m.cover.size())
+        return false;
+    if (!m_rainCover) {
+        m_rainCover = CreateTexture(kMapN, kMapN, Format::RGBA16F, 1);
+        if (!m_rainCover)
+            return false;
+        m_rainCoverGen = ~0u;
+    }
+    if (m_rainCoverGen != m_sandShelterGen) {
+        auto half = [](float f) {
+            uint32_t x;
+            std::memcpy(&x, &f, 4);
+            const uint32_t sign = (x >> 16) & 0x8000u;
+            const int32_t e = int32_t((x >> 23) & 0xFF) - 127 + 15;
+            const uint32_t mant = x & 0x7FFFFFu;
+            if (e <= 0) return uint16_t(sign);
+            if (e >= 31) return uint16_t(sign | 0x7BFFu);
+            return uint16_t(sign | (uint32_t(e) << 10) | (mant >> 13));
+        };
+        m_rainCoverRef = m_frameEye[1];
+        auto rel = [&](float y) { return y > kUnknown * 0.5f && y < 1e8f ? y - m_rainCoverRef : -9000.0f; };
+        std::vector<uint16_t> texels(size_t(kMapN) * kMapN * 4);
+        for (size_t c = 0; c < size_t(kMapN) * kMapN; ++c) {
+            texels[c * 4 + 0] = half(rel(m.cover[c]));
+            texels[c * 4 + 1] = half(rel(m.crownHi[c]));
+            texels[c * 4 + 2] = half(m.crownHi[c] > kUnknown * 0.5f ? rel(m.crownLo[c]) : -9000.0f);
+            texels[c * 4 + 3] = half(std::min(m.hollow[c], 8.0f));
+        }
+        UpdateTexture(m_rainCover, 0, 0, 0, kMapN, kMapN, texels.data(), kMapN * 8);
+        m_rainCoverGen = m_sandShelterGen;
+    }
+    out[0] = float(m.origin[0]) * kMapCell;
+    out[1] = float(m.origin[1]) * kMapCell;
+    out[2] = 1.0f / (float(kMapN) * kMapCell);
+    out[3] = m_rainCoverRef;
     return true;
 }
 

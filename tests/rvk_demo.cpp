@@ -1147,6 +1147,7 @@ int g_grassBenchLoading = 0;      // --grass-bench-loading N: the ground's textu
 bool g_grassBenchLoadingNull = false;   // --grass-bench-loading-null: ... drawn untextured instead
 bool g_grassBenchPlatform = false;  // --grass-bench-platform: a flat slab lying on the ground ahead (no grass under it)
 bool g_grassBenchStorm = false;   // --grass-bench-storm: AO's sandstorm tint (a depth-writing ZFUNC ALWAYS sprite)
+bool g_bareGround = false;        // --bare-ground: the grass bench's ground sandy, no grass (the wet ground, puddles)
 bool g_sandStorm = false;         // --sand-storm: the grass bench in a desert sandstorm (sandy ground, the game's tint,
                                   // the new weather without rain: our haze and blowing sand)
 float g_sandBlow = 1.0f;          // --sand-blow X: RVK_SandBlow
@@ -1154,6 +1155,7 @@ uint32_t g_sandRes = 0;           // --sand-res N: RVK_SandRes
 float g_windStorm = 1.0f;         // --wind-storm X: RVK_WindStorm
 float g_sandForce = 0.0f;         // --sand-force X: RVK_SandForce
 float g_rainSpeed = 15.0f, g_rainLength = 0.45f;   // --rain-speed S, --rain-length L: RVK_RainSpeed, RVK_RainLength
+float g_wetNow = -1.0f;           // --wet W: the ground soaked (and its puddles) this much from the start
 float g_stormForce = 0.0f;        // --storm F: RVK_StormForce (a thunderstorm: rain, wind, our own strikes)
 float g_strikeRate = 6.0f;        // --strike-rate R: RVK_StrikeRate (strikes a minute)
 int g_lightningAt = -1;           // --lightning-at N: a strike ahead of the camera at frame N (the grass bench)
@@ -1281,7 +1283,7 @@ void RunGrassBench(D& dev, int frames, const std::string& shot)
     std::vector<uint32_t> grassPixels(64 * 64);
     for (int y = 0; y < 64; ++y)
         for (int x = 0; x < 64; ++x)
-            grassPixels[y * 64 + x] = g_sandStorm ? ((x / 4 + y / 4) & 1 ? 0xFFC8A46E : 0xFFBE9862)
+            grassPixels[y * 64 + x] = g_sandStorm || g_bareGround ? ((x / 4 + y / 4) & 1 ? 0xFFC8A46E : 0xFFBE9862)
                                     : (x >= 26 && x < 38) ? 0xFF8A6A4A : ((x / 4 + y / 4) & 1 ? 0xFF3C6A2A : 0xFF2E5320);
     // (Loading: a game draws ground whose texture isn't in yet with a stand-in, then uploads the picture.)
     const std::vector<uint32_t> standIn(64 * 64, 0xFF3C6A2A);
@@ -3858,6 +3860,7 @@ int main(int argc, char** argv)
         else if (a == "--lightning-at" && i + 1 < argc) g_lightningAt = std::atoi(argv[++i]);
         else if (a == "--rain-speed" && i + 1 < argc) g_rainSpeed = float(std::atof(argv[++i]));
         else if (a == "--rain-length" && i + 1 < argc) g_rainLength = float(std::atof(argv[++i]));
+        else if (a == "--wet" && i + 1 < argc) g_wetNow = float(std::atof(argv[++i]));
         else if (a == "--storm" && i + 1 < argc) { g_stormForce = float(std::atof(argv[++i])); hdr = true; }
         else if (a == "--strike-rate" && i + 1 < argc) g_strikeRate = float(std::atof(argv[++i]));
         else if (a == "--water-mesh-at" && i + 3 < argc) { for (float& x : g_waterMeshAt) x = float(std::atof(argv[++i])); }
@@ -3916,6 +3919,7 @@ int main(int argc, char** argv)
             g_sandWind[1] = float(std::atof(argv[++i]));
             g_sandWindSet = true;
         }
+        else if (a == "--bare-ground") g_bareGround = true;
         else if (a == "--sand-storm") { g_grassFieldOn = g_grassBench = g_grassBenchStorm = g_sandStorm = true; hdr = true; }
         else if (a == "--sand-blow" && i + 1 < argc) g_sandBlow = float(std::atof(argv[++i]));
         else if (a == "--sand-res" && i + 1 < argc) g_sandRes = uint32_t(std::atoi(argv[++i]));
@@ -4082,6 +4086,7 @@ int main(int argc, char** argv)
         weather.strikeRate = g_strikeRate;
         weather.speed = g_rainSpeed;
         weather.length = g_rainLength;
+        if (g_wetNow >= 0.0f) dev.SetWetNow(g_wetNow, g_wetNow);
         dev.SetWeatherParams(weather);
     }
     dev.SetSandBlow(g_sandBlow);

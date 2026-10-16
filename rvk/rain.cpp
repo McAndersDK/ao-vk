@@ -78,20 +78,22 @@ void Device::SetWeather(const WeatherState& state)
 bool Device::CreateRainResources(std::string* error)
 {
     DestroyRainResources();
-    // One pushed set: 0 the block, 4 the frame lights, 1 the scene's depth (the splashes).
-    VkDescriptorSetLayoutBinding b[3] = {};
+    // One pushed set: 0 the block, 4 the frame lights, 1 the scene's depth (the splashes), 2 the cover map.
+    VkDescriptorSetLayoutBinding b[4] = {};
     b[0].binding = 0;
     b[1].binding = 4;
     b[2].binding = 1;
+    b[3].binding = 2;
     for (auto& x : b) {
         x.descriptorCount = 1;
         x.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         x.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     }
     b[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    b[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     VkDescriptorSetLayoutCreateInfo sl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     sl.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-    sl.bindingCount = 3;
+    sl.bindingCount = 4;
     sl.pBindings = b;
     if (!Check(vkCreateDescriptorSetLayout(m_device, &sl, nullptr, &m_rainSetLayout), "vkCreateDescriptorSetLayout", error))
         return false;
@@ -224,6 +226,25 @@ void Device::RenderRain(VkCommandBuffer cmd)
             double(m_weatherGame.fallSpeed), double(m_weatherGame.windScale), double(m_weatherGame.opacity),
             double(m_rain), double(target));
     m_rainClock += dt;
+    // The ground soaked by the rain (RVK_RainWet): wet in half a minute of rain, dry over minutes after; puddles slower
+    // to gather, slower to go. Where it lies: the rain's cover map (the sand map's, built while it rains or the ground
+    // is wet - roofs and canopies keep the ground under them dry, and the rain off it).
+    {
+        const float wetTarget = P.enable ? std::clamp(m_rain, 0.0f, 1.0f) * std::max(m_rainWet, 0.0f) : 0.0f;
+        m_wetness += (std::min(wetTarget, 1.0f) - m_wetness) * (1.0f - std::exp(-dt / (wetTarget > m_wetness ? 25.0f : 240.0f)));
+        const float puddleTarget = std::min(wetTarget * wetTarget, 1.0f);
+        m_puddles += (puddleTarget - m_puddles) * (1.0f - std::exp(-dt / (puddleTarget > m_puddles ? 90.0f : 600.0f)));
+        if (m_wetness < 1e-3f && wetTarget == 0.0f) m_wetness = 0.0f;
+        if (m_puddles < 1e-3f && puddleTarget == 0.0f) m_puddles = 0.0f;
+        if (P.enable && (m_rain > 0.01f || m_wetness > 0.01f)) {
+            if (!SandActive())
+                UpdateSandMap();                 // (a sandstorm's volume keeps it already)
+            if (!RainCoverMap(m_rainCoverOut))
+                std::memset(m_rainCoverOut, 0, sizeof(m_rainCoverOut));
+        } else {
+            std::memset(m_rainCoverOut, 0, sizeof(m_rainCoverOut));
+        }
+    }
     if (m_rain <= 0.0f || !m_rainPipeline || !m_scene || !m_hdr)
         return;
     const uint32_t drops = std::min(uint32_t(float(kRainMaxDrops) * m_rain * std::clamp(P.amount, 0.0f, 4.0f)), 4u * kRainMaxDrops);
@@ -351,8 +372,12 @@ void Device::RenderRain(VkCommandBuffer cmd)
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rainPipeline);
     VkDescriptorBufferInfo blockInfo{f.ring, motionOffset, sizeof(RainFrame)};
     VkDescriptorBufferInfo lightsInfo{f.ring, m_frameLightsOffset, sizeof(FrameLights)};
-    VkWriteDescriptorSet writes[2] = {};
-    for (int i = 0; i < 2; ++i) {
+    // (The cover map: unread without one - FL.cover.z 0.)
+    const bool coverMap = m_rainCover && m_rainCover->m_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkDescriptorImageInfo coverInfo{m_pointSampler, coverMap ? m_rainCover->m_view : m_blackTexture->m_view,
+                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet writes[3] = {};
+    for (int i = 0; i < 3; ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].descriptorCount = 1;
         writes[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -361,7 +386,10 @@ void Device::RenderRain(VkCommandBuffer cmd)
     writes[0].pBufferInfo = &blockInfo;
     writes[1].dstBinding = 4;
     writes[1].pBufferInfo = &lightsInfo;
-    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rainLayout, 0, 2, writes);
+    writes[2].dstBinding = 2;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[2].pImageInfo = &coverInfo;
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rainLayout, 0, 3, writes);
     vkCmdDraw(cmd, drops * 6, 1, 0, 0);
     EndRendering();
 
@@ -399,7 +427,7 @@ void Device::RenderRain(VkCommandBuffer cmd)
             vkCmdSetViewport(cmd, 0, 1, &viewport);
             vkCmdSetScissor(cmd, 0, 1, &scissor);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rainNearPipeline);
-            vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rainLayout, 0, 2, writes);
+            vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rainLayout, 0, 3, writes);
             vkCmdDraw(cmd, drops * 6, 1, 0, 0);
             vkCmdEndRendering(cmd);
             m_rainNearFrame = m_frameNumber;
@@ -437,14 +465,14 @@ void Device::RenderRain(VkCommandBuffer cmd)
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_splashPipeline);
     VkDescriptorBufferInfo splashInfo{f.ring, splashOffset, sizeof(RainFrame)};
     VkDescriptorImageInfo depthInfo{m_pointSampler, m_depthView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet splashWrites[3] = {writes[0], writes[1], {}};
+    VkWriteDescriptorSet splashWrites[4] = {writes[0], writes[1], {}, writes[2]};
     splashWrites[0].pBufferInfo = &splashInfo;
     splashWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     splashWrites[2].dstBinding = 1;
     splashWrites[2].descriptorCount = 1;
     splashWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     splashWrites[2].pImageInfo = &depthInfo;
-    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rainLayout, 0, 3, splashWrites);
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rainLayout, 0, 4, splashWrites);
     vkCmdDraw(cmd, splashes * 6, 1, 0, 0);
     vkCmdEndRendering(cmd);
     ProfileMark("rain splashes");

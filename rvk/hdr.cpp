@@ -330,6 +330,8 @@ void Device::DestroyHdrResources()
     for (Texture*& t : m_sandFogTex)
         if (t) { DestroyTextureNow(t); t = nullptr; }
     if (m_sandFogShelter) { DestroyTextureNow(m_sandFogShelter); m_sandFogShelter = nullptr; }
+    if (m_rainCover) { DestroyTextureNow(m_rainCover); m_rainCover = nullptr; }
+    m_rainCoverGen = ~0u;
     if (m_rainNear) { DestroyTextureNow(m_rainNear); m_rainNear = nullptr; }
     m_sandFogShelterGen = ~0u;
     if (m_ssrTex) { DestroyTextureNow(m_ssrTex); m_ssrTex = nullptr; }

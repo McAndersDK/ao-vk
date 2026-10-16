@@ -134,6 +134,10 @@ struct FrameLights {               // binding 4: per-frame data (constants.glsl 
     float flashWorld[4];           // ... the strike (world; the storm's fog lit round it)
     float rainNear[4];             // x: 1 = the tone mapping's rain layer (binding 16) holds this frame's rain; y: how much
                                    // a thunderstorm hides the sun (0..1: Device::StormOvercast)
+    float wet[4];                  // the wet ground (rain.cpp): x how soaked, y the puddles, z the rain's clock (their
+                                   // ripples), w the cover map's heights' reference (world y)
+    float cover[4];                // the rain's cover map (sand_map.cpp RainCoverMap): corner x, z, 1 / size, bindless
+                                   // image + 1 | sampler << 20 (the float's bits; 0 = none)
     GpuLight lights[kFrameLights];
 };
 

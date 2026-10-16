@@ -484,6 +484,49 @@ float LeafMask()
     return D.leaf.w > 0.0 ? LeafMaskAt(vSet0, vTex0.xy * vec2(textureSize(TEX0, 0))) : 1.0;
 }
 
+// The rain's cover map at a point (rvk sand_map.cpp RainCoverMap, FL.cover): x how sheltered (under a roof 1, a canopy
+// mostly), y how far the ground there lies in a hollow (puddles).
+vec2 RainCoverAt(vec3 p)
+{
+    uint slot = floatBitsToUint(FL.cover.w);
+    if ((slot & 0xFFFFFu) == 0u || FL.cover.z <= 0.0)
+        return vec2(0.0);
+    vec2 uv = (p.xz - FL.cover.xy) * FL.cover.z;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThanEqual(uv, vec2(1.0))))
+        return vec2(0.0);
+    uint img = (slot & 0xFFFFFu) - 1u, smp = (slot >> 20) & 0xFFu;
+    vec4 m = textureLod(sampler2D(texImages[img], bindlessSamplers[smp]), uv, 0.0);
+    // (Linear: a roof's edge softened over a cell. Its solid's top over the point - a hair: the roof's own top is open.)
+    float solid = m.r > -8000.0 ? smoothstep(0.1, 0.5, m.r + FL.wet.w - p.y) : 0.0;
+    float crown = m.g > -8000.0 ? 0.7 * smoothstep(0.1, 0.5, m.g + FL.wet.w - p.y) : 0.0;
+    vec2 edge = min(uv, 1.0 - uv);
+    float inside = smoothstep(0.0, 0.05, min(edge.x, edge.y));
+    return vec2(max(solid, crown) * inside, max(m.a, 0.0) * inside);
+}
+
+float WetHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float WetNoise(vec2 p)
+{
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(WetHash(i), WetHash(i + vec2(1, 0)), f.x), mix(WetHash(i + vec2(0, 1)), WetHash(i + 1.0), f.x), f.y);
+}
+// Raindrops' rings on a puddle: a few drops a cell each time round, a ring spreading and fading (0..1).
+float WetRipples(vec2 xz, float time)
+{
+    float sum = 0.0;
+    for (int k = 0; k < 2; ++k) {
+        vec2 q = xz * 2.2 + float(k) * 0.37;
+        vec2 cell = floor(q);
+        float h = WetHash(cell + float(k) * 13.1);
+        float t = fract(time * 1.3 + h);
+        vec2 at = cell + vec2(WetHash(cell + 3.7 + floor(time * 1.3 + h)), WetHash(cell + 9.1 + floor(time * 1.3 + h)));
+        float r = length(q - at) - t * 0.5;
+        sum += exp(-r * r * 900.0) * (1.0 - t);
+    }
+    return clamp(sum, 0.0, 1.0);
+}
+
 // The game's cloud sheets (MAT_CLOUDSHEET: its flat sky sheets, drawn behind the cloud layer) lit as the layer lights
 // its clouds - the whitened game colour, the sky's light (raised by night), the sun through a thin sheet (bright and
 // silvery towards it, thick parts darker; by night the moon's the same), the sunset's colours and afterglow - and hazed as the layer by the air
@@ -774,11 +817,41 @@ void main()
             current.rgb = mix(current.rgb, vec3(peak), core * clamp((bright - 1.0) / 3.0, 0.0, 1.0));
         }
     }
+    // The wet ground (rvk rain.cpp: FL.wet): soaked surfaces darker and reflecting, puddles on the flat in hollows -
+    // not where a roof or a canopy keeps the rain off (the rain's cover map).
+    float wetFlag = uintBitsToFloat(C.vtx.w);
+    float gWetLook = 0.0, gPuddle = 0.0, gWetUp = 0.0;
+    if (wetFlag >= 1.5 && FL.wet.x > 0.0) {
+        vec2 cov = RainCoverAt(vPosW);
+        float open = 1.0 - cov.x;
+        if (open > 0.0) {
+            // (The surface's facing: its own smooth normal; else from its shape - many of the game's are drawn unlit,
+            // without normals - each triangle flat then.)
+            vec3 n = normalize(cross(dFdx(vPosW), dFdy(vPosW)));
+            if (dot(n, C.eyePos.xyz - vPosW) < 0.0) n = -n;
+            if (dot(vNormalW.xyz, vNormalW.xyz) > 0.0) n = normalize(vNormalW.xyz) * (dot(vNormalW.xyz, n) < 0.0 ? -1.0 : 1.0);
+            gWetUp = smoothstep(0.2, 0.85, n.y);
+            gWetLook = FL.wet.x * open * mix(0.35, 1.0, gWetUp);
+            // Puddles: on level ground, where it lies in a hollow (the map's) and the noise says, spreading as they fill.
+            float site = clamp(cov.y * 1.2 + WetNoise(vPosW.xz / 4.5) * 0.7 + WetNoise(vPosW.xz / 1.6 + 7.3) * 0.3 - 0.25, 0.0, 1.0);
+            float fill = FL.wet.y;
+            gPuddle = open * smoothstep(0.8, 0.95, n.y) * smoothstep(1.0 - 0.6 * fill, 1.06 - 0.6 * fill, site) * min(fill * 3.0, 1.0);
+            current.rgb *= (1.0 - 0.35 * gWetLook) * (1.0 - 0.4 * gPuddle);   // (soaked: darker; under water: darker still)
+            // Rain on the puddles: rings spreading, glinting with the sky's light.
+            if (gPuddle > 0.0 && FL.rainNear.y + FL.wet.x > 0.0)
+                current.rgb += C.fogColor.rgb * (0.25 * gPuddle * WetRipples(vPosW.xz, FL.wet.z) * min(FL.wet.x * 2.0, 1.0));
+#ifdef RVK_GLOW
+            albedo *= (1.0 - 0.35 * gWetLook) * (1.0 - 0.4 * gPuddle);
+#endif
+        }
+    }
 #ifdef RVK_GLOW
     // How much the surface reflects (screen-space reflections): the draw's own, or its wet look where it faces up.
     float reflectivity = uintBitsToFloat(C.vtx.z), wet = uintBitsToFloat(C.vtx.w);
+    if (wet >= 1.5) wet -= 2.0;                    // (the draw may get wet: above)
     if (wet > 0.0 && dot(vNormalW.xyz, vNormalW.xyz) > 0.0)
         reflectivity = max(reflectivity, wet * smoothstep(0.7, 0.95, normalize(vNormalW.xyz).y));
+    reflectivity = max(reflectivity, max(0.3 * gWetLook * gWetUp, 0.85 * gPuddle));   // (the rain's wet ground, puddles)
     // PBR: smooth surfaces reflect the scene (metals most); rough ones only their ambient environment.
     if (gPbrOn)
         reflectivity = max(reflectivity, FL.pbr.z * (1.0 - smoothstep(0.1, 0.55, gPbrRough)) * mix(0.12, 0.9, gPbrMetal));

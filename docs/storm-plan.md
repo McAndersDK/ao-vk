@@ -93,3 +93,17 @@ Each phase playable on its own; demo scenes for each (the grass bench with a sto
   share in 15ths), its billows rain shafts, the sun held back under the storm; lightning lights the fog round the
   strike (FL.flashWorld). RVK_StormGreen (0.6): the storm's clouds and mist cast green-grey (the user: the game's storm
   air is green). Cumulonimbus towers on the horizon: next, its own plan.
+
+## Storm enhancements (2026-10-16, the user: wet ground + puddles, rain shelter, bolts, cumulonimbus, scud)
+
+1. Rain shelter (storms75): the sand map (sand_map.cpp) built while it rains too, with the rain's own cover per cell -
+   the highest solid thing over it, kept whether it reaches the ground or not (roofs, overhangs) - and the
+   see-through cover (canopies); RainCoverMap uploads it (RGBA16F, binding 2 of the rain's set; bindless for the
+   scene: FL.cover). rain.vert / splash.vert: no drops or splashes below a roof, few under a canopy.
+2. Wet ground (storms75, RVK_RainWet): m_wetness (rises ~25 s with rain, dries ~4 min) and m_puddles (~90 s / 10
+   min); ffp_main: the world's own surfaces (CPU flag: C.vtx.w + 2) darker and reflecting (SSR reflectivity) where
+   open, puddles on the level in hollows (the map's A: the ground under the mean round it) and noise - darker,
+   mirror-like, rain rings. Dry under roofs and canopies. Demo: --wet W, --bare-ground.
+3. Lightning bolts of our own (next).
+4. Cumulonimbus towers on the horizon.
+5. Scud.

@@ -367,6 +367,22 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
     Lightning(fl->flash, fl->flashView, fl->flashProj, fl->flashWorld);
     fl->rainNear[0] = m_rainNearFrame == m_frameNumber && m_rainNear ? 1.0f : 0.0f;
     fl->rainNear[1] = StormOvercast();
+    // The wet ground and the rain's cover map (its bindless slot packed as the terrain's sun map's).
+    fl->wet[0] = m_wetness;
+    fl->wet[1] = m_puddles;
+    fl->wet[2] = float(std::fmod(m_rainClock, 3600.0));
+    fl->wet[3] = m_rainCoverOut[3];
+    for (int i = 0; i < 4; ++i) fl->cover[i] = 0.0f;
+    if (m_rainCover && m_rainCoverOut[2] > 0.0f && m_rainCover->m_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        const uint32_t image = BindlessImage(m_rainCover), sampler = FixedSamplerSlot(2, m_linearSampler);
+        if (image != ~0u && image < (1u << 20) - 1 && sampler < 256) {
+            const uint32_t slot = (image + 1) | sampler << 20;
+            fl->cover[0] = m_rainCoverOut[0];
+            fl->cover[1] = m_rainCoverOut[1];
+            fl->cover[2] = m_rainCoverOut[2];
+            std::memcpy(&fl->cover[3], &slot, 4);
+        }
+    }
     FillPushers(fl, eye);
     fl->leaves[0] = m_leaf.on ? m_leaf.wind : 0.0f;
     fl->leaves[1] = m_leaf.on ? m_leaf.flutter : 0.0f;
@@ -2804,6 +2820,15 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
             if (m_rs[d3d::RS_SPECULARENABLE] && m_material.power > 0.0f) reflectivity = m_ssrGloss;
             wet = m_ssrWet;
         }
+    }
+    // (+ 2: this draw may get wet in the rain - the world's own surfaces drawn into the scene; not the interface, water,
+    // the sky, characters, additive effects. ffp_main WetGround.)
+    {
+        const VisualKind kind = VisualKind(m_drawVisualKind);
+        const bool additive = m_rs[d3d::RS_ALPHABLENDENABLE] && m_rs[d3d::RS_DESTBLEND] == d3d::BLEND_ONE;
+        if (m_target == m_scene && !IsWater(fvf) && (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZRHW && !skyScenery &&
+            kind != VisualKind::Sky && kind != VisualKind::Character && kind != VisualKind::CharacterPart && !additive && !IsMultiplyPass())
+            wet += 2.0f;
     }
     std::memcpy(&c.vtx[2], &reflectivity, 4);
     std::memcpy(&c.vtx[3], &wet, 4);

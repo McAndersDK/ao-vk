@@ -21,6 +21,23 @@ layout(set = 0, binding = 0) uniform RainFrame {
                         // layer, rvk rain.cpp m_rainNear)
 } R;
 
+layout(set = 0, binding = 2) uniform sampler2D rainCover;   // rvk sand_map.cpp RainCoverMap (FL.cover: where; none: 0)
+
+// How sheltered a point is from the rain (0 open .. 1 under a roof): below the highest solid thing over its cell (a
+// roof, an overhang), or in or under a canopy (most kept off: drips get through).
+float RainSheltered(vec3 p)
+{
+    if (FL.cover.z <= 0.0)
+        return 0.0;
+    vec2 uv = (p.xz - FL.cover.xy) * FL.cover.z;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThanEqual(uv, vec2(1.0))))
+        return 0.0;
+    vec4 m = texelFetch(rainCover, ivec2(uv * vec2(textureSize(rainCover, 0))), 0);
+    float solid = m.r > -8000.0 ? smoothstep(-0.3, 0.3, m.r + FL.wet.w - p.y) : 0.0;
+    float crown = m.g > -8000.0 ? 0.75 * smoothstep(-0.3, 0.3, m.g + FL.wet.w - p.y) : 0.0;
+    return max(solid, crown);
+}
+
 // The linear view depth of a depth buffer value.
 float RainViewZ(float d) { return R.proj.y / (min(d, 0.9999999) - R.proj.x); }
 
