@@ -143,7 +143,7 @@ void main()
     // storm weak and red, the rest spread round. Lit by the full sun, sand before the sun outshone the dim sun
     // behind the fog - the user.)
     vec3 sunSpread = vec3(0.0);
-    if (sand && FL.windFrame.w > 0.5) {
+    if (FL.windFrame.w > 0.5) {                  // (other smoke too: lit as the land is in the storm)
         float k = FL.windFrame.z;
         sunSpread = FL.sunColor.rgb * (0.8 * max(L.y, 0.0) * k);
         sun *= pow(vec3(max(1.0 - k, 1e-4)), vec3(0.8, 1.0, 1.25));
@@ -190,7 +190,7 @@ void main()
         float a = 1.0 - exp(-dens * S.colour.w * ds);
         // The sky's light, too, less inside the smoke (as far in as the sun's is shadowed, about).
         float sunIn = now.y;
-        vec3 lit = S.ambient.rgb * mix(0.45, 1.0, sunIn) + sun * sunIn;
+        vec3 lit = S.ambient.rgb * mix(0.45, 1.0, sunIn) + sun * sunIn + sunSpread * mix(0.45, 1.0, sunIn);
         if (S.info.w == 1u) {                     // (sand, RVK_SandContrast: its own shade deeper, its lit side brighter)
             float k = S.sandLook.x;
             lit = S.ambient.rgb * max(mix(0.45 / k, 1.0, sunIn) * mix(1.0, 0.85, clamp(k - 1.0, 0.0, 1.0)), 0.3) +
@@ -228,6 +228,8 @@ void main()
     // the cover: a clamp at 0.7 made one thick layer as dense as several behind it - the user: layers over layers
     // should look denser. Thin sand as before; 1.2 deep (one 0.7 layer) 0.62, two 0.76, three 0.79.)
     if (S.info.w == 1u) cover = 0.8 * (1.0 - pow(max(transmit, 1e-6), 1.25));
+    // (Other smoke in the storm's fog: as much as shows through the fog in front of it - rvk smoke.cpp.)
+    if (S.info.w != 1u) cover *= S.sandLook.z;
     light *= cover / max(alpha, 1e-5);
     alpha = cover;
     outScene = vec4(light, alpha);

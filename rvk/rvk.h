@@ -349,6 +349,7 @@ public:
     void SetSandFog(float s) { m_sandFog = s; }                    // RVK_SandFog (sand_fog.frag; 0: the flat haze)
     void SetSandSun(float s) { m_sandSun = s; }                    // RVK_SandSun (sand_fog.frag)
     void SetSandTint(float s) { m_sandTint = s; }                  // RVK_SandTint (tonemap.frag)
+    float SandFogThrough(const float eye[3], const float p[3]) const;   // (smoke.cpp)
     bool SandFogOn() const { return m_sandFog > 0.0f && m_sand > 0.01f && m_sandHaze > 0.0f; }
     bool SmokeCoverValid() const { return m_smokeHalf && m_smokeHalfFrame == m_frameNumber; }
     // Grass and plants bending out of the way of characters walking through them (0 = off; scales reach and bend).

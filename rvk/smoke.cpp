@@ -194,7 +194,8 @@ struct SmokeFrame {
     d3d::Matrix viewProj, view;
     float camera[4], box[4], colour[4], ambient[4], proj[4], viewport[4], fogColour[4], fogParams[4], detail[4], look[4];
     float sand[4];                              // the sand's streak pattern: its pivot (x z), its offset (along, across)
-    float sandLook[4];                          // x: the sand's contrast (RVK_SandContrast)
+    float sandLook[4];                          // x: the sand's contrast (RVK_SandContrast); z: (other smoke) how
+                                                // much of it shows through the storm's fog between it and the eye
     uint32_t info[4];                           // x: its slot in the bounds; y: lamps; z: cells a side
     uint32_t lamps[kLamps];                     // their indices in the frame lights
 };
@@ -925,6 +926,25 @@ void Device::UpdateSandVolume(double now, float dt)
 }
 
 // The smoke: simulated, then drawn over the finished scene (EndScene: its rendering just closed).
+// How much of a point shows through the storm's sand fog from the eye (sand_fog.frag's density without its gusts: a
+// thick layer over the ground, scale height 120, and a thin one, 1500; clear round the eye) - for smoke far off.
+float Device::SandFogThrough(const float eye[3], const float p[3]) const
+{
+    float ground = eye[1] - 2.0f;
+    GroundAt(eye[0], eye[2], &ground, nullptr, nullptr);
+    const float dx = p[0] - eye[0], dy = p[1] - eye[1], dz = p[2] - eye[2];
+    const float len = std::sqrt(dx * dx + dy * dy + dz * dz);
+    const float through = std::max(len - std::max(m_sandClear, 0.0f), 0.0f);
+    if (through <= 0.0f) return 1.0f;
+    const float sigma = 0.075f * m_sand * m_sandHaze, h0 = std::max(eye[1] - ground, 0.0f);
+    auto layer = [&](float H) {                  // (an exponential layer's depth along the line, per unit density)
+        const float k = dy / len / H;
+        const float mean = std::fabs(k * len) < 1e-3f ? 1.0f : (1.0f - std::exp(-k * len)) / (k * len);
+        return std::exp(-h0 / H) * mean * through;
+    };
+    return std::exp(-sigma * (0.7f * layer(120.0f) + 0.3f * layer(1500.0f)));
+}
+
 void Device::RenderSmoke(VkCommandBuffer cmd)
 {
     const SmokeParams& P = m_smokeParams;
@@ -1584,6 +1604,21 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
             sf.info[3] = 1;
             sf.sandLook[0] = std::max(m_sandContrast, 0.25f);
             sf.sandLook[1] = std::max(m_sandClear, 0.0f);
+        }
+        // Other smoke in a storm with the sand fog (RVK_SandFog): behind the fog between it and the eye, as the land
+        // there is - the tone mapping keeps all smoke in front of the fog (right for the sand round the camera), so a
+        // column of black smoke far off stood out whole through the storm (the user) - and lit as the land: its colour
+        // the dust's (tonemap.frag's tint, which leaves the smoke out).
+        sf.sandLook[2] = 1.0f;
+        if (!sand && m_sandFogValid) {
+            const float mid[3] = {v.corner[0] + 0.5f * v.source.size, v.corner[1] + 0.3f * v.source.size,
+                                  v.corner[2] + 0.5f * v.source.size};
+            sf.sandLook[2] = SandFogThrough(eye, mid);
+            float haze[8];
+            SandHaze(haze);
+            const float luma = std::max(0.3f * haze[0] + 0.59f * haze[1] + 0.11f * haze[2], 1e-4f);
+            for (int i = 0; i < 3; ++i)
+                sf.colour[i] *= 1.0f + (std::min(haze[i] / luma, 2.5f) - 1.0f) * haze[6];
         }
         // (Fading in while it warms up; out over the last second before its volume is given back.)
         const float ending = float(double(v.source.life) * 1.5 + 1.0 - (now - v.lastSeen));
