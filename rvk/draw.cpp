@@ -2178,21 +2178,46 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     // The game's storm tint (a sandstorm's, an ash storm's): a screen-sized blended sprite a few units ahead, drawn over
     // everything with depth writes (an in-game dump: RSprite, 8 x 8 texture, ZFUNC ALWAYS). A flat sheet over the
     // frame: with the new weather it's left out (RVK_StormTint brings it back) - our storms draw the air themselves.
-    if (m_weatherParams.enable && !m_stormTint && m_target == m_scene && m_rs[d3d::RS_ALPHABLENDENABLE] &&
-        m_rs[d3d::RS_ZFUNC] == d3d::CMP_ALWAYS && m_rs[d3d::RS_ZENABLE] && m_rs[d3d::RS_ZWRITEENABLE] &&
-        (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZRHW && m_textures[0] && m_textures[0]->m_width <= 16 &&
-        m_textures[0]->m_height <= 16) {
+    std::vector<uint8_t> steadySheet;            // (the sheet drawn: its vertices with its alpha eased - below)
+    if (m_rs[d3d::RS_ALPHABLENDENABLE] && m_rs[d3d::RS_ZFUNC] == d3d::CMP_ALWAYS && m_rs[d3d::RS_ZENABLE] &&
+        m_rs[d3d::RS_ZWRITEENABLE] && (fvf & d3d::FVF_POSITION_MASK) != d3d::FVF_XYZRHW && m_textures[0] &&
+        m_textures[0]->m_width <= 16 && m_textures[0]->m_height <= 16 && vertices && vertexCount <= 64) {
         const FvfLayout layout = DecodeFvf(fvf);  // (its colour and strength: our storm's air, wind.cpp SandHaze)
         uint32_t colour = 0;
-        if (vertices && layout.offset[2] >= 0)
+        if (layout.offset[2] >= 0)
             std::memcpy(&colour, static_cast<const uint8_t*>(vertices) + layout.offset[2], 4);
         // A black one is no storm: the game's fade in from black after a load (the same sprite) - drawn as it is.
         const uint32_t brightest = std::max({(colour >> 16) & 0xFFu, (colour >> 8) & 0xFFu, colour & 0xFFu});
         if (brightest > 0x10) {
-            ++m_stormTintSkipped;
-            m_stormTintColour = colour;
-            m_stormTintSeen = m_frameClock;
-            return;
+            if (m_weatherParams.enable && !m_stormTint && m_target == m_scene) {
+                ++m_stormTintSkipped;
+                m_stormTintColour = colour;
+                m_stormTintSeen = m_frameClock;
+                return;
+            }
+            // Drawn (RVK_StormTint, or the game's own look): the game sets its alpha afresh each frame at random about
+            // its strength (a run of frame dumps: 26..63 frame to frame) - the whole screen flickers in its storms, a
+            // native AO effect (the user). Its alpha eased (~1 s) instead: the storm's strength drifts, no flicker.
+            const float target = float(colour >> 24);
+            const double now = m_frameClock;
+            const float dt = float(std::clamp(now - m_stormSheetTime, 0.0, 1.0));
+            m_stormSheetAlpha = now - m_stormSheetTime > 2.0 ? target
+                                                             : m_stormSheetAlpha + (target - m_stormSheetAlpha) * (1.0f - std::exp(-dt / 1.0f));
+            m_stormSheetTime = now;
+            const uint32_t stride = FvfStride(fvf);
+            if (stride && layout.offset[2] >= 0) {
+                steadySheet.assign(static_cast<const uint8_t*>(vertices), static_cast<const uint8_t*>(vertices) + size_t(stride) * vertexCount);
+                const uint32_t a = uint32_t(std::clamp(m_stormSheetAlpha + 0.5f, 0.0f, 255.0f));
+                for (uint32_t i = 0; i < vertexCount; ++i) {
+                    uint32_t c;
+                    std::memcpy(&c, steadySheet.data() + size_t(i) * stride + layout.offset[2], 4);
+                    c = (c & 0x00FFFFFFu) | (a << 24);
+                    std::memcpy(steadySheet.data() + size_t(i) * stride + layout.offset[2], &c, 4);
+                }
+                vertices = steadySheet.data();
+                m_drawStaticBuffer = VK_NULL_HANDLE;     // (from these vertices, not a retained copy)
+                m_drawStaticIndexBuffer = VK_NULL_HANDLE;
+            }
         }
     }
     // The game's lightning glow (VisualCloudlight_t: a big additive mesh at the clouds' height, its vertex colours

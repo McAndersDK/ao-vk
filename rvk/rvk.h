@@ -1885,6 +1885,8 @@ private:
     double m_windClockPrev = -1.0;               // m_frameClock at the last update
     bool m_stormTint = false;                    // RVK_StormTint: the game's storm tint drawn (with the new weather)
     uint32_t m_stormTintSkipped = 0;             // its draws left out (the wind log line)
+    float m_stormSheetAlpha = 0.0f;              // the game's storm sheet drawn: its alpha, eased (Draw)
+    double m_stormSheetTime = -10.0;
     bool m_stormFlash = false;                   // RVK_StormFlash: the game's lightning glow over the clouds drawn
     uint32_t m_stormFlashSkipped = 0;            // its draws left out (the wind log line)
     // A sand or ash storm (wind.cpp): its colour and strength from the game's tint, seen left out (Draw).
