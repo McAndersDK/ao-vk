@@ -555,4 +555,31 @@ void Device::StormGreen(float out[3]) const
     for (int i = 0; i < 3; ++i) out[i] = 1.0f + (green[i] - 1.0f) * k;
 }
 
+// How much a thunderstorm hides the sun from the land (0..1): with the rain (eased), x RVK_StormDark - the user: the
+// land lit as on a fair day under a storm sky, sharp shadows and all.
+float Device::StormOvercast() const
+{
+    if (!m_weatherParams.enable)
+        return 0.0f;
+    const float r = std::clamp((m_rain - 0.05f) / 0.55f, 0.0f, 1.0f);
+    return std::clamp(r * r * (3.0f - 2.0f * r) * std::max(m_stormDark, 0.0f), 0.0f, 1.0f);
+}
+
+// A colour of the air in a thunderstorm turned its dark yellow-green, its brightness kept (a little darker): the game's
+// fog, its clouds' colours and our haze - in a zone with a teal fog the far land, the game's puffs and the clouds'
+// horizon stood teal under a dark green storm sky (the user). (RVK_StormGreen x how hard it rains; none without rain.)
+void Device::StormHue(float rgb[3]) const
+{
+    if (!m_weatherParams.enable || m_rain <= 0.0f || m_stormGreen <= 0.0f)
+        return;
+    const float r = std::clamp((m_rain - 0.05f) / 0.55f, 0.0f, 1.0f);
+    const float k = std::clamp(m_stormGreen, 0.0f, 1.0f) * r * r * (3.0f - 2.0f * r);
+    const float green[3] = {1.01f, 1.063f, 0.638f};   // (unit luma: as StormGreen)
+    const float l = 0.3f * rgb[0] + 0.59f * rgb[1] + 0.11f * rgb[2];
+    for (int i = 0; i < 3; ++i) {
+        const float target = l * green[i] * (1.0f - 0.3f * k);
+        rgb[i] += (target - rgb[i]) * std::min(1.4f * k, 1.0f);
+    }
+}
+
 }  // namespace rvk

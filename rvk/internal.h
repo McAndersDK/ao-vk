@@ -132,7 +132,8 @@ struct FrameLights {               // binding 4: per-frame data (constants.glsl 
     float flashView[4];            // ... towards the strike (view space), w: how far
     float flashProj[4];            // ... the projection's m[0][0], m[1][1], m[2][2], m[3][2]
     float flashWorld[4];           // ... the strike (world; the storm's fog lit round it)
-    float rainNear[4];             // x: 1 = the tone mapping's rain layer (binding 16) holds this frame's rain
+    float rainNear[4];             // x: 1 = the tone mapping's rain layer (binding 16) holds this frame's rain; y: how much
+                                   // a thunderstorm hides the sun (0..1: Device::StormOvercast)
     GpuLight lights[kFrameLights];
 };
 

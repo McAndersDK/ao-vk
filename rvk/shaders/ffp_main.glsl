@@ -297,8 +297,11 @@ float TerrainShade()
 const float kCloudSunShare = 0.5;
 float FlatShade()
 {
-    return min(1.0 - (1.0 - gCasterVisibility) * FL.shadowParams.y, TerrainShade()) *
-           (1.0 - kCloudSunShare * (1.0 - gCloudVisibility));
+    // (A thunderstorm - FL.rainNear.y: the sun hidden as by cloud everywhere, more than a cloud's shadow takes - its
+    // share of the land's light gone, so the shadows of things with it.)
+    float o = FL.rainNear.y;
+    return min(1.0 - (1.0 - gCasterVisibility) * FL.shadowParams.y * (1.0 - o), mix(TerrainShade(), 1.0, o)) *
+           (1.0 - kCloudSunShare * max(1.0 - gCloudVisibility, o)) * (1.0 - 0.15 * o);
 }
 
 int gShadowCascade = -1;                         // the cascade SunVisibilityCasters read (RVK_ShadowView)
@@ -655,11 +658,11 @@ void main()
         if (dot(FL.sunColor.rgb, FL.sunColor.rgb) > 0.0 && len2 > 0.0) {
             float ndl = max(dot(normalize(n), -normalize(FL.sunDir.xyz)), 0.0);
             if ((C.flags.x & F_SHADOWTEX) != 0u) {
-                gSunShare = 0.6 * ndl * texShade * (1.0 - FL.windFrame.z);
+                gSunShare = 0.6 * ndl * texShade * (1.0 - FL.windFrame.z) * (1.0 - 0.65 * FL.rainNear.y);
             } else {
                 const vec3 kLuma = vec3(0.3, 0.59, 0.11);
                 float sunPart = dot(vDiffuse.rgb * FL.sunColor.rgb, kLuma) * ndl * sunScale;
-                gSunShare = clamp(sunPart * (1.0 - FL.windFrame.z) / max(dot(lit + local, kLuma), 1e-3), 0.0, 1.0);
+                gSunShare = clamp(sunPart * (1.0 - FL.windFrame.z) * (1.0 - 0.65 * FL.rainNear.y) / max(dot(lit + local, kLuma), 1e-3), 0.0, 1.0);
             }
         }
         if ((C.flags.x & F_OVERBRIGHT) != 0u) {

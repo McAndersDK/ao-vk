@@ -366,6 +366,7 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
     WindFrame(fl->windFrame);
     Lightning(fl->flash, fl->flashView, fl->flashProj, fl->flashWorld);
     fl->rainNear[0] = m_rainNearFrame == m_frameNumber && m_rainNear ? 1.0f : 0.0f;
+    fl->rainNear[1] = StormOvercast();
     FillPushers(fl, eye);
     fl->leaves[0] = m_leaf.on ? m_leaf.wind : 0.0f;
     fl->leaves[1] = m_leaf.on ? m_leaf.flutter : 0.0f;
@@ -398,6 +399,10 @@ void Device::FillFrameLights(FrameLights* fl, bool dump)
     fl->sunDir[3] = m_hdr ? m_hdrHeadroom : m_lightHeadroom;
     for (int i = 0; i < 3; ++i) fl->sunColor[i] = m_shadowValid ? m_shadowSunColor[i] : m_frameSunColor[i];
     fl->sunColor[3] = m_frameSunLuma;            // (the clouds' light: not dimmed by the clouds hiding the sun)
+    // A thunderstorm's deck hides the sun: its light on the grass, the clouds, the air and the water mostly gone
+    // (lighting.glsl and the ground's shade take the rest - FL.rainNear.y).
+    const float overcast = StormOvercast();
+    for (int i = 0; i < 3; ++i) fl->sunColor[i] *= 1.0f - 0.65f * overcast;
     // The moon's light on the ground and grass (night.cpp); whether the shadow map is its. The sun's true direction
     // (below the horizon too) for the clouds' light.
     for (int i = 0; i < 3; ++i) fl->moon[i] = m_moonColour[i];
@@ -1563,6 +1568,7 @@ void Device::RenderStateFog(float colour[4], float params[4]) const
     colour[1] = float((c >> 8) & 0xFF) / 255.0f;
     colour[2] = float(c & 0xFF) / 255.0f;
     colour[3] = m_rs[d3d::RS_FOGENABLE] ? 1.0f : 0.0f;
+    StormHue(colour);                            // (a thunderstorm's: its air dark yellow-green)
     uint32_t bits[3] = {m_rs[d3d::RS_FOGSTART], m_rs[d3d::RS_FOGEND], m_rs[d3d::RS_FOGDENSITY]};
     std::memcpy(params, bits, sizeof(bits));
     params[3] = float(m_rs[d3d::RS_FOGTABLEMODE] ? m_rs[d3d::RS_FOGTABLEMODE] : m_rs[d3d::RS_FOGVERTEXMODE]);
@@ -2762,6 +2768,7 @@ void Device::Draw(uint32_t primitive, uint32_t fvf, const void* vertices, uint32
     Copy4(c.matEmissive, m_material.emissive);
     ArgbToFloat(m_rs[d3d::RS_AMBIENT], c.ambient);
     ArgbToFloat(m_rs[d3d::RS_FOGCOLOR], c.fogColor);
+    StormHue(c.fogColor);                        // (a thunderstorm's: its air dark yellow-green)
     c.fogParams[0] = AsFloat(m_rs[d3d::RS_FOGSTART]);
     c.fogParams[1] = AsFloat(m_rs[d3d::RS_FOGEND]);
     c.fogParams[2] = AsFloat(m_rs[d3d::RS_FOGDENSITY]);

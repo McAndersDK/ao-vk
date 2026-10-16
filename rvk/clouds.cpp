@@ -1038,11 +1038,10 @@ void Device::MarchCloudPuffs(VkCommandBuffer cmd, const std::vector<std::pair<fl
         // Rain (rvk rain.cpp: how hard, eased): the clouds heavier - darker, greyer, denser.
         const float storm = std::clamp(m_rain, 0.0f, 1.0f);
         const float grey = (p.colour[0] + p.colour[1] + p.colour[2]) / 3.0f;
-        float green[3];
-        StormGreen(green);                       // (a thunderstorm's green cast: RVK_StormGreen)
         for (int k = 0; k < 3; ++k)
-            cf.colour[k] = (p.colour[k] + (grey - p.colour[k]) * 0.6f * storm) * (1.0f - 0.25f * storm) * m_cloudParams.brightness * green[k] *
+            cf.colour[k] = (p.colour[k] + (grey - p.colour[k]) * 0.6f * storm) * (1.0f - 0.25f * storm) * m_cloudParams.brightness *
                            (1.0f - 0.35f * std::clamp(m_stormGreen, 0.0f, 1.0f) * storm);
+        StormHue(cf.colour);                     // (a thunderstorm's: dark yellow-green - RVK_StormGreen)
         cf.colour[3] = std::clamp(p.colour[3], 0.0f, 1.0f);
         // The sun into mesh space (a direction: the inverse's 3x3; normalised in the shader).
         for (int j = 0; j < 3; ++j)
@@ -1486,6 +1485,8 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
         hazeNow[k] = fogWeight > 0.0f ? fogColour[k] / fogWeight
                    : sceneFog[3] > 0.5f ? sceneFog[k] : (m_terrainAmbient[3] > 0.5f ? m_terrainAmbient[k] : 0.35f);
     }
+    StormHue(tintNow);                           // (a thunderstorm: the game's puffs and its fog dark yellow-green)
+    StormHue(hazeNow);
     const float foggedNow = weight > 0.0f ? fogged / weight : 0.0f;
     {
         const double gap = m_cloudColourClock < 0.0 ? 1e9 : m_frameClock - m_cloudColourClock;
@@ -1525,11 +1526,11 @@ void Device::MarchCloudLayer(VkCommandBuffer cmd, bool skipCovered, const float 
     for (int k = 0; k < 3; ++k) lf.ambient[k] = 0.75f + 0.25f * m_cloudHaze[k] / luma;
     lf.ambient[3] = storm;
     {   // (A thunderstorm's green cast - RVK_StormGreen: the layer's colour and the sky's light on it.)
-        float green[3];
-        StormGreen(green);
-        // (... and darker: the user - a dark yellow-green storm.)
+        // (... and darker: the user - a dark yellow-green storm. Its hue: the game's colours, StormHue'd.)
         const float dark = 1.0f - 0.35f * std::clamp(m_stormGreen, 0.0f, 1.0f) * storm;
-        for (int k = 0; k < 3; ++k) { lf.tint[k] *= green[k] * dark; lf.ambient[k] *= green[k]; }
+        StormHue(lf.tint);
+        StormHue(lf.ambient);
+        for (int k = 0; k < 3; ++k) lf.tint[k] *= dark;
     }
     for (int k = 0; k < 3; ++k) lf.haze[k] = m_cloudHaze[k];
     if (m_frameNumber % 600 == 2)

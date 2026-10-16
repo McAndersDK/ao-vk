@@ -1452,6 +1452,7 @@ void Device::DrawWater(const WaterVertex* vertices, uint32_t vertexCount, const 
     wf.fall[0] = P.fallSheen;
     wf.fall[1] = P.fallSparkle;
     ArgbTo4(m_rs[d3d::RS_FOGCOLOR], wf.fogColour);
+    StormHue(wf.fogColour);
     wf.fogColour[3] = m_rs[d3d::RS_FOGENABLE] ? 1.0f : 0.0f;
     wf.fogParams[0] = AsFloatBits(m_rs[d3d::RS_FOGSTART]);
     wf.fogParams[1] = AsFloatBits(m_rs[d3d::RS_FOGEND]);

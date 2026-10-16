@@ -360,6 +360,9 @@ public:
     StormAir StormAirNow() const;
     void SetRainFog(float s) { m_rainFog = s; }                    // RVK_RainFog (x; 0: none)
     void SetStormGreen(float s) { m_stormGreen = s; }              // RVK_StormGreen (0..1)
+    void SetStormDark(float s) { m_stormDark = s; }                // RVK_StormDark (x)
+    float StormOvercast() const;                                   // how much a thunderstorm hides the sun (rain.cpp)
+    void StormHue(float rgb[3]) const;                             // a colour turned the storm's dark yellow-green (rain.cpp)
     // A thunderstorm's green cast (RVK_StormGreen x how hard it rains): per channel, about unit brightness (rain.cpp).
     void StormGreen(float out[3]) const;
     bool SandFogOn() const { return m_sandFog > 0.0f && ((m_sand > 0.01f && m_sandHaze > 0.0f) || m_rain * m_rainFog > 0.01f); }
@@ -1982,6 +1985,7 @@ private:
     float m_sandEyeShelter = 0.0f;               // the camera's (eased): the near haze held off
     float m_sandGusts = 1.0f;                    // RVK_SandGusts: the distant gusts in the haze (0 none)
     float m_rainFog = 1.0f;                      // RVK_RainFog: a thunderstorm's rain mist in the fog, x
+    float m_stormDark = 1.0f;                    // RVK_StormDark: a thunderstorm hides the sun from the land, x
     float m_stormGreen = 0.6f;                   // RVK_StormGreen: its clouds and mist cast green (0: grey)
     float m_sandFog = 1.0f;                      // RVK_SandFog: the storm's air a lit volume (docs/sand-fog-plan.md)
     float m_sandSun = 0.9f;                      // RVK_SandSun: how clearly the sun shows through the fog (0 .. 1)
