@@ -86,8 +86,14 @@ void Device::ProfileBeginFrame(VkCommandBuffer cmd)
         uint64_t t[kProfileMarks];
         if (vkGetQueryPoolResults(m_device, p.pool, 0, p.count, sizeof(t), t, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) ==
             VK_SUCCESS) {
-            for (uint32_t i = 1; i < p.count; ++i)
-                ProfileAdd(m_profileGpu, p.names[i], double(t[i] - t[i - 1]) * m_timestampPeriod * 1e-6);
+            for (uint32_t i = 1; i < p.count; ++i) {
+                const double ms = double(t[i] - t[i - 1]) * m_timestampPeriod * 1e-6;
+                ProfileAdd(m_profileGpu, p.names[i], ms);
+                // (The smoke's budget: what its steps really took against what they were thought to - smoke.cpp.)
+                if (m_smokeEstimate[m_frameIndex] > 0.05 && std::strcmp(p.names[i], "smoke simulation") == 0)
+                    m_smokeCostScale = std::clamp(0.9f * m_smokeCostScale +
+                                                  0.1f * float(ms / m_smokeEstimate[m_frameIndex]), 0.1f, 5.0f);
+            }
             ProfileAdd(m_profileGpu, "total", double(t[p.count - 1] - t[0]) * m_timestampPeriod * 1e-6);
             ++m_profileFrames;
             // The clouds' own pass (clouds.cpp) runs between the pre-pass and the scene's draws: inside the interval
@@ -103,6 +109,7 @@ void Device::ProfileBeginFrame(VkCommandBuffer cmd)
     }
     p.count = 0;
     p.cloudsTimed = false;
+    m_smokeEstimate[m_frameIndex] = 0.0;
     vkCmdResetQueryPool(cmd, p.pool, 0, kProfileMarks + 2);
     if (p.shadePool) {
         if (p.shadeCount) {

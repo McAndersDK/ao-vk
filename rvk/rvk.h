@@ -652,6 +652,7 @@ public:
         float brightness = 1.0f;                // RVK_SmokeBright: its colour, x
         float opacity = 1.0f;                   // RVK_SmokeOpaque: how opaque it is drawn (<= 1 x; above, as if thicker)
         bool half = true;                        // RVK_SmokeHalf: marched at half size, upsampled by depth
+        float budget = 1.5f;                     // RVK_SmokeBudget: the simulation's GPU ms a frame, about (0: no cap)
     };
     struct SmokeSource {
         float pos[3] = {0, 0, 0};                // world: where it comes from (its box stands round it)
@@ -2210,6 +2211,12 @@ private:
     bool m_smokeNoiseMade = false;
     bool m_smokeSharedFresh = true;
     uint32_t m_smokeN = 0;                       // the shared scratch images' cells a side (the most a volume has)
+    float m_smokeSlow = 1.0f;                    // how much the smoke steps are stretched to keep RVK_SmokeBudget
+    double m_smokeSlowLogged = 0.0;
+    // The steps' estimated cost (ms, StepCost) recorded in each frame slot, and the measured / estimated ratio from the
+    // slots' GPU timestamps ("smoke simulation"), eased: the budget in this GPU's (and this load's) real time.
+    double m_smokeEstimate[2] = {};
+    float m_smokeCostScale = 1.0f;
     double m_smokeLastClock = -1.0;
     VkSampler m_smokeSampler = VK_NULL_HANDLE, m_smokeRepeatSampler = VK_NULL_HANDLE;
     VkBuffer m_smokeBounds = VK_NULL_HANDLE;     // per volume: the cells with smoke (lowest, highest; the simulation's)

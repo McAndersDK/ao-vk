@@ -1115,7 +1115,8 @@ bool Device::RenderSandFog(VkCommandBuffer cmd)
         for (int i = 0; i < 3; ++i) push.albedo[i] = mist[i] + (dust[i] - mist[i]) * air.sandShare;
     }
     push.albedo[3] = float(m_frameNumber % 64) * 0.618034f;      // the march's offsets move on every frame
-    push.sky[3] = 24.0f;                                          // steps (the blur and TAA average the jitter)
+    // Steps (the blur and TAA average the jitter): the sand 24, the rain mist - smooth, thin - 12.
+    push.sky[3] = std::round(12.0f + 12.0f * std::clamp(air.sandShare * 2.0f, 0.0f, 1.0f));
     const bool terrainMap = m_terrainSunMap && m_terrainSunMap->m_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
                             m_tsMadeFrame != ~0ull;
     if (terrainMap) {
@@ -1190,6 +1191,7 @@ bool Device::RenderSandFog(VkCommandBuffer cmd)
     vkCmdPushConstants(cmd, m_volumeLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRendering(cmd);
+    ProfileMark("sand fog march");               // (the blur: the rest, "sand fog")
 
     for (int pass = 0; pass < 2; ++pass) {
         Texture* src = m_sandFogTex[pass];

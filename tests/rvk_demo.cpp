@@ -2100,6 +2100,10 @@ bool g_smokeHalf = true;          // --smoke-full: RVK_SmokeHalf off
 float g_smokeWobble = 0.0f;       // --smoke-wobble A: the source jumps about by up to A each frame (the game's moves with
                                   //  its newest sprites)
 bool g_smokeTwo = false;          // --smoke-two: a second, bigger source
+int g_smokeMany = 0;              // --smoke-many N: N more sources round the scene (the simulation's budget under load)
+float g_smokeBudget = -1.0f;      // --smoke-budget MS: RVK_SmokeBudget (default: the setting's)
+float g_smokeRes = 0.0f;          // --smoke-res R: RVK_SmokeRes
+uint32_t g_smokeQual = 0;         // --smoke-qual Q: RVK_SmokeQual
 float g_smokeOpaque = 1.0f;       // --smoke-opaque X (RVK_SmokeOpaque)
 float g_rainForce = 0.0f;         // --rain F: rain this hard (0..1; RVK_RainForce), the new weather on
 bool g_waterLamp = false;         // --water-lamp: a warm point light by the camera, as a character's lamp (with
@@ -2586,6 +2590,16 @@ void RunWaterScene(D& dev, int frames, const std::string& shot)
                     big.size = 9.0f;
                     big.colour = 0x8A8580;
                     dev.SmokeSourceFrame(2, big);
+                }
+                for (int k = 0; k < g_smokeMany; ++k) {   // (--smoke-many: a ring of them, near and far, some behind)
+                    Device::SmokeSource m;
+                    const float a = 0.9f + float(k) * 2.39996f, r = 12.0f + 14.0f * float(k);
+                    m.pos[0] = r * std::sin(a);
+                    m.pos[2] = -r * std::cos(a);
+                    m.pos[1] = height(m.pos[0], m.pos[2]);
+                    m.size = 6.0f + float(k % 3);
+                    m.colour = 0x302C28;
+                    dev.SmokeSourceFrame(uint64_t(10 + k), m);
                 }
             }
         }
@@ -3850,6 +3864,10 @@ int main(int argc, char** argv)
         else if (a == "--smoke-walker") { g_smoke = g_smokeWalker = true; hdr = true; }
         else if (a == "--smoke-game") { g_smoke = g_smokeGame = true; hdr = true; }
         else if (a == "--smoke-two") g_smokeTwo = true;
+        else if (a == "--smoke-many" && i + 1 < argc) g_smokeMany = std::atoi(argv[++i]);
+        else if (a == "--smoke-budget" && i + 1 < argc) g_smokeBudget = float(std::atof(argv[++i]));
+        else if (a == "--smoke-res" && i + 1 < argc) g_smokeRes = float(std::atof(argv[++i]));
+        else if (a == "--smoke-qual" && i + 1 < argc) g_smokeQual = uint32_t(std::atoi(argv[++i]));
         else if (a == "--smoke-opaque" && i + 1 < argc) g_smokeOpaque = float(std::atof(argv[++i]));
         else if (a == "--smoke-wisps" && i + 1 < argc) g_smokeWisps = float(std::atof(argv[++i]));
         else if (a == "--smoke-full") g_smokeHalf = false;
@@ -4072,6 +4090,9 @@ int main(int argc, char** argv)
         smoke.half = g_smokeHalf;
         smoke.opacity = g_smokeOpaque;
         smoke.sandCells = g_sandRes;
+        if (g_smokeBudget >= 0.0f) smoke.budget = g_smokeBudget;
+        if (g_smokeRes > 0.0f) smoke.resolution = g_smokeRes;
+        if (g_smokeQual) smoke.quality = g_smokeQual;
         dev.SetSmokeParams(smoke);
     } else if (g_sandRes) {
         Device::SmokeParams smoke;

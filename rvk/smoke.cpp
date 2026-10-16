@@ -174,6 +174,22 @@ uint32_t SmokeCells(float size, const Device::SmokeParams& P)
     return uint32_t(std::clamp(want, 32.0f, float(most)));
 }
 
+// A drift cloud's: coarser than its source's (thin smoke on the move; the source's own box keeps the detail).
+uint32_t DriftCells(float size, const Device::SmokeParams& P)
+{
+    return std::clamp((SmokeCells(size, P) * 7u / 10u + 3u) / 4u * 4u, 32u, 64u);
+}
+
+// The simulation's cost budget (RVK_SmokeBudget, ms of GPU a frame): a step's cost by its cells, all stages - about
+// 1 ns a cell (an RTX-class GPU, smoke volumes; the sand volume more), a pressure solve of kJacobi steps about half.
+constexpr double kMsPerCell = 1.0e-6;          // (corrected as it runs by the measured: m_smokeCostScale)
+constexpr uint32_t kJacobiFar = 12;              // pressure steps for a volume beyond kSimFar (less exact, unseen there)
+constexpr float kMostSlow = 6.0f;                // over budget, steps at most this many times further apart
+double StepCost(uint32_t n, uint32_t jacobi)
+{
+    return double(n) * n * n * kMsPerCell * (0.5 + 0.5 * double(jacobi) / double(kJacobi));
+}
+
 // Drift clouds: smoke a character carries out of a source's box goes on in a box of its own following them.
 constexpr float kDriftSpeed = 0.8f;             // a character moving at least this fast (world / s) through a box
 constexpr uint32_t kDriftPerSource = 2;         // ... gets one, at most this many a source
@@ -659,7 +675,7 @@ void Device::UpdateSmokeDrift(double now)
             // Its volume: a free one with images of its size, else a new one, else any free one (made again - the GPU
             // waited for: a hitch).
             const float size = std::clamp(p.source.size * 0.7f, 2.5f, 5.0f);
-            const uint32_t n = SmokeCells(size, m_smokeParams);
+            const uint32_t n = DriftCells(size, m_smokeParams);
             const uint64_t parentKey = p.key;    // (p may move with the vector)
             SmokeVolume* d = nullptr;
             for (SmokeVolume& x : m_smokeVolumes)
@@ -985,7 +1001,9 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
     // Each volume's cells a side: RVK_SmokeRes per world unit of its box (a long-lived source's tall box keeps its
     // detail), a multiple of 4, at most RVK_SmokeQual's. A volume whose count changed, or a scratch too small for
     // one, is made again - after the GPU is done with the old (rare: a source's box or the settings changed).
-    auto cells = [&](const SmokeVolume& v) { return v.key == kSandKey ? SandCells(P) : SmokeCells(v.source.size, P); };
+    auto cells = [&](const SmokeVolume& v) {
+        return v.key == kSandKey ? SandCells(P) : v.parent ? DriftCells(v.source.size, P) : SmokeCells(v.source.size, P);
+    };
     uint32_t scratch = 0;
     bool remake = false;
     for (auto& [d, v] : live) {
@@ -1115,30 +1133,72 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
     uint32_t groups = 0;
     EnsureRingSpace(live.size() * (sizeof(SmokeBodies) + sizeof(SandHeader) + 512) + kSandCellsMax * kSandCellsMax * kSandColumnFloats * 4u + 1024);
     Frame& f = m_frames[m_frameIndex];
-    // Which volumes step this frame: warming up ones every frame; of the others those due, the most overdue first, as
-    // many as keep them all stepping every kSimStep or so - each frame about the same work, not two volumes' steps in
-    // one frame and none in the next (a stutter) - and any a period late.
+    // Which volumes step this frame. Each has its period: kSimStep (half that warming up), twice it beyond kSimFar,
+    // twice again out of view. Over RVK_SmokeBudget (the steps' cost a second, at this frame rate) all but the sand's
+    // (round the camera) are stretched alike, up to kMostSlow. Of those due, the most overdue first, as many as keep
+    // each frame's cost about the average - not two volumes' steps in one frame and none in the next (a stutter) -
+    // and any a period late.
     std::vector<uint8_t> stepNow(live.size()), warmingNow(live.size());
+    std::vector<float> period(live.size());
+    std::vector<uint32_t> jacobiOf(live.size());
     {
-        std::vector<std::pair<float, size_t>> due;
-        size_t stepping = 0;
+        const auto& pm = m_proj.m;
+        const float sx = std::sqrt(1.0f + pm[0][0] * pm[0][0]), sy = std::sqrt(1.0f + pm[1][1] * pm[1][1]);
+        auto inView = [&](const SmokeVolume& v) {
+            float c[3], e[3];
+            for (int i = 0; i < 3; ++i) c[i] = v.corner[i] + 0.5f * v.source.size;
+            for (int i = 0; i < 3; ++i) e[i] = c[0] * vm[0][i] + c[1] * vm[1][i] + c[2] * vm[2][i] + vm[3][i];
+            const float r = 0.87f * v.source.size;
+            return e[2] > -r && pm[0][0] * std::fabs(e[0]) - e[2] <= r * sx && pm[1][1] * std::fabs(e[1]) - e[2] <= r * sy;
+        };
+        double demand = 0.0, fixed = 0.0;               // (ms a second: the stretchable, the sand's)
         for (size_t i = 0; i < live.size(); ++i) {
             SmokeVolume& v = *live[i].second;
+            const bool sandV = v.key == kSandKey;
             warmingNow[i] = v.age < kWarmUp;
+            jacobiOf[i] = !sandV && live[i].first > kSimFar ? kJacobiFar : kJacobi;
+            float t = warmingNow[i] ? 0.5f * kSimStep : kSimStep;
+            if (!sandV && live[i].first > kSimFar) t *= 2.0f;
+            if (!sandV && !warmingNow[i] && !inView(v)) t *= 2.0f;
+            period[i] = t;
+            (sandV ? fixed : demand) += StepCost(v.n, jacobiOf[i]) / std::max(double(t), double(dt));
+        }
+        float slow = 1.0f;
+        if (P.budget > 0.0f && demand > 0.0) {
+            const double room = std::max(double(P.budget) / std::max(double(dt), 1e-3) - fixed * double(m_smokeCostScale), 0.25 * double(P.budget) / std::max(double(dt), 1e-3));
+            slow = float(std::clamp(demand * double(m_smokeCostScale) / room, 1.0, double(kMostSlow)));
+        }
+        m_smokeSlow = slow;
+        if (slow > 1.05f && now - m_smokeSlowLogged > 10.0) {
+            m_smokeSlowLogged = now;
+            Log("smoke: over budget (%.2f ms a frame wanted, %.2f the sand's, budget %.2f; measured / estimated %.2f): "
+                "steps x%.2f apart, %zu volumes", demand * dt * m_smokeCostScale, fixed * dt * m_smokeCostScale,
+                double(P.budget), double(m_smokeCostScale), double(slow), live.size());
+        }
+        double expected = 0.0;
+        for (size_t i = 0; i < live.size(); ++i) {
+            if (live[i].second->key != kSandKey) period[i] *= slow;
+            expected += StepCost(live[i].second->n, jacobiOf[i]) * std::min(double(dt) / std::max(double(period[i]), 1e-6), 1.0);
+        }
+        std::vector<std::pair<float, size_t>> due;
+        double spent = 0.0;
+        for (size_t i = 0; i < live.size(); ++i) {
+            SmokeVolume& v = *live[i].second;
             v.age += dt;
             v.simWait += dt;
-            const float period = warmingNow[i] ? 0.0f : live[i].first > kSimFar ? 2.0f * kSimStep : kSimStep;
-            if (warmingNow[i] || !m_smokeNoiseMade || v.simWait >= 2.0f * period) {
+            if (!m_smokeNoiseMade || v.simWait >= 2.0f * period[i] || (period[i] <= dt && v.simWait + 0.5f * dt >= period[i])) {
                 stepNow[i] = 1;
-                ++stepping;
-            } else if (v.simWait + 0.5f * dt >= period) {
-                due.emplace_back(v.simWait / period, i);
+                spent += StepCost(v.n, jacobiOf[i]);
+            } else if (v.simWait + 0.5f * dt >= period[i]) {
+                due.emplace_back(v.simWait / period[i], i);
             }
         }
         std::sort(due.begin(), due.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
-        const size_t budget = std::max<size_t>(1, size_t(std::ceil(float(live.size()) * dt / kSimStep)));
-        for (const auto& [late, i] : due)
-            if (stepping < budget) { stepNow[i] = 1; ++stepping; }
+        for (const auto& [late, i] : due) {
+            const double cost = StepCost(live[i].second->n, jacobiOf[i]);
+            if (spent == 0.0 || spent + 0.5 * cost <= expected) { stepNow[i] = 1; spent += cost; }
+        }
+        m_smokeEstimate[m_frameIndex] = spent;
     }
     for (size_t li = 0; li < live.size(); ++li) {
         auto& [dist, vp] = live[li];
@@ -1149,7 +1209,8 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         if (!stepNow[li])
             continue;
         const bool warming = warmingNow[li];
-        const float simDt = std::min(v.simWait, 1.0f / 30.0f);   // (the step's dt: what has passed since the last)
+        // (The step's dt: what has passed since the last - up to 1/30 s, or a stretched period's.)
+        const float simDt = std::min(v.simWait, std::clamp(1.5f * period[li], 1.0f / 30.0f, 0.1f));
         v.lastStep = simDt;
         v.simWait = 0.0f;
         const uint32_t slot = uint32_t(&v - m_smokeVolumes.data());
@@ -1342,7 +1403,7 @@ void Device::RenderSmoke(VkCommandBuffer cmd)
         };
         // The pressure: Jacobi steps between the two shared images, the solve starting from 0.
         SmokeImage pr[2] = {m_smokePressure[0], m_smokePressure[1]};
-        const uint32_t jacobi = kJacobi;
+        const uint32_t jacobi = jacobiOf[li];
         if (!m_smokeNoiseMade) {                 // (once: the wisps' noise)
             p.a[1] = float(kNoiseSize);
             groups = kNoiseSize / 4;
